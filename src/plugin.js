@@ -60,39 +60,37 @@ function svgWrap(inner) {
 function gaugeKey(label, pct, sub) {
   const has = typeof pct === "number" && isFinite(pct);
   const p = has ? Math.max(0, Math.min(100, pct)) : 0;
-  const r = 45, cx = 72, cy = 80, circ = 2 * Math.PI * r;
   const col = has ? pctColor(p) : C.dim;
   return svgWrap(`
-    <text x="14" y="26" font-family="Segoe UI, sans-serif" font-size="15" font-weight="600" letter-spacing="1" fill="${C.dim}">${esc(label)}</text>
-    ${sparkAt(126, 20, C.accent, 0.9, 0.55)}
-    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${C.track}" stroke-width="11"/>
-    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${col}" stroke-width="11" stroke-linecap="round"
-      stroke-dasharray="${Math.max(0.5, (circ * p) / 100)} ${circ}" transform="rotate(-90 ${cx} ${cy})"/>
-    <text x="${cx}" y="${cy + 4}" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="${has ? 34 : 26}" font-weight="700" fill="${C.text}">${has ? Math.round(p) + "%" : "--"}</text>
-    <text x="${cx}" y="${cy + 27}" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="13.5" fill="${C.dim}">${esc(sub ?? "")}</text>`);
+    <text x="14" y="27" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(label)}</text>
+    ${sparkAt(127, 20, C.accent, 0.9, 0.55)}
+    <text x="72" y="78" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="${has ? 46 : 34}" font-weight="700" fill="${has ? col : C.dim}">${has ? Math.round(p) + "%" : "--"}</text>
+    <rect x="14" y="90" width="116" height="12" rx="6" fill="${C.track}"/>
+    ${has ? `<rect x="14" y="90" width="${Math.max(8, (116 * p) / 100)}" height="12" rx="6" fill="${col}"/>` : ""}
+    <text x="72" y="128" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="16" fill="${C.dim}">${esc(sub ?? "")}</text>`);
 }
 
 function linesKey(title, rows, accent = C.accent) {
   const rowSvg = rows
     .map((r, i) => {
-      const y = 58 + i * 28;
-      return `<text x="14" y="${y}" font-family="Segoe UI, sans-serif" font-size="${r.big ? 26 : 17}" font-weight="${r.big ? 700 : 400}" fill="${r.color ?? C.text}">${esc(r.text)}</text>`;
+      const y = 62 + i * 31;
+      return `<text x="14" y="${y}" font-family="Segoe UI, sans-serif" font-size="${r.big ? 28 : 20}" font-weight="${r.big ? 700 : 600}" fill="${r.color ?? C.text}">${esc(r.text)}</text>`;
     })
     .join("");
   return svgWrap(`
     <rect x="0" y="0" width="144" height="34" rx="18" fill="${C.panel}"/>
     <rect x="0" y="17" width="144" height="17" fill="${C.panel}"/>
-    <text x="14" y="24" font-family="Segoe UI, sans-serif" font-size="15" font-weight="600" letter-spacing="1" fill="${accent}">${esc(title)}</text>
+    <text x="14" y="24" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${accent}">${esc(title)}</text>
     ${sparkAt(126, 17, accent, 0.9, 0.45)}
     ${rowSvg}`);
 }
 
 function bigCountKey(title, count, sub, subColor) {
   return svgWrap(`
-    <text x="14" y="26" font-family="Segoe UI, sans-serif" font-size="15" font-weight="600" letter-spacing="1" fill="${C.dim}">${esc(title)}</text>
-    ${sparkAt(126, 20, C.accent, 0.9, 0.55)}
-    <text x="72" y="94" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="58" font-weight="700" fill="${count > 0 ? C.text : C.dim}">${count}</text>
-    <text x="72" y="126" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="15" fill="${subColor ?? C.dim}">${esc(sub ?? "")}</text>`);
+    <text x="14" y="27" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(title)}</text>
+    ${sparkAt(127, 20, C.accent, 0.9, 0.55)}
+    <text x="72" y="96" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="64" font-weight="700" fill="${count > 0 ? C.text : C.dim}">${count}</text>
+    <text x="72" y="128" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="17" fill="${subColor ?? C.dim}">${esc(sub ?? "")}</text>`);
 }
 
 // ---------- formatting ----------
@@ -101,8 +99,8 @@ function fmtReset(iso) {
   const ms = new Date(iso).getTime() - Date.now();
   if (!isFinite(ms) || ms <= 0) return "resetting…";
   const h = Math.floor(ms / 3.6e6), m = Math.round((ms % 3.6e6) / 6e4);
-  if (h >= 48) return `resets ${Math.round(h / 24)}d`;
-  return h > 0 ? `resets ${h}h ${m}m` : `resets ${m}m`;
+  if (h >= 48) return `${Math.round(h / 24)}d left`;
+  return h > 0 ? `${h}h ${m}m left` : `${m}m left`;
 }
 function fmtNum(n) {
   if (n == null) return "--";
@@ -141,6 +139,9 @@ function pickBucket(o) {
   return pct == null && !resetsAt ? null : { pct, resetsAt };
 }
 
+const USAGE_DELAY_BASE = 120_000;
+let usageDelay = USAGE_DELAY_BASE;
+
 async function pollUsage() {
   try {
     const token = await readToken();
@@ -152,7 +153,9 @@ async function pollUsage() {
         "Content-Type": "application/json",
       },
     });
+    if (res.status === 429) { usageDelay = Math.min(usageDelay * 2, 900_000); throw new Error(`usage endpoint HTTP 429 (backing off to ${usageDelay / 1000}s)`); }
     if (!res.ok) throw new Error(`usage endpoint HTTP ${res.status}`);
+    usageDelay = USAGE_DELAY_BASE;
     const j = await res.json();
     if (!state.loggedRaw) {
       state.loggedRaw = true;
@@ -283,12 +286,12 @@ const kindOf = (action) => action.replace("com.technicallybrantley.claude-deck."
 function render(context, kind) {
   switch (kind) {
     case "usage-session": {
-      if (state.usageErr && !state.usage) return setImage(context, gaugeKey("SESSION 5H", null, "sign in?"));
+      if (state.usageErr && !state.usage) return setImage(context, gaugeKey("SESSION 5H", null, state.usageErr.includes("429") ? "throttled" : "sign in?"));
       const b = state.usage?.fiveHour;
       return setImage(context, gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt) : "no data"));
     }
     case "usage-weekly": {
-      if (state.usageErr && !state.usage) return setImage(context, gaugeKey("WEEKLY", null, "sign in?"));
+      if (state.usageErr && !state.usage) return setImage(context, gaugeKey("WEEKLY", null, state.usageErr.includes("429") ? "throttled" : "sign in?"));
       const b = state.usage?.weekly;
       const u = state.usage;
       const sub = u?.scopedPct != null && u.scopedName
@@ -304,7 +307,7 @@ function render(context, kind) {
         const s = state.sessions[cy.idx];
         const status = s.status ?? "?";
         return setImage(context, linesKey(`${cy.idx + 1}/${n}`, [
-          { text: (s.name ?? "session").slice(0, 13), big: false, color: C.text },
+          { text: (s.name ?? "session").slice(0, 11), big: false, color: C.text },
           { text: status, color: status === "idle" ? C.dim : C.ok },
           { text: fmtAgo(s.startedAt ?? Date.now()) + " old", color: C.dim },
         ]));
@@ -357,13 +360,16 @@ function openWeb(context) {
 
 function openClaudeCode(context) {
   const dir = DEFAULT_CODE_DIR;
-  // Try Windows Terminal first, fall back to a plain PowerShell window
-  const wt = spawn("cmd.exe", ["/c", "start", "", "wt", "-d", dir, "powershell", "-NoExit", "-Command", "claude"], { detached: true, stdio: "ignore" });
-  wt.on("error", () => {
-    const psFallback = spawn("cmd.exe", ["/c", "start", "", "powershell", "-NoExit", "-Command", `cd '${dir}'; claude`], { detached: true, stdio: "ignore" });
-    psFallback.on("error", () => showAlert(context));
-    psFallback.unref();
-  });
+  const psFallback = () => {
+    const fb = spawn("cmd.exe", ["/c", "start", "", "powershell", "-NoExit", "-Command", `cd '${dir}'; claude`], { detached: true, stdio: "ignore" });
+    fb.on("error", () => showAlert(context));
+    fb.unref();
+  };
+  // Windows Terminal is single-instance: without `-w new` it opens a hidden tab
+  // in whatever window already exists, so force a fresh foreground window.
+  const wt = spawn("cmd.exe", ["/c", "start", "", "wt", "-w", "new", "-d", dir, "powershell", "-NoExit", "-Command", "claude"], { detached: true, stdio: "ignore" });
+  wt.on("error", psFallback);
+  wt.on("exit", (code) => { if (code !== 0) psFallback(); });
   wt.unref();
   showOk(context);
 }
@@ -438,7 +444,7 @@ if (process.argv.includes("--selftest")) {
     }
   });
 
-  setInterval(pollUsage, 60_000);
+  (function usageLoop() { setTimeout(async () => { await pollUsage(); usageLoop(); }, usageDelay); })();
   setInterval(pollSessions, 5_000);
   setInterval(pollToday, 300_000);
 }
