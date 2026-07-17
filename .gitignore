@@ -2,3 +2,4 @@ node_modules/
 *.log
 local-assets/
 usage-cache.json
+product/
