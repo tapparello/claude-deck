@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #2d2d2d; color: #d8d8d8; font-family: "Segoe UI", sans-serif; font-size: 13px; margin: 0; padding: 10px; }
+  .item { margin-bottom: 10px; }
+  label { display: block; margin-bottom: 4px; color: #969696; }
+  input[type=text], textarea { width: 100%; box-sizing: border-box; background: #3d3d3d; border: 1px solid #555; color: #eee; border-radius: 4px; padding: 6px; font-size: 13px; }
+  textarea { height: 70px; resize: vertical; }
+  .chk { display: flex; align-items: center; gap: 6px; color: #d8d8d8; }
+</style>
+</head>
+<body>
+<div id="form"></div>
+<script>
+let ws, piUuid, settings = {}, action = "";
+const FIELDS = {
+  "com.technicallybrantley.claude-deck.project": [
+    { key: "label", type: "text", label: "Button label" },
+    { key: "path", type: "text", label: "Project folder (full path)" },
+  ],
+  "com.technicallybrantley.claude-deck.quick-prompt": [
+    { key: "label", type: "text", label: "Button label" },
+    { key: "prompt", type: "textarea", label: "Prompt (pasted into quick chat — overwrites clipboard)" },
+    { key: "enter", type: "checkbox", label: "Press Enter automatically" },
+  ],
+  "com.technicallybrantley.claude-deck.custom": [
+    { key: "label", type: "text", label: "Button label" },
+    { key: "command", type: "text", label: "Open (app path, URL, or folder)" },
+  ],
+};
+function save() { ws.send(JSON.stringify({ event: "setSettings", context: piUuid, payload: settings })); }
+function build() {
+  const form = document.getElementById("form");
+  form.innerHTML = "";
+  for (const f of FIELDS[action] ?? []) {
+    const div = document.createElement("div");
+    div.className = "item";
+    if (f.type === "checkbox") {
+      const l = document.createElement("label");
+      l.className = "chk";
+      const c = document.createElement("input");
+      c.type = "checkbox";
+      c.checked = !!settings[f.key];
+      c.onchange = () => { settings[f.key] = c.checked; save(); };
+      l.append(c, document.createTextNode(f.label));
+      div.append(l);
+    } else {
+      const l = document.createElement("label");
+      l.textContent = f.label;
+      const i = document.createElement(f.type === "textarea" ? "textarea" : "input");
+      if (f.type === "text") i.type = "text";
+      i.value = settings[f.key] ?? "";
+      i.oninput = () => { settings[f.key] = i.value; save(); };
+      div.append(l, i);
+    }
+    form.append(div);
+  }
+}
+function connectElgatoStreamDeckSocket(port, uuid, evt, info, actionInfo) {
+  piUuid = uuid;
+  const ai = JSON.parse(actionInfo);
+  action = ai.action;
+  settings = ai.payload?.settings ?? {};
+  ws = new WebSocket("ws://127.0.0.1:" + port);
+  ws.onopen = () => { ws.send(JSON.stringify({ event: evt, uuid })); build(); };
+}
+</script>
+</body>
+</html>

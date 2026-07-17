@@ -70,11 +70,14 @@ function svgWrap(inner) {
   return "data:image/svg+xml," + encodeURIComponent(svg);
 }
 
-function gaugeKey(label, pct, sub) {
+function gaugeKey(label, pct, sub, pulsePhase = null) {
   const has = typeof pct === "number" && isFinite(pct);
   const p = has ? Math.max(0, Math.min(100, pct)) : 0;
   const col = has ? pctColor(p) : C.dim;
+  const pulse = pulsePhase == null ? "" :
+    `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.bad}" stroke-width="6" opacity="${[0.2, 0.55, 0.95][pulsePhase % 3]}"/>`;
   return svgWrap(`
+    ${pulse}
     <text x="14" y="27" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(label)}</text>
     <text x="72" y="78" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="${has ? 46 : 34}" font-weight="700" fill="${has ? col : C.dim}">${has ? Math.round(p) + "%" : "--"}</text>
     <rect x="14" y="90" width="116" height="12" rx="6" fill="${C.track}"/>
@@ -108,6 +111,35 @@ function bigCountKey(title, count, sub, subColor, animPhase = null) {
     <text x="72" y="128" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="17" fill="${subColor ?? C.dim}">${esc(sub ?? "")}</text>`);
 }
 
+function burnKey(tokensHour, sub) {
+  const has = tokensHour != null;
+  return svgWrap(`
+    <text x="14" y="27" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">BURN RATE</text>
+    <text x="72" y="82" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="40" font-weight="700" fill="${has ? C.accent : C.dim}">${has ? fmtNum(tokensHour) : "--"}</text>
+    <text x="72" y="104" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="16" fill="${C.dim}">tok/hr</text>
+    <text x="72" y="128" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="15" fill="${C.dim}">${esc(sub ?? "")}</text>`);
+}
+
+// Generic key for configurable actions: header + big wrapped label + footer
+function labelKey(title, label, sub, accent = C.accent) {
+  const text = String(label ?? "").trim() || "—";
+  const words = text.split(/\s+/);
+  const lines = [];
+  let cur = "";
+  for (const w of words) {
+    if ((cur + " " + w).trim().length <= 11) cur = (cur + " " + w).trim();
+    else { lines.push(cur); cur = w; if (lines.length === 2) break; }
+  }
+  if (cur && lines.length < 2) lines.push(cur);
+  const lineSvg = lines.slice(0, 2)
+    .map((l, i) => `<text x="72" y="${lines.length > 1 ? 68 + i * 27 : 82}" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="22" font-weight="700" fill="${C.text}">${esc(l.slice(0, 12))}</text>`)
+    .join("");
+  return svgWrap(`
+    <text x="14" y="27" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${accent}">${esc(title)}</text>
+    ${lineSvg}
+    <text x="72" y="128" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="15" fill="${C.dim}">${esc(sub ?? "")}</text>`);
+}
+
 // ---------- formatting ----------
 function fmtReset(iso) {
   if (!iso) return "";
@@ -137,6 +169,8 @@ const state = {
   usageAt: 0,
   sessions: [],
   today: null,
+  burn: null,
+  pctHistory: [],
   loggedRaw: false,
 };
 
@@ -200,12 +234,17 @@ async function pollUsage() {
     };
     state.usageErr = null;
     state.usageAt = Date.now();
+    const fp5 = state.usage.fiveHour?.pct;
+    if (typeof fp5 === "number") {
+      state.pctHistory.push({ t: state.usageAt, pct: fp5 });
+      state.pctHistory = state.pctHistory.filter((h) => state.usageAt - h.t < 3.6e6);
+    }
     try { fs.writeFileSync(CACHE_FILE, JSON.stringify({ usage: state.usage, at: state.usageAt })); } catch {}
   } catch (e) {
     state.usageErr = String(e.message ?? e);
     log("usage poll failed:", state.usageErr);
   }
-  renderAll(["usage-session", "usage-weekly"]);
+  renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate"]);
 }
 
 // ---------- data: running sessions ----------
@@ -227,7 +266,7 @@ async function pollSessions() {
     out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
     const changed = JSON.stringify(out.map((s) => [s.pid, s.status])) !== JSON.stringify(state.sessions.map((s) => [s.pid, s.status]));
     state.sessions = out;
-    if (changed) renderAll(["sessions"]);
+    if (changed) renderAll(["sessions", "focus-session"]);
   } catch (e) {
     log("sessions poll failed:", String(e));
   }
@@ -288,14 +327,85 @@ async function pollToday() {
   }
 }
 
+// ---------- data: burn rate (incremental tail of recent transcripts) ----------
+const hourTracker = new Map(); // file -> { offset, rest, events: [{t, tok}] }
+
+async function pollBurn() {
+  try {
+    const now = Date.now();
+    const scanCutoff = now - 90 * 60_000;
+    const dirs = await fsp.readdir(PROJECTS_DIR).catch(() => []);
+    for (const d of dirs) {
+      const dir = path.join(PROJECTS_DIR, d);
+      let files;
+      try { files = await fsp.readdir(dir); } catch { continue; }
+      for (const f of files) {
+        if (!f.endsWith(".jsonl")) continue;
+        const fp = path.join(dir, f);
+        let st;
+        try { st = await fsp.stat(fp); } catch { continue; }
+        if (st.mtimeMs < scanCutoff) continue;
+        let rec = hourTracker.get(fp);
+        if (!rec || st.size < rec.offset) rec = { offset: 0, rest: "", events: [] };
+        if (st.size > rec.offset) {
+          const fh = await fsp.open(fp, "r");
+          try {
+            const len = st.size - rec.offset;
+            const buf = Buffer.alloc(len);
+            await fh.read(buf, 0, len, rec.offset);
+            rec.offset = st.size;
+            const lines = (rec.rest + buf.toString("utf8")).split("\n");
+            rec.rest = lines.pop() ?? "";
+            for (const line of lines) {
+              if (!line) continue;
+              let j;
+              try { j = JSON.parse(line); } catch { continue; }
+              const u = j.message?.usage;
+              if (!u || !j.timestamp) continue;
+              const tok = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+              if (tok) rec.events.push({ t: new Date(j.timestamp).getTime(), tok });
+            }
+          } finally { await fh.close(); }
+        }
+        rec.events = rec.events.filter((e) => now - e.t < 65 * 60_000);
+        hourTracker.set(fp, rec);
+      }
+    }
+    let tokensHour = 0;
+    for (const rec of hourTracker.values()) for (const e of rec.events) if (now - e.t < 3.6e6) tokensHour += e.tok;
+    state.burn = { tokensHour, at: now };
+    renderAll(["burn-rate"]);
+  } catch (e) {
+    log("burn poll failed:", String(e));
+  }
+}
+
+// Projects time-to-cap from the trend of 5h utilization samples
+function sessionEta() {
+  const h = state.pctHistory;
+  if (h.length < 2) return "measuring…";
+  const latest = h[h.length - 1];
+  const past = h.find((s) => latest.t - s.t >= 10 * 60_000) ?? h[0];
+  const dt = latest.t - past.t;
+  if (dt < 4 * 60_000) return "measuring…";
+  const slope = (latest.pct - past.pct) / dt;
+  if (slope <= 5e-8) return "steady";
+  const msLeft = (100 - latest.pct) / slope;
+  const resetMs = state.usage?.fiveHour?.resetsAt ? new Date(state.usage.fiveHour.resetsAt).getTime() - latest.t : Infinity;
+  if (msLeft >= resetMs) return "resets first";
+  const hh = Math.floor(msLeft / 3.6e6), mm = Math.round((msLeft % 3.6e6) / 6e4);
+  return hh > 0 ? `cap in ~${hh}h ${mm}m` : `cap in ~${mm}m`;
+}
+
 // ---------- websocket / stream deck plumbing ----------
 function argOf(name) {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
-const views = new Map(); // context -> { kind }
+const views = new Map(); // context -> { kind, settings }
 const cycle = new Map(); // context -> { idx, timer }
+const focusIdx = new Map(); // context -> session index
 let ws = null;
 let animPhase = 0;
 
@@ -314,7 +424,7 @@ function render(context, kind) {
     case "usage-session": {
       if (state.usageErr && !state.usage) return setImage(context, gaugeKey("SESSION 5H", null, state.usageErr.includes("429") ? "throttled" : "sign in?"));
       const b = state.usage?.fiveHour;
-      return setImage(context, gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt) : "no data"));
+      return setImage(context, gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt) : "no data", b?.pct >= 90 ? animPhase : null));
     }
     case "usage-weekly": {
       if (state.usageErr && !state.usage) return setImage(context, gaugeKey("WEEKLY", null, state.usageErr.includes("429") ? "throttled" : "sign in?"));
@@ -324,7 +434,32 @@ function render(context, kind) {
         ? `${u.scopedName} ${Math.round(u.scopedPct)}%`
         : u?.weeklyOpus?.pct != null ? `opus ${Math.round(u.weeklyOpus.pct)}%`
         : b ? fmtReset(b.resetsAt) : "no data";
-      return setImage(context, gaugeKey("WEEKLY", b?.pct ?? null, sub));
+      return setImage(context, gaugeKey("WEEKLY", b?.pct ?? null, sub, b?.pct >= 90 ? animPhase : null));
+    }
+    case "usage-model": {
+      const u = state.usage;
+      const name = (u?.scopedName ?? "MODEL").toUpperCase().slice(0, 8);
+      return setImage(context, gaugeKey(`${name} 7D`, u?.scopedPct ?? null, u?.weekly?.resetsAt ? fmtReset(u.weekly.resetsAt) : "no data", u?.scopedPct >= 90 ? animPhase : null));
+    }
+    case "burn-rate":
+      return setImage(context, burnKey(state.burn?.tokensHour ?? null, sessionEta()));
+    case "project": {
+      const s = views.get(context)?.settings ?? {};
+      const label = s.label || (s.path ? path.basename(s.path) : "");
+      return setImage(context, labelKey("PROJECT", label || "configure", s.path ? "" : "set folder in settings"));
+    }
+    case "focus-session": {
+      const i = focusIdx.get(context);
+      const s = i != null && state.sessions.length ? state.sessions[i % state.sessions.length] : null;
+      return setImage(context, labelKey("FOCUS", s ? s.name : `${state.sessions.length} sessions`, s ? s.status : "press to cycle", C.ok));
+    }
+    case "quick-prompt": {
+      const s = views.get(context)?.settings ?? {};
+      return setImage(context, labelKey("PROMPT", s.label || "configure", s.prompt ? "" : "set prompt in settings"));
+    }
+    case "custom": {
+      const s = views.get(context)?.settings ?? {};
+      return setImage(context, labelKey("CLAUDE", s.label || "custom", s.command ? "" : "set command in settings"));
     }
     case "sessions": {
       const cy = cycle.get(context);
@@ -384,8 +519,7 @@ function openWeb(context) {
   showOk(context);
 }
 
-function openClaudeCode(context) {
-  const dir = DEFAULT_CODE_DIR;
+function openTerminalAt(dir, context) {
   const psFallback = () => {
     const fb = spawn("cmd.exe", ["/c", "start", "", "powershell", "-NoExit", "-Command", `cd '${dir}'; claude`], { detached: true, stdio: "ignore" });
     fb.on("error", () => showAlert(context));
@@ -397,6 +531,45 @@ function openClaudeCode(context) {
   wt.on("error", psFallback);
   wt.on("exit", (code) => { if (code !== 0) psFallback(); });
   wt.unref();
+  showOk(context);
+}
+
+// Bring the terminal window hosting a session to the foreground (matched by title substring)
+function focusWindow(s, context) {
+  const target = (String(s.name ?? "").replace(/["'‘’“”]/g, "").slice(0, 40) || path.basename(s.cwd ?? "")).toLowerCase();
+  if (!target) return showAlert(context);
+  const ps = `
+$target = '${target.replace(/'/g, "''")}';
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; using System.Text; public class W { public delegate bool EP(IntPtr h, IntPtr l); [DllImport("user32.dll")] public static extern bool EnumWindows(EP cb, IntPtr l); [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n); [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h); [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c); }';
+$found = [IntPtr]::Zero;
+[void][W]::EnumWindows({ param($h, $l) $sb = New-Object System.Text.StringBuilder 512; [void][W]::GetWindowText($h, $sb, 512); if ([W]::IsWindowVisible($h) -and $sb.ToString().ToLower().Contains($target)) { $script:found = $h; return $false }; return $true }, [IntPtr]::Zero);
+if ($found -eq [IntPtr]::Zero) { exit 1 };
+[void][W]::ShowWindow($found, 9); [void][W]::SetForegroundWindow($found); exit 0`;
+  execFile("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], (err) => {
+    if (err) showAlert(context); else showOk(context);
+  });
+}
+
+// Quick chat + paste a canned prompt (clipboard is overwritten)
+function sendPrompt(text, enter, context) {
+  const ps = `
+Set-Clipboard -Value '${String(text).replace(/'/g, "''")}';
+Add-Type -Namespace K -Name W -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e);';
+function P([byte]$k){[K.W]::keybd_event($k,0,0,[UIntPtr]::Zero)}; function R([byte]$k){[K.W]::keybd_event($k,0,2,[UIntPtr]::Zero)};
+P 0x11; P 0x12; P 0x20; Start-Sleep -Milliseconds 60; R 0x20; R 0x12; R 0x11;
+Start-Sleep -Milliseconds 800;
+P 0x11; P 0x56; Start-Sleep -Milliseconds 60; R 0x56; R 0x11;
+${enter ? "Start-Sleep -Milliseconds 200; P 0x0D; R 0x0D;" : ""}`;
+  const child = spawn("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], { detached: true, stdio: "ignore" });
+  child.on("error", () => showAlert(context));
+  child.unref();
+  showOk(context);
+}
+
+function runCustom(command, context) {
+  const child = spawn("cmd.exe", ["/c", "start", "", command], { detached: true, stdio: "ignore" });
+  child.on("error", () => showAlert(context));
+  child.unref();
   showOk(context);
 }
 
@@ -419,10 +592,39 @@ function onKeyDown(context, kind) {
       cycle.set(context, cy);
       return render(context, "sessions");
     }
+    case "usage-model":
+      if (Date.now() - lastUsageAttempt > 30_000) pollUsage();
+      return showOk(context);
+    case "burn-rate":
+      pollBurn();
+      return showOk(context);
+    case "project": {
+      const s = views.get(context)?.settings ?? {};
+      if (!s.path) return showAlert(context);
+      return openTerminalAt(s.path, context);
+    }
+    case "focus-session": {
+      const n = state.sessions.length;
+      if (!n) return showAlert(context);
+      const i = ((focusIdx.get(context) ?? -1) + 1) % n;
+      focusIdx.set(context, i);
+      focusWindow(state.sessions[i], context);
+      return render(context, "focus-session");
+    }
+    case "quick-prompt": {
+      const s = views.get(context)?.settings ?? {};
+      if (!s.prompt) return showAlert(context);
+      return sendPrompt(s.prompt, !!s.enter, context);
+    }
+    case "custom": {
+      const s = views.get(context)?.settings ?? {};
+      if (!s.command) return showAlert(context);
+      return runCustom(s.command, context);
+    }
     case "launch": return launchDesktop(context);
     case "quick-chat": return quickChat(context);
     case "open-web": return openWeb(context);
-    case "claude-code": return openClaudeCode(context);
+    case "claude-code": return openTerminalAt(DEFAULT_CODE_DIR, context);
   }
 }
 
@@ -436,6 +638,8 @@ if (process.argv.includes("--selftest")) {
     log("selftest sessions:", state.sessions.map((s) => `${s.name}[${s.status}]`).join(", ") || "(none)");
     await pollToday();
     log("selftest today:", JSON.stringify(state.today));
+    await pollBurn();
+    log("selftest burn:", JSON.stringify(state.burn), "eta:", sessionEta());
     process.exit(0);
   })();
 } else {
@@ -459,12 +663,16 @@ if (process.argv.includes("--selftest")) {
     try { msg = JSON.parse(data.toString()); } catch { return; }
     const { event, context, action } = msg;
     if (event === "willAppear" && action) {
-      views.set(context, { kind: kindOf(action) });
+      views.set(context, { kind: kindOf(action), settings: msg.payload?.settings ?? {} });
       setTitle(context);
       render(context, kindOf(action));
     } else if (event === "willDisappear") {
       views.delete(context);
       cycle.delete(context);
+      focusIdx.delete(context);
+    } else if (event === "didReceiveSettings" && action) {
+      const v = views.get(context);
+      if (v) { v.settings = msg.payload?.settings ?? {}; render(context, v.kind); }
     } else if (event === "keyDown" && action) {
       onKeyDown(context, kindOf(action));
     }
@@ -473,11 +681,16 @@ if (process.argv.includes("--selftest")) {
   (function usageLoop() { setTimeout(async () => { await pollUsage(); usageLoop(); }, usageDelay); })();
   setInterval(pollSessions, 5_000);
   setInterval(pollToday, 300_000);
-  // Activity animation: advance the dot cycle while any session is busy
+  pollBurn();
+  setInterval(pollBurn, 60_000);
+  // Animation ticker: busy-session dots + red pulse on gauges at 90%+
   setInterval(() => {
-    if (!state.sessions.some((s) => s.status && s.status !== "idle")) return;
-    if (![...views.values()].some((v) => v.kind === "sessions")) return;
     animPhase = (animPhase + 1) % 3;
-    renderAll(["sessions"]);
+    const kinds = [];
+    if (state.sessions.some((s) => s.status && s.status !== "idle")) kinds.push("sessions");
+    if (state.usage?.fiveHour?.pct >= 90) kinds.push("usage-session");
+    if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
+    if (state.usage?.scopedPct >= 90) kinds.push("usage-model");
+    if (kinds.length && [...views.values()].some((v) => kinds.includes(v.kind))) renderAll(kinds);
   }, 600);
 }

@@ -95,6 +95,66 @@
       "Icon": "imgs/code",
       "Controllers": ["Keypad"],
       "States": [{ "Image": "imgs/code" }]
+    },
+    {
+      "UUID": "com.technicallybrantley.claude-deck.usage-model",
+      "Name": "Model Usage (weekly)",
+      "Tooltip": "Per-model weekly limit usage (e.g. your Fable allowance). Press to refresh.",
+      "Icon": "imgs/model",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/model", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.technicallybrantley.claude-deck.burn-rate",
+      "Name": "Burn Rate",
+      "Tooltip": "Tokens per hour over the last hour, plus estimated time until the 5h session cap.",
+      "Icon": "imgs/burn",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/burn", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.technicallybrantley.claude-deck.project",
+      "Name": "Project Terminal",
+      "Tooltip": "Open Claude Code in a specific project folder. Configure the folder in settings.",
+      "Icon": "imgs/project",
+      "PropertyInspectorPath": "pi/pi.html",
+      "Controllers": ["Keypad"],
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/project", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.technicallybrantley.claude-deck.focus-session",
+      "Name": "Focus Session",
+      "Tooltip": "Press to cycle through running Claude Code sessions and bring their window to the front.",
+      "Icon": "imgs/focus",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/focus", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.technicallybrantley.claude-deck.quick-prompt",
+      "Name": "Quick Prompt",
+      "Tooltip": "Open Claude quick chat and paste a canned prompt. Configure the prompt in settings.",
+      "Icon": "imgs/prompt",
+      "PropertyInspectorPath": "pi/pi.html",
+      "Controllers": ["Keypad"],
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/prompt", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.technicallybrantley.claude-deck.custom",
+      "Name": "Claude Custom",
+      "Tooltip": "A Claude-styled key that opens anything you choose: app, URL, or folder.",
+      "Icon": "imgs/custom",
+      "PropertyInspectorPath": "pi/pi.html",
+      "Controllers": ["Keypad"],
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/custom", "ShowTitle": false }]
     }
   ]
 }

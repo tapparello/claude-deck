@@ -16,8 +16,15 @@ The usage gauges show the **same session/weekly percentages Claude Desktop and C
 | **Quick Chat** | Fires Claude's global quick-chat hotkey (Ctrl+Alt+Space). |
 | **Open claude.ai** | New chat in your browser. |
 | **Claude Code Terminal** | Opens a terminal running `claude` in `Documents\GitHub` (falls back to your home folder). |
+| **Model Usage (weekly)** | Per-model weekly limit % (e.g. your Fable allowance). |
+| **Burn Rate** | Tokens/hour over the last hour + estimated time until the 5h session cap ("cap in ~1h 20m" / "steady"). |
+| **Project Terminal** | Configurable: opens Claude Code in a specific project folder (label + path in key settings). |
+| **Focus Session** | Press to cycle running sessions and bring each one's terminal window to the front. |
+| **Quick Prompt** | Configurable: opens quick chat and pastes a canned prompt (optionally presses Enter). Overwrites the clipboard. |
+| **Claude Custom** | A Claude-styled spare key that opens anything you set: app, URL, or folder. |
 
-Ring colors: green < 60%, amber 60–85%, red ≥ 85%.
+Bar colors: green < 60%, amber 60–85%, red ≥ 85%. At 90%+ the gauge pulses red.
+The sessions key shows an animated dot cycle while any session is actively working.
 
 ## Requirements
 
