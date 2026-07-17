@@ -100,9 +100,9 @@ function linesKey(title, rows, accent = C.accent) {
 }
 
 function bigCountKey(title, count, sub, subColor, animPhase = null) {
-  // animPhase non-null → cycling activity dots top-right (frame-pushed animation)
+  // animPhase non-null → cycling activity dots beside the count (frame-pushed animation)
   const dots = animPhase == null ? "" : [0, 1, 2]
-    .map((i) => `<circle cx="${104 + i * 12}" cy="21" r="${i === animPhase ? 4.5 : 3}" fill="${i === animPhase ? C.ok : C.track}"/>`)
+    .map((i) => `<circle cx="122" cy="${56 + i * 16}" r="${i === animPhase ? 4.5 : 3}" fill="${i === animPhase ? C.ok : C.track}"/>`)
     .join("");
   return svgWrap(`
     <text x="14" y="27" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(title)}</text>

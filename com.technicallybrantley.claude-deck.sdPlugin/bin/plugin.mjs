@@ -3801,7 +3801,7 @@ function linesKey(title, rows, accent = C.accent) {
     ${rowSvg}`);
 }
 function bigCountKey(title, count, sub, subColor, animPhase2 = null) {
-  const dots = animPhase2 == null ? "" : [0, 1, 2].map((i) => `<circle cx="${104 + i * 12}" cy="21" r="${i === animPhase2 ? 4.5 : 3}" fill="${i === animPhase2 ? C.ok : C.track}"/>`).join("");
+  const dots = animPhase2 == null ? "" : [0, 1, 2].map((i) => `<circle cx="122" cy="${56 + i * 16}" r="${i === animPhase2 ? 4.5 : 3}" fill="${i === animPhase2 ? C.ok : C.track}"/>`).join("");
   return svgWrap(`
     <text x="14" y="27" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(title)}</text>
     ${dots}
