@@ -7,6 +7,9 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn, execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const PLUGIN_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 const CLAUDE_DIR = path.join(os.homedir(), ".claude");
 const CREDS_FILE = path.join(CLAUDE_DIR, ".credentials.json");
@@ -52,8 +55,18 @@ const sparkAt = (x, y, color = C.accent, opacity = 1, scale = 1) =>
   `<g transform="translate(${x} ${y}) scale(${scale}) translate(-120 -24)"><path d="${SPARK_PATH}" fill="${color}" stroke="${color}" stroke-width="0.8" stroke-linejoin="round" opacity="${opacity}"/></g>`;
 
 // ---------- svg key renderers (144x144) ----------
+// Faint watermark behind data keys: the real Claude logo when deploy.ps1 supplied
+// one (local-assets), otherwise the drawn spark so the OSS build still gets texture.
+let WATERMARK;
+try {
+  const b64 = fs.readFileSync(path.join(PLUGIN_DIR, "imgs", "launch.png")).toString("base64");
+  WATERMARK = `<image xlink:href="data:image/png;base64,${b64}" href="data:image/png;base64,${b64}" x="24" y="24" width="96" height="96" opacity="0.12"/>`;
+} catch {
+  WATERMARK = sparkAt(72, 76, C.accent, 0.08, 2.4);
+}
+
 function svgWrap(inner) {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144"><rect width="144" height="144" rx="18" fill="${C.bg}"/>${inner}</svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="144" height="144" viewBox="0 0 144 144"><rect width="144" height="144" rx="18" fill="${C.bg}"/>${WATERMARK}${inner}</svg>`;
   return "data:image/svg+xml," + encodeURIComponent(svg);
 }
 
@@ -63,7 +76,6 @@ function gaugeKey(label, pct, sub) {
   const col = has ? pctColor(p) : C.dim;
   return svgWrap(`
     <text x="14" y="27" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(label)}</text>
-    ${sparkAt(127, 20, C.accent, 0.9, 0.55)}
     <text x="72" y="78" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="${has ? 46 : 34}" font-weight="700" fill="${has ? col : C.dim}">${has ? Math.round(p) + "%" : "--"}</text>
     <rect x="14" y="90" width="116" height="12" rx="6" fill="${C.track}"/>
     ${has ? `<rect x="14" y="90" width="${Math.max(8, (116 * p) / 100)}" height="12" rx="6" fill="${col}"/>` : ""}
@@ -81,14 +93,12 @@ function linesKey(title, rows, accent = C.accent) {
     <rect x="0" y="0" width="144" height="34" rx="18" fill="${C.panel}"/>
     <rect x="0" y="17" width="144" height="17" fill="${C.panel}"/>
     <text x="14" y="24" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${accent}">${esc(title)}</text>
-    ${sparkAt(126, 17, accent, 0.9, 0.45)}
     ${rowSvg}`);
 }
 
 function bigCountKey(title, count, sub, subColor) {
   return svgWrap(`
     <text x="14" y="27" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(title)}</text>
-    ${sparkAt(127, 20, C.accent, 0.9, 0.55)}
     <text x="72" y="96" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="64" font-weight="700" fill="${count > 0 ? C.text : C.dim}">${count}</text>
     <text x="72" y="128" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="17" fill="${subColor ?? C.dim}">${esc(sub ?? "")}</text>`);
 }
@@ -141,8 +151,17 @@ function pickBucket(o) {
 
 const USAGE_DELAY_BASE = 120_000;
 let usageDelay = USAGE_DELAY_BASE;
+let lastUsageAttempt = 0;
+
+// Survive restarts without re-polling: reuse the last good reading for up to 30 min
+const CACHE_FILE = path.join(PLUGIN_DIR, "usage-cache.json");
+try {
+  const c = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
+  if (Date.now() - c.at < 30 * 60_000) { state.usage = c.usage; state.usageAt = c.at; }
+} catch {}
 
 async function pollUsage() {
+  lastUsageAttempt = Date.now();
   try {
     const token = await readToken();
     if (!token) throw new Error("no OAuth token in credentials file");
@@ -176,6 +195,7 @@ async function pollUsage() {
     };
     state.usageErr = null;
     state.usageAt = Date.now();
+    try { fs.writeFileSync(CACHE_FILE, JSON.stringify({ usage: state.usage, at: state.usageAt })); } catch {}
   } catch (e) {
     state.usageErr = String(e.message ?? e);
     log("usage poll failed:", state.usageErr);
@@ -378,7 +398,7 @@ function onKeyDown(context, kind) {
   switch (kind) {
     case "usage-session":
     case "usage-weekly":
-      pollUsage();
+      if (Date.now() - lastUsageAttempt > 30_000) pollUsage();
       return showOk(context);
     case "today":
       pollToday();
@@ -422,7 +442,7 @@ if (process.argv.includes("--selftest")) {
   ws.on("open", () => {
     send({ event: registerEvent, uuid: pluginUUID });
     log("registered with Stream Deck");
-    pollUsage();
+    if (Date.now() - state.usageAt > 90_000) pollUsage();
     pollSessions();
     pollToday();
   });

@@ -17,7 +17,11 @@ if (Test-Path $logo) {
     Remove-Item (Join-Path $dst "imgs\launch.svg") -Force
     Copy-Item $logo (Join-Path $dst "imgs\plugin.png") -Force
     Remove-Item (Join-Path $dst "imgs\plugin.svg") -Force
-    Write-Host "applied local claude-logo.png to launch + category icons"
+    # Quick-chat icon: speech bubble with the real logo inside
+    $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($logo))
+    $chat = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="72" height="72" viewBox="0 0 72 72"><rect width="72" height="72" rx="14" fill="#1F1E1D"/><path d="M14 19 h44 a6 6 0 0 1 6 6 v19 a6 6 0 0 1 -6 6 h-23 l-13 11 v-11 h-8 a6 6 0 0 1 -6 -6 v-19 a6 6 0 0 1 6 -6 z" fill="none" stroke="#D97757" stroke-width="4"/><image xlink:href="data:image/png;base64,' + $b64 + '" href="data:image/png;base64,' + $b64 + '" x="21" y="20" width="30" height="30"/></svg>'
+    Set-Content -Path (Join-Path $dst "imgs\chat.svg") -Value $chat -Encoding UTF8
+    Write-Host "applied local claude-logo.png to launch, category, and chat icons"
 }
 
 if (-not $NoRestart) { Start-Process "C:\Program Files\Elgato\StreamDeck\StreamDeck.exe" }
