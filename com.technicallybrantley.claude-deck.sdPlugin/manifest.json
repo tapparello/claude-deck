@@ -1,0 +1,100 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "Name": "Claude Deck",
+  "Version": "1.0.0.0",
+  "Author": "Brantley",
+  "Description": "Live Claude usage limits, running Claude Code sessions, and quick-launch keys for Claude Desktop.",
+  "UUID": "com.technicallybrantley.claude-deck",
+  "Icon": "imgs/plugin",
+  "Category": "Claude Deck",
+  "CategoryIcon": "imgs/plugin",
+  "CodePath": "bin/plugin.mjs",
+  "SDKVersion": 2,
+  "Nodejs": {
+    "Version": "20",
+    "Debug": ""
+  },
+  "Software": {
+    "MinimumVersion": "6.5"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "Actions": [
+    {
+      "UUID": "com.technicallybrantley.claude-deck.usage-session",
+      "Name": "Session Usage (5h)",
+      "Tooltip": "Live 5-hour session limit usage for your Claude subscription. Press to refresh.",
+      "Icon": "imgs/session",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/session", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.technicallybrantley.claude-deck.usage-weekly",
+      "Name": "Weekly Usage",
+      "Tooltip": "Live weekly limit usage for your Claude subscription. Press to refresh.",
+      "Icon": "imgs/weekly",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/weekly", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.technicallybrantley.claude-deck.sessions",
+      "Name": "Active Sessions",
+      "Tooltip": "Running Claude Code sessions. Press to cycle through session details.",
+      "Icon": "imgs/sessions",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/sessions", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.technicallybrantley.claude-deck.today",
+      "Name": "Today's Activity",
+      "Tooltip": "Today's Claude Code activity: chats, messages, and tokens. Press to refresh.",
+      "Icon": "imgs/today",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/today", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.technicallybrantley.claude-deck.launch",
+      "Name": "Launch Claude Desktop",
+      "Tooltip": "Open the Claude Desktop app.",
+      "Icon": "imgs/launch",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/launch" }]
+    },
+    {
+      "UUID": "com.technicallybrantley.claude-deck.quick-chat",
+      "Name": "Claude Quick Chat",
+      "Tooltip": "Trigger Claude's quick-chat hotkey (Ctrl+Alt+Space).",
+      "Icon": "imgs/chat",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/chat" }]
+    },
+    {
+      "UUID": "com.technicallybrantley.claude-deck.open-web",
+      "Name": "Open claude.ai",
+      "Tooltip": "Open a new chat on claude.ai in your browser.",
+      "Icon": "imgs/web",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/web" }]
+    },
+    {
+      "UUID": "com.technicallybrantley.claude-deck.claude-code",
+      "Name": "Claude Code Terminal",
+      "Tooltip": "Open a terminal running Claude Code in your GitHub folder.",
+      "Icon": "imgs/code",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/code" }]
+    }
+  ]
+}
