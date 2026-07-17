@@ -99,8 +99,9 @@
     {
       "UUID": "com.technicallybrantley.claude-deck.usage-model",
       "Name": "Model Usage (weekly)",
-      "Tooltip": "Per-model weekly limit usage (e.g. your Fable allowance). Press to refresh.",
+      "Tooltip": "Per-model weekly limit usage. Pick which model in the key settings.",
       "Icon": "imgs/model",
+      "PropertyInspectorPath": "pi/pi.html",
       "Controllers": ["Keypad"],
       "SupportedInMultiActions": false,
       "UserTitleEnabled": false,

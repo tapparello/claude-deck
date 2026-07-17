@@ -6,7 +6,7 @@
   body { background: #2d2d2d; color: #d8d8d8; font-family: "Segoe UI", sans-serif; font-size: 13px; margin: 0; padding: 10px; }
   .item { margin-bottom: 10px; }
   label { display: block; margin-bottom: 4px; color: #969696; }
-  input[type=text], textarea { width: 100%; box-sizing: border-box; background: #3d3d3d; border: 1px solid #555; color: #eee; border-radius: 4px; padding: 6px; font-size: 13px; }
+  input[type=text], textarea, select { width: 100%; box-sizing: border-box; background: #3d3d3d; border: 1px solid #555; color: #eee; border-radius: 4px; padding: 6px; font-size: 13px; }
   textarea { height: 70px; resize: vertical; }
   .chk { display: flex; align-items: center; gap: 6px; color: #d8d8d8; }
 </style>
@@ -14,8 +14,11 @@
 <body>
 <div id="form"></div>
 <script>
-let ws, piUuid, settings = {}, action = "";
+let ws, piUuid, settings = {}, action = "", models = [];
 const FIELDS = {
+  "com.technicallybrantley.claude-deck.usage-model": [
+    { key: "model", type: "modelselect", label: "Model to display" },
+  ],
   "com.technicallybrantley.claude-deck.project": [
     { key: "label", type: "text", label: "Button label" },
     { key: "path", type: "text", label: "Project folder (full path)" },
@@ -37,7 +40,25 @@ function build() {
   for (const f of FIELDS[action] ?? []) {
     const div = document.createElement("div");
     div.className = "item";
-    if (f.type === "checkbox") {
+    if (f.type === "modelselect") {
+      const l = document.createElement("label");
+      l.textContent = f.label;
+      const s = document.createElement("select");
+      const auto = document.createElement("option");
+      auto.value = "";
+      auto.textContent = models.length ? "Auto (first available)" : "Auto (waiting for usage data…)";
+      s.append(auto);
+      for (const m of models) {
+        const o = document.createElement("option");
+        o.value = m;
+        o.textContent = m;
+        s.append(o);
+      }
+      s.value = settings[f.key] ?? "";
+      if (s.selectedIndex < 0) s.value = "";
+      s.onchange = () => { settings[f.key] = s.value; save(); };
+      div.append(l, s);
+    } else if (f.type === "checkbox") {
       const l = document.createElement("label");
       l.className = "chk";
       const c = document.createElement("input");
@@ -64,7 +85,21 @@ function connectElgatoStreamDeckSocket(port, uuid, evt, info, actionInfo) {
   action = ai.action;
   settings = ai.payload?.settings ?? {};
   ws = new WebSocket("ws://127.0.0.1:" + port);
-  ws.onopen = () => { ws.send(JSON.stringify({ event: evt, uuid })); build(); };
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ event: evt, uuid }));
+    build();
+    if (action === "com.technicallybrantley.claude-deck.usage-model") {
+      ws.send(JSON.stringify({ event: "sendToPlugin", action, context: piUuid, payload: { cmd: "getModels" } }));
+    }
+  };
+  ws.onmessage = (e) => {
+    let m;
+    try { m = JSON.parse(e.data); } catch { return; }
+    if (m.event === "sendToPropertyInspector" && Array.isArray(m.payload?.models)) {
+      models = m.payload.models;
+      build();
+    }
+  };
 }
 </script>
 </body>

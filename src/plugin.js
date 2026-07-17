@@ -225,12 +225,24 @@ async function pollUsage() {
       return l ? { pct: l.percent, resetsAt: l.resets_at } : null;
     };
     const scoped = limits.find((x) => x.kind === "weekly_scoped");
+    // Every per-model bucket the account exposes, for the selectable model gauge
+    const models = [];
+    for (const l of limits) {
+      if (l.kind !== "weekly_scoped") continue;
+      const name = l.scope?.model?.display_name;
+      if (name && typeof l.percent === "number") models.push({ name, pct: l.percent, resetsAt: l.resets_at ?? null });
+    }
+    for (const [key, name] of [["seven_day_opus", "Opus"], ["seven_day_sonnet", "Sonnet"]]) {
+      const b = pickBucket(j[key]);
+      if (b?.pct != null && !models.some((m) => m.name === name)) models.push({ name, pct: b.pct, resetsAt: b.resetsAt });
+    }
     state.usage = {
       fiveHour: pickBucket(j.five_hour) ?? fromLimit("session"),
       weekly: pickBucket(j.seven_day) ?? fromLimit("weekly_all"),
       weeklyOpus: pickBucket(j.seven_day_opus),
       scopedPct: scoped?.percent ?? null,
       scopedName: scoped?.scope?.model?.display_name ?? null,
+      models,
     };
     state.usageErr = null;
     state.usageAt = Date.now();
@@ -437,9 +449,11 @@ function render(context, kind) {
       return setImage(context, gaugeKey("WEEKLY", b?.pct ?? null, sub, b?.pct >= 90 ? animPhase : null));
     }
     case "usage-model": {
-      const u = state.usage;
-      const name = (u?.scopedName ?? "MODEL").toUpperCase().slice(0, 8);
-      return setImage(context, gaugeKey(`${name} 7D`, u?.scopedPct ?? null, u?.weekly?.resetsAt ? fmtReset(u.weekly.resetsAt) : "no data", u?.scopedPct >= 90 ? animPhase : null));
+      const models = state.usage?.models ?? [];
+      const want = views.get(context)?.settings?.model;
+      const m = models.find((x) => x.name === want) ?? models[0];
+      const name = (m?.name ?? want ?? "MODEL").toUpperCase().slice(0, 8);
+      return setImage(context, gaugeKey(`${name} 7D`, m?.pct ?? null, m?.resetsAt ? fmtReset(m.resetsAt) : "no data", m?.pct >= 90 ? animPhase : null));
     }
     case "burn-rate":
       return setImage(context, burnKey(state.burn?.tokensHour ?? null, sessionEta()));
@@ -673,6 +687,10 @@ if (process.argv.includes("--selftest")) {
     } else if (event === "didReceiveSettings" && action) {
       const v = views.get(context);
       if (v) { v.settings = msg.payload?.settings ?? {}; render(context, v.kind); }
+    } else if (event === "sendToPlugin" && action) {
+      if (msg.payload?.cmd === "getModels") {
+        send({ event: "sendToPropertyInspector", context, payload: { models: (state.usage?.models ?? []).map((m) => m.name) } });
+      }
     } else if (event === "keyDown" && action) {
       onKeyDown(context, kindOf(action));
     }
@@ -690,7 +708,7 @@ if (process.argv.includes("--selftest")) {
     if (state.sessions.some((s) => s.status && s.status !== "idle")) kinds.push("sessions");
     if (state.usage?.fiveHour?.pct >= 90) kinds.push("usage-session");
     if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
-    if (state.usage?.scopedPct >= 90) kinds.push("usage-model");
+    if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");
     if (kinds.length && [...views.values()].some((v) => kinds.includes(v.kind))) renderAll(kinds);
   }, 600);
 }
