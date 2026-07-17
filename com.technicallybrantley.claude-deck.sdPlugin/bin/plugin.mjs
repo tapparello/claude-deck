@@ -3949,11 +3949,19 @@ async function pollUsage() {
       fs.writeFileSync(CACHE_FILE, JSON.stringify({ usage: state.usage, at: state.usageAt }));
     } catch {
     }
+    scheduleResetPoll();
   } catch (e) {
     state.usageErr = String(e.message ?? e);
     log("usage poll failed:", state.usageErr);
   }
   renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate"]);
+}
+var resetTimer = null;
+function scheduleResetPoll() {
+  const deltas = [state.usage?.fiveHour?.resetsAt, state.usage?.weekly?.resetsAt].filter(Boolean).map((iso) => new Date(iso).getTime() - Date.now()).filter((d) => d > 0 && d < 6 * 36e5);
+  if (!deltas.length) return;
+  clearTimeout(resetTimer);
+  resetTimer = setTimeout(pollUsage, Math.min(...deltas) + 8e3);
 }
 function pidAlive(pid) {
   try {
@@ -4430,5 +4438,8 @@ if (process.argv.includes("--selftest")) {
     if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
     if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");
     if (kinds.length && [...views.values()].some((v) => kinds.includes(v.kind))) renderAll(kinds);
+    const expired = [state.usage?.fiveHour, state.usage?.weekly].some((b) => b?.resetsAt && Date.now() - new Date(b.resetsAt).getTime() > 5e3);
+    if (expired && !state.usageErr && Date.now() - lastUsageAttempt > 3e4) pollUsage();
   }, 600);
+  setInterval(() => renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate"]), 3e4);
 }

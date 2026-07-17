@@ -252,11 +252,24 @@ async function pollUsage() {
       state.pctHistory = state.pctHistory.filter((h) => state.usageAt - h.t < 3.6e6);
     }
     try { fs.writeFileSync(CACHE_FILE, JSON.stringify({ usage: state.usage, at: state.usageAt })); } catch {}
+    scheduleResetPoll();
   } catch (e) {
     state.usageErr = String(e.message ?? e);
     log("usage poll failed:", state.usageErr);
   }
   renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate"]);
+}
+
+// Poll right after a limit window resets so gauges don't sit on stale 100%
+let resetTimer = null;
+function scheduleResetPoll() {
+  const deltas = [state.usage?.fiveHour?.resetsAt, state.usage?.weekly?.resetsAt]
+    .filter(Boolean)
+    .map((iso) => new Date(iso).getTime() - Date.now())
+    .filter((d) => d > 0 && d < 6 * 3.6e6);
+  if (!deltas.length) return;
+  clearTimeout(resetTimer);
+  resetTimer = setTimeout(pollUsage, Math.min(...deltas) + 8000);
 }
 
 // ---------- data: running sessions ----------
@@ -710,5 +723,11 @@ if (process.argv.includes("--selftest")) {
     if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
     if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");
     if (kinds.length && [...views.values()].some((v) => kinds.includes(v.kind))) renderAll(kinds);
+    // Safety net: a reset time has passed but we still show pre-reset data (missed timer / resume from sleep)
+    const expired = [state.usage?.fiveHour, state.usage?.weekly]
+      .some((b) => b?.resetsAt && Date.now() - new Date(b.resetsAt).getTime() > 5000);
+    if (expired && !state.usageErr && Date.now() - lastUsageAttempt > 30_000) pollUsage();
   }, 600);
+  // Keep countdowns ("1h 5m left") fresh between polls
+  setInterval(() => renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate"]), 30_000);
 }
