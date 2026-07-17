@@ -2,7 +2,9 @@
 
 Live Claude usage gauges, running Claude Code sessions, and quick-launch keys for the Elgato Stream Deck (Windows).
 
-The usage gauges show the **same session/weekly percentages Claude Desktop and Claude Code's `/usage` display** — pulled with your local Claude sign-in, refreshed every 60 seconds. No extra login, nothing leaves your machine.
+The usage gauges show the **same session/weekly percentages Claude Desktop and Claude Code's `/usage` display** — pulled with your local Claude sign-in, refreshed every couple of minutes. No extra login, nothing leaves your machine.
+
+![Claude Deck — live usage, sessions, and launchers on a Stream Deck XL](docs/shot1.png)
 
 ## Keys
 
@@ -25,6 +27,10 @@ The usage gauges show the **same session/weekly percentages Claude Desktop and C
 
 Bar colors: green < 60%, amber 60–85%, red ≥ 85%. At 90%+ the gauge pulses red.
 The sessions key shows an animated dot cycle while any session is actively working.
+
+| Limits at a glance | Agents at a glance |
+|---|---|
+| ![Session gauge pulsing red at 94%, burn rate, weekly gauge](docs/shot2.png) | ![Session count with activity dots, focus key, today's stats](docs/shot3.png) |
 
 ## Requirements
 
