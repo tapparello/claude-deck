@@ -96,9 +96,14 @@ function linesKey(title, rows, accent = C.accent) {
     ${rowSvg}`);
 }
 
-function bigCountKey(title, count, sub, subColor) {
+function bigCountKey(title, count, sub, subColor, animPhase = null) {
+  // animPhase non-null → cycling activity dots top-right (frame-pushed animation)
+  const dots = animPhase == null ? "" : [0, 1, 2]
+    .map((i) => `<circle cx="${104 + i * 12}" cy="21" r="${i === animPhase ? 4.5 : 3}" fill="${i === animPhase ? C.ok : C.track}"/>`)
+    .join("");
   return svgWrap(`
     <text x="14" y="27" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(title)}</text>
+    ${dots}
     <text x="72" y="96" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="64" font-weight="700" fill="${count > 0 ? C.text : C.dim}">${count}</text>
     <text x="72" y="128" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="17" fill="${subColor ?? C.dim}">${esc(sub ?? "")}</text>`);
 }
@@ -292,6 +297,7 @@ function argOf(name) {
 const views = new Map(); // context -> { kind }
 const cycle = new Map(); // context -> { idx, timer }
 let ws = null;
+let animPhase = 0;
 
 function send(obj) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
@@ -333,7 +339,7 @@ function render(context, kind) {
         ]));
       }
       const busy = state.sessions.filter((s) => s.status && s.status !== "idle").length;
-      return setImage(context, bigCountKey("CLAUDE CODE", n, busy > 0 ? `${busy} working` : n > 0 ? "all idle" : "none running", busy > 0 ? C.ok : C.dim));
+      return setImage(context, bigCountKey("CLAUDE CODE", n, busy > 0 ? `${busy} working` : n > 0 ? "all idle" : "none running", busy > 0 ? C.ok : C.dim, busy > 0 ? animPhase : null));
     }
     case "today": {
       const t = state.today;
@@ -467,4 +473,11 @@ if (process.argv.includes("--selftest")) {
   (function usageLoop() { setTimeout(async () => { await pollUsage(); usageLoop(); }, usageDelay); })();
   setInterval(pollSessions, 5_000);
   setInterval(pollToday, 300_000);
+  // Activity animation: advance the dot cycle while any session is busy
+  setInterval(() => {
+    if (!state.sessions.some((s) => s.status && s.status !== "idle")) return;
+    if (![...views.values()].some((v) => v.kind === "sessions")) return;
+    animPhase = (animPhase + 1) % 3;
+    renderAll(["sessions"]);
+  }, 600);
 }
