@@ -4032,6 +4032,8 @@ async function pollToday() {
         let fMsgs = 0, fTokens = 0;
         try {
           const text = await fsp.readFile(fp, "utf8");
+          const reqTok = /* @__PURE__ */ new Map();
+          const seenMsg = /* @__PURE__ */ new Set();
           for (const line of text.split("\n")) {
             if (!line) continue;
             let j;
@@ -4041,10 +4043,19 @@ async function pollToday() {
               continue;
             }
             if (!j.timestamp || localDay(j.timestamp) !== day) continue;
-            if (j.type === "user" || j.type === "assistant") fMsgs++;
+            const mid = j.message?.id ?? j.requestId;
+            if (j.type === "user") fMsgs++;
+            else if (j.type === "assistant" && (!mid || !seenMsg.has(mid))) {
+              if (mid) seenMsg.add(mid);
+              fMsgs++;
+            }
             const u = j.message?.usage;
-            if (u) fTokens += (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+            if (!u) continue;
+            const tok = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+            if (mid) reqTok.set(mid, Math.max(reqTok.get(mid) ?? 0, tok));
+            else fTokens += tok;
           }
+          for (const tok of reqTok.values()) fTokens += tok;
         } catch {
           continue;
         }
@@ -4084,7 +4095,7 @@ async function pollBurn() {
         }
         if (st.mtimeMs < scanCutoff) continue;
         let rec = hourTracker.get(fp);
-        if (!rec || st.size < rec.offset) rec = { offset: 0, rest: "", events: [] };
+        if (!rec || st.size < rec.offset || !rec.seen) rec = { offset: 0, rest: "", events: [], seen: /* @__PURE__ */ new Map() };
         if (st.size > rec.offset) {
           const fh = await fsp.open(fp, "r");
           try {
@@ -4105,13 +4116,23 @@ async function pollBurn() {
               const u = j.message?.usage;
               if (!u || !j.timestamp) continue;
               const tok = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-              if (tok) rec.events.push({ t: new Date(j.timestamp).getTime(), tok });
+              if (!tok) continue;
+              const mid = j.message?.id ?? j.requestId;
+              const ev = mid && rec.seen.get(mid);
+              if (ev) {
+                ev.tok = Math.max(ev.tok, tok);
+                continue;
+              }
+              const e = { t: new Date(j.timestamp).getTime(), tok };
+              if (mid) rec.seen.set(mid, e);
+              rec.events.push(e);
             }
           } finally {
             await fh.close();
           }
         }
         rec.events = rec.events.filter((e) => now - e.t < 65 * 6e4);
+        for (const [mid, ev] of rec.seen) if (now - ev.t >= 65 * 6e4) rec.seen.delete(mid);
         hourTracker.set(fp, rec);
       }
     }

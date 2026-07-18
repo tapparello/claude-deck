@@ -1,7 +1,7 @@
 {
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
   "Name": "Claude Deck",
-  "Version": "1.0.0.0",
+  "Version": "1.0.1.0",
   "Author": "Brantley",
   "Description": "Live Claude usage limits, running Claude Code sessions, and quick-launch keys for Claude Desktop.",
   "UUID": "com.technicallybrantley.claude-deck",
