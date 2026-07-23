@@ -731,87 +731,6 @@ function act(context, p) {
 }
 
 // ---------- key actions ----------
-function launchDesktop(context) {
-  const child = spawn("explorer.exe", [desktopAppId], { detached: true, stdio: "ignore" });
-  child.on("error", () => showAlert(context));
-  child.unref();
-  showOk(context);
-}
-
-function quickChat(context) {
-  // Global quick-chat hotkey Ctrl+Alt+Space via keybd_event (SendKeys can't do Space chords reliably)
-  const ps = `
-Add-Type -Namespace K -Name W -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e);';
-[K.W]::keybd_event(0x11,0,0,[UIntPtr]::Zero); [K.W]::keybd_event(0x12,0,0,[UIntPtr]::Zero); [K.W]::keybd_event(0x20,0,0,[UIntPtr]::Zero);
-Start-Sleep -Milliseconds 60;
-[K.W]::keybd_event(0x20,0,2,[UIntPtr]::Zero); [K.W]::keybd_event(0x12,0,2,[UIntPtr]::Zero); [K.W]::keybd_event(0x11,0,2,[UIntPtr]::Zero);`;
-  const child = spawn("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], { detached: true, stdio: "ignore" });
-  child.on("error", () => showAlert(context));
-  child.unref();
-  showOk(context);
-}
-
-function openWeb(context) {
-  const child = spawn("cmd.exe", ["/c", "start", "", "https://claude.ai/new"], { detached: true, stdio: "ignore" });
-  child.on("error", () => showAlert(context));
-  child.unref();
-  showOk(context);
-}
-
-function openTerminalAt(dir, context) {
-  const psFallback = () => {
-    const fb = spawn("cmd.exe", ["/c", "start", "", "powershell", "-NoExit", "-Command", `cd '${dir}'; claude`], { detached: true, stdio: "ignore" });
-    fb.on("error", () => showAlert(context));
-    fb.unref();
-  };
-  // Windows Terminal is single-instance: without `-w new` it opens a hidden tab
-  // in whatever window already exists, so force a fresh foreground window.
-  const wt = spawn("cmd.exe", ["/c", "start", "", "wt", "-w", "new", "-d", dir, "powershell", "-NoExit", "-Command", "claude"], { detached: true, stdio: "ignore" });
-  wt.on("error", psFallback);
-  wt.on("exit", (code) => { if (code !== 0) psFallback(); });
-  wt.unref();
-  showOk(context);
-}
-
-// Bring the terminal window hosting a session to the foreground (matched by title substring)
-function focusWindow(s, context) {
-  const target = (String(s.name ?? "").replace(/["'‘’“”]/g, "").slice(0, 40) || path.basename(s.cwd ?? "")).toLowerCase();
-  if (!target) return showAlert(context);
-  const ps = `
-$target = '${target.replace(/'/g, "''")}';
-Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; using System.Text; public class W { public delegate bool EP(IntPtr h, IntPtr l); [DllImport("user32.dll")] public static extern bool EnumWindows(EP cb, IntPtr l); [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n); [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h); [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c); }';
-$found = [IntPtr]::Zero;
-[void][W]::EnumWindows({ param($h, $l) $sb = New-Object System.Text.StringBuilder 512; [void][W]::GetWindowText($h, $sb, 512); if ([W]::IsWindowVisible($h) -and $sb.ToString().ToLower().Contains($target)) { $script:found = $h; return $false }; return $true }, [IntPtr]::Zero);
-if ($found -eq [IntPtr]::Zero) { exit 1 };
-[void][W]::ShowWindow($found, 9); [void][W]::SetForegroundWindow($found); exit 0`;
-  execFile("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], (err) => {
-    if (err) showAlert(context); else showOk(context);
-  });
-}
-
-// Quick chat + paste a canned prompt (clipboard is overwritten)
-function sendPrompt(text, enter, context) {
-  const ps = `
-Set-Clipboard -Value '${String(text).replace(/'/g, "''")}';
-Add-Type -Namespace K -Name W -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e);';
-function P([byte]$k){[K.W]::keybd_event($k,0,0,[UIntPtr]::Zero)}; function R([byte]$k){[K.W]::keybd_event($k,0,2,[UIntPtr]::Zero)};
-P 0x11; P 0x12; P 0x20; Start-Sleep -Milliseconds 60; R 0x20; R 0x12; R 0x11;
-Start-Sleep -Milliseconds 800;
-P 0x11; P 0x56; Start-Sleep -Milliseconds 60; R 0x56; R 0x11;
-${enter ? "Start-Sleep -Milliseconds 200; P 0x0D; R 0x0D;" : ""}`;
-  const child = spawn("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], { detached: true, stdio: "ignore" });
-  child.on("error", () => showAlert(context));
-  child.unref();
-  showOk(context);
-}
-
-function runCustom(command, context) {
-  const child = spawn("cmd.exe", ["/c", "start", "", command], { detached: true, stdio: "ignore" });
-  child.on("error", () => showAlert(context));
-  child.unref();
-  showOk(context);
-}
-
 function onKeyDown(context, kind) {
   switch (kind) {
     case "usage-session":
@@ -840,30 +759,33 @@ function onKeyDown(context, kind) {
     case "project": {
       const s = views.get(context)?.settings ?? {};
       if (!s.path) return showAlert(context);
-      return openTerminalAt(s.path, context);
+      return act(context, platform.openTerminal(s.path));
     }
     case "focus-session": {
       const n = state.sessions.length;
       if (!n) return showAlert(context);
       const i = ((focusIdx.get(context) ?? -1) + 1) % n;
       focusIdx.set(context, i);
-      focusWindow(state.sessions[i], context);
+      act(context, platform.focusWindow(state.sessions[i]));
       return render(context, "focus-session");
     }
     case "quick-prompt": {
       const s = views.get(context)?.settings ?? {};
       if (!s.prompt) return showAlert(context);
-      return sendPrompt(s.prompt, !!s.enter, context);
+      return act(context, platform.pasteInto(s.hotkey, s.prompt, !!s.enter));
     }
     case "custom": {
       const s = views.get(context)?.settings ?? {};
       if (!s.command) return showAlert(context);
-      return runCustom(s.command, context);
+      return act(context, platform.runCustom(s.command));
     }
-    case "launch": return launchDesktop(context);
-    case "quick-chat": return quickChat(context);
-    case "open-web": return openWeb(context);
-    case "claude-code": return openTerminalAt(DEFAULT_CODE_DIR, context);
+    case "launch": return act(context, platform.launchDesktop());
+    case "quick-chat": {
+      const s = views.get(context)?.settings ?? {};
+      return act(context, platform.fireHotkey(s.hotkey));
+    }
+    case "open-web": return act(context, platform.openUrl("https://claude.ai/new"));
+    case "claude-code": return act(context, platform.openTerminal(DEFAULT_CODE_DIR));
   }
 }
 
