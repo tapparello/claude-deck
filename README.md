@@ -38,7 +38,7 @@ The sessions key shows an animated dot cycle while any session is actively worki
 - [Claude Code](https://claude.com/claude-code) signed in — provides session and activity data, and the OAuth token used for the usage gauges (Windows: `~/.claude/.credentials.json`; macOS: the login Keychain, service `Claude Code-credentials`)
 - Claude Desktop (optional, for the launcher / quick-chat keys)
 - **macOS only:** the usage gauges show a live percentage only for a consumer Pro/Max subscription. On an enterprise/Foundry setup (no subscription limits) they read **n/a** — Sessions / Today / Burn Rate still work.
-- **macOS only:** the Quick Chat, Quick Prompt, and Focus Session keys need Accessibility + Automation permission (see **macOS permissions** below).
+- **macOS only:** the Quick Chat and Quick Prompt keys need Accessibility + Automation permission (see **macOS permissions** below).
 
 ## Install
 
@@ -90,7 +90,7 @@ folder name, which may not always be present in the window title.
 
 ## How usage data works
 
-- **Limits**: `GET https://api.anthropic.com/api/oauth/usage` authorized with the OAuth token Claude Code keeps in `~/.claude/.credentials.json`. This is the same source the `/usage` command uses. It is not a publicly documented API, so it may change; the plugin logs the raw response shape to make fixes easy.
+- **Limits**: `GET https://api.anthropic.com/api/oauth/usage` authorized with the OAuth token Claude Code keeps in `~/.claude/.credentials.json` (Windows/Linux); on macOS the token is read from the login Keychain (service `Claude Code-credentials`), falling back to the credentials file. This is the same source the `/usage` command uses. It is not a publicly documented API, so it may change; the plugin logs the raw response shape to make fixes easy.
 - **Sessions**: `~/.claude/sessions/*.json`, filtered to live processes.
 - **Today**: parsed from `~/.claude/projects/**/*.jsonl` transcripts (Claude Code activity only — desktop chats don't write local logs, though they do count toward the limit gauges).
 
