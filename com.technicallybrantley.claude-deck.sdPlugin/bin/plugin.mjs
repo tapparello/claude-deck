@@ -3802,6 +3802,31 @@ function parseKeychainToken(raw) {
     return null;
   }
 }
+function outermostAppBundle(execPath) {
+  const m = /^(.*?\.app)\//.exec(String(execPath ?? ""));
+  return m ? m[1] : null;
+}
+function parsePsTree(out) {
+  const tree = /* @__PURE__ */ new Map();
+  for (const line of String(out ?? "").split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*\S)\s*$/.exec(line);
+    if (m) tree.set(m[1], { ppid: m[2], comm: m[3] });
+  }
+  return tree;
+}
+function hostAppForPid(tree, pid, maxDepth = 16) {
+  let cur = String(pid);
+  const seen = /* @__PURE__ */ new Set();
+  for (let i = 0; i < maxDepth && cur && !seen.has(cur); i++) {
+    seen.add(cur);
+    const node = tree.get(cur);
+    if (!node) break;
+    const bundle = outermostAppBundle(node.comm);
+    if (bundle) return bundle;
+    cur = node.ppid;
+  }
+  return null;
+}
 
 // src/plugin.js
 var IS_MAC = process.platform === "darwin";
@@ -4495,24 +4520,21 @@ var macPlatform = {
     lines.push("end tell", "end timeout");
     return pbcopy(text).then(() => runOsa(lines));
   },
+  // Bring the GUI app hosting this session's process to the front (VS Code,
+  // Terminal, iTerm, …): resolve the app bundle from the PID's ancestry and
+  // `open` it. Permission-free (no osascript). A session with no .app ancestor
+  // (e.g. under screen/tmux, reparented to launchd) can't be resolved.
   focusWindow(s) {
-    const target = escapeAppleScript(focusTarget(s));
-    if (!target) return Promise.reject(new Error("no focus target"));
-    return runOsa([
-      "with timeout of 7 seconds",
-      'tell application "Terminal"',
-      `  set t to "${target}"`,
-      "  repeat with w in windows",
-      "    if (name of w as string) contains t then",
-      "      set index of w to 1",
-      "      activate",
-      "      return",
-      "    end if",
-      "  end repeat",
-      "end tell",
-      'error "not found"',
-      "end timeout"
-    ]);
+    const pid = s?.pid;
+    if (!pid) return Promise.reject(new Error("no pid for session"));
+    return new Promise((resolve, reject) => {
+      execFile("ps", ["-axo", "pid=,ppid=,comm="], { timeout: OSA_TIMEOUT_MS }, (err, out) => {
+        if (err) return reject(err);
+        const bundle = hostAppForPid(parsePsTree(out), pid);
+        if (!bundle) return reject(new Error("no host app for pid " + pid));
+        execFile("open", [bundle], (e) => e ? reject(e) : resolve());
+      });
+    });
   },
   // OAuth token from the login Keychain (service "Claude Code-credentials"),
   // falling back to the credentials file if a user exported it.
