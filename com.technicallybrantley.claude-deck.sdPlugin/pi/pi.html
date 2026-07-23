@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <style>
-  body { background: #2d2d2d; color: #d8d8d8; font-family: "Segoe UI", sans-serif; font-size: 13px; margin: 0; padding: 10px; }
+  body { background: #2d2d2d; color: #d8d8d8; font-family: -apple-system, "Segoe UI", system-ui, sans-serif; font-size: 13px; margin: 0; padding: 10px; }
   .item { margin-bottom: 10px; }
   label { display: block; margin-bottom: 4px; color: #969696; }
   input[type=text], textarea, select { width: 100%; box-sizing: border-box; background: #3d3d3d; border: 1px solid #555; color: #eee; border-radius: 4px; padding: 6px; font-size: 13px; }
@@ -26,7 +26,11 @@ const FIELDS = {
   "com.technicallybrantley.claude-deck.quick-prompt": [
     { key: "label", type: "text", label: "Button label" },
     { key: "prompt", type: "textarea", label: "Prompt (pasted into quick chat — overwrites clipboard)" },
+    { key: "hotkey", type: "text", label: "Quick-chat hotkey (macOS only, e.g. option+space)" },
     { key: "enter", type: "checkbox", label: "Press Enter automatically" },
+  ],
+  "com.technicallybrantley.claude-deck.quick-chat": [
+    { key: "hotkey", type: "text", label: "Quick-chat hotkey (macOS only, e.g. option+space)" },
   ],
   "com.technicallybrantley.claude-deck.custom": [
     { key: "label", type: "text", label: "Button label" },
