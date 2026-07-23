@@ -3827,6 +3827,13 @@ function hostAppForPid(tree, pid, maxDepth = 16) {
   }
   return null;
 }
+function focusStrategyForBundle(bundle) {
+  if (!bundle) return null;
+  const base = String(bundle).replace(/\/+$/, "").split("/").pop();
+  if (base === "Terminal.app") return "terminal";
+  if (base === "Visual Studio Code.app") return "vscode";
+  return "app";
+}
 
 // src/plugin.js
 var IS_MAC = process.platform === "darwin";
@@ -4520,20 +4527,71 @@ var macPlatform = {
     lines.push("end tell", "end timeout");
     return pbcopy(text).then(() => runOsa(lines));
   },
-  // Bring the GUI app hosting this session's process to the front (VS Code,
-  // Terminal, iTerm, …): resolve the app bundle from the PID's ancestry and
-  // `open` it. Permission-free (no osascript). A session with no .app ancestor
-  // (e.g. under screen/tmux, reparented to launchd) can't be resolved.
+  // Bring the exact window hosting this session to the front. The GUI app is
+  // resolved from the session PID's ancestry; then, best-effort per app:
+  //   Terminal -> raise the window whose tab tty matches the session tty
+  //   VS Code  -> raise the window whose title contains the session's folder
+  //   otherwise -> just activate the app.
+  // Falls back to activating the app if the window match/permission fails, so
+  // it degrades to "app to front" rather than nothing. Terminal needs
+  // Automation->Terminal; VS Code needs Accessibility.
   focusWindow(s) {
     const pid = s?.pid;
     if (!pid) return Promise.reject(new Error("no pid for session"));
-    return new Promise((resolve, reject) => {
-      execFile("ps", ["-axo", "pid=,ppid=,comm="], { timeout: OSA_TIMEOUT_MS }, (err, out) => {
-        if (err) return reject(err);
-        const bundle = hostAppForPid(parsePsTree(out), pid);
-        if (!bundle) return reject(new Error("no host app for pid " + pid));
-        execFile("open", [bundle], (e) => e ? reject(e) : resolve());
-      });
+    const ps = (args) => new Promise((resolve, reject) => execFile("ps", args, { timeout: OSA_TIMEOUT_MS }, (e, out) => e ? reject(e) : resolve(String(out))));
+    return ps(["-axo", "pid=,ppid=,comm="]).then((out) => {
+      const bundle = hostAppForPid(parsePsTree(out), pid);
+      if (!bundle) throw new Error("no host app for pid " + pid);
+      const activateApp = () => openMac([bundle]);
+      const strat = focusStrategyForBundle(bundle);
+      if (strat === "terminal") {
+        return ps(["-o", "tty=", "-p", String(pid)]).then((t) => {
+          const tty = t.trim();
+          if (!tty || tty === "??") return activateApp();
+          const esc2 = escapeAppleScript(tty);
+          return runOsa([
+            "with timeout of 7 seconds",
+            'tell application "Terminal"',
+            "  repeat with w in windows",
+            "    repeat with t in tabs of w",
+            `      if (tty of t) ends with "${esc2}" then`,
+            "        set selected of t to true",
+            "        set index of w to 1",
+            "        activate",
+            "        return",
+            "      end if",
+            "    end repeat",
+            "  end repeat",
+            "end tell",
+            'error "not found"',
+            "end timeout"
+          ]).catch(activateApp);
+        });
+      }
+      if (strat === "vscode") {
+        const base = path.basename(s.cwd ?? "");
+        if (!base) return activateApp();
+        const esc2 = escapeAppleScript(base);
+        return runOsa([
+          "with timeout of 7 seconds",
+          'tell application "System Events"',
+          '  tell process "Code"',
+          "    set matched to false",
+          "    repeat with w in windows",
+          `      if (name of w) contains "${esc2}" then`,
+          '        perform action "AXRaise" of w',
+          "        set frontmost to true",
+          "        set matched to true",
+          "        exit repeat",
+          "      end if",
+          "    end repeat",
+          '    if not matched then error "not found"',
+          "  end tell",
+          "end tell",
+          "end timeout"
+        ]).catch(activateApp);
+      }
+      return activateApp();
     });
   },
   // OAuth token from the login Keychain (service "Claude Code-credentials"),
