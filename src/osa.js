@@ -48,3 +48,17 @@ export function hotkeyClause(parsed) {
   if (parsed.key.kind === "code") return `key code ${parsed.key.code}${using}`;
   return `keystroke "${escapeAppleScript(parsed.key.char)}"${using}`;
 }
+
+// Classify a "Claude Custom" target for macOS `open`.
+// URL or existing filesystem path -> {mode:"open"}; otherwise -> {mode:"app"}
+// (opened with `open -a`). A leading ~ is expanded before the existence check.
+export function classifyCustomCommand(cmd, { home = "", exists = () => false } = {}) {
+  const raw = String(cmd ?? "").trim();
+  if (!raw) return null;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return { mode: "open", arg: raw };
+  let path = raw;
+  if (raw === "~") path = home;
+  else if (raw.startsWith("~/")) path = home + raw.slice(1);
+  if (exists(path)) return { mode: "open", arg: path };
+  return { mode: "app", arg: raw };
+}

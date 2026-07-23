@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { escapeAppleScript, parseHotkey, hotkeyClause } from "../src/osa.js";
+import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand } from "../src/osa.js";
 
 test("escapeAppleScript leaves plain text alone", () => {
   assert.equal(escapeAppleScript("hello world"), "hello world");
@@ -66,4 +66,40 @@ test("hotkeyClause: bare key, no using clause", () => {
 
 test("hotkeyClause(null) is null", () => {
   assert.equal(hotkeyClause(null), null);
+});
+
+test("classifyCustomCommand: URL -> open as-is", () => {
+  assert.deepEqual(classifyCustomCommand("https://claude.ai/new", {}), {
+    mode: "open",
+    arg: "https://claude.ai/new",
+  });
+});
+
+test("classifyCustomCommand: existing path -> open", () => {
+  const exists = (p) => p === "/Applications/Claude.app";
+  assert.deepEqual(classifyCustomCommand("/Applications/Claude.app", { exists }), {
+    mode: "open",
+    arg: "/Applications/Claude.app",
+  });
+});
+
+test("classifyCustomCommand: expands leading ~ before existence check", () => {
+  const exists = (p) => p === "/Users/me/Notes";
+  assert.deepEqual(classifyCustomCommand("~/Notes", { home: "/Users/me", exists }), {
+    mode: "open",
+    arg: "/Users/me/Notes",
+  });
+});
+
+test("classifyCustomCommand: unknown -> treat as app name", () => {
+  assert.deepEqual(classifyCustomCommand("Safari", { exists: () => false }), {
+    mode: "app",
+    arg: "Safari",
+  });
+});
+
+test("classifyCustomCommand: empty/null -> null", () => {
+  assert.equal(classifyCustomCommand("", {}), null);
+  assert.equal(classifyCustomCommand(null, {}), null);
+  assert.equal(classifyCustomCommand("   ", {}), null);
 });
