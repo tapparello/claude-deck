@@ -8,6 +8,9 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken } from "./osa.js";
+
+const IS_MAC = process.platform === "darwin";
 
 const PLUGIN_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -22,9 +25,11 @@ const DEFAULT_CODE_DIR = fs.existsSync(githubDir) ? githubDir : os.homedir();
 
 // Claude Desktop (Microsoft Store) — resolved from the Start menu at startup so any install works
 let desktopAppId = "shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude";
-execFile("powershell.exe", ["-NoProfile", "-Command",
-  "Get-StartApps | Where-Object {$_.Name -eq 'Claude'} | Select-Object -First 1 -ExpandProperty AppID"],
-  (err, out) => { const id = out?.trim(); if (!err && id) desktopAppId = "shell:AppsFolder\\" + id; });
+if (!IS_MAC) {
+  execFile("powershell.exe", ["-NoProfile", "-Command",
+    "Get-StartApps | Where-Object {$_.Name -eq 'Claude'} | Select-Object -First 1 -ExpandProperty AppID"],
+    (err, out) => { const id = out?.trim(); if (!err && id) desktopAppId = "shell:AppsFolder\\" + id; });
+}
 
 // ---------- logging ----------
 const LOG_FILE = path.join(process.cwd(), "claude-deck.log");
@@ -539,6 +544,190 @@ function render(context, kind) {
 
 function renderAll(kinds) {
   for (const [context, v] of views) if (kinds.includes(v.kind)) render(context, v.kind);
+}
+
+// ---------- platform adapter ----------
+const OSA_TIMEOUT_MS = 8000;
+
+// Resolve on successful spawn, reject if the process can't be launched.
+// Matches the old optimistic "showOk right after spawn" behavior, but now
+// surfaces spawn failures as a single showAlert (see spec §5.8).
+function spawnDetached(cmd, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
+    child.once("error", reject);
+    child.once("spawn", () => { child.unref(); resolve(); });
+  });
+}
+
+// macOS: `open`; resolves on exit 0, rejects otherwise.
+function openMac(args) {
+  return new Promise((resolve, reject) => {
+    execFile("open", args, (err) => (err ? reject(err) : resolve()));
+  });
+}
+
+// macOS: run AppleScript, time-bounded twice — `with timeout` in-script plus
+// execFile's own timeout (kills the child, calls back with an error).
+function runOsa(lines) {
+  return new Promise((resolve, reject) => {
+    const args = [];
+    for (const l of lines) { args.push("-e", l); }
+    execFile("osascript", args, { timeout: OSA_TIMEOUT_MS }, (err) => (err ? reject(err) : resolve()));
+  });
+}
+
+// macOS: write text to the clipboard via pbcopy stdin.
+function pbcopy(text) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("pbcopy");
+    child.once("error", reject);
+    child.stdin.once("error", reject);
+    child.once("close", (code) => (code === 0 ? resolve() : reject(new Error("pbcopy exit " + code))));
+    child.stdin.end(String(text ?? ""));
+  });
+}
+
+// Lowercased match target for Focus Session (session name, else cwd basename).
+function focusTarget(s) {
+  const name = String(s.name ?? "").replace(/["'‘’“”]/g, "").slice(0, 40);
+  return (name || path.basename(s.cwd ?? "")).toLowerCase();
+}
+
+const winPlatform = {
+  launchDesktop() { return spawnDetached("explorer.exe", [desktopAppId]); },
+  openUrl(url) { return spawnDetached("cmd.exe", ["/c", "start", "", url]); },
+  runCustom(command) { return spawnDetached("cmd.exe", ["/c", "start", "", command]); },
+
+  // Global quick-chat hotkey Ctrl+Alt+Space via keybd_event (verbatim from the
+  // original quickChat). The `hotkey` arg is ignored on Windows.
+  fireHotkey(_hotkey) {
+    const ps = `
+Add-Type -Namespace K -Name W -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e);';
+[K.W]::keybd_event(0x11,0,0,[UIntPtr]::Zero); [K.W]::keybd_event(0x12,0,0,[UIntPtr]::Zero); [K.W]::keybd_event(0x20,0,0,[UIntPtr]::Zero);
+Start-Sleep -Milliseconds 60;
+[K.W]::keybd_event(0x20,0,2,[UIntPtr]::Zero); [K.W]::keybd_event(0x12,0,2,[UIntPtr]::Zero); [K.W]::keybd_event(0x11,0,2,[UIntPtr]::Zero);`;
+    return spawnDetached("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps]);
+  },
+
+  // Set-Clipboard + keybd_event chord + Ctrl+V + optional Enter (verbatim from
+  // the original sendPrompt). `hotkey` ignored on Windows.
+  pasteInto(_hotkey, text, enter) {
+    const ps = `
+Set-Clipboard -Value '${String(text).replace(/'/g, "''")}';
+Add-Type -Namespace K -Name W -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e);';
+function P([byte]$k){[K.W]::keybd_event($k,0,0,[UIntPtr]::Zero)}; function R([byte]$k){[K.W]::keybd_event($k,0,2,[UIntPtr]::Zero)};
+P 0x11; P 0x12; P 0x20; Start-Sleep -Milliseconds 60; R 0x20; R 0x12; R 0x11;
+Start-Sleep -Milliseconds 800;
+P 0x11; P 0x56; Start-Sleep -Milliseconds 60; R 0x56; R 0x11;
+${enter ? "Start-Sleep -Milliseconds 200; P 0x0D; R 0x0D;" : ""}`;
+    return spawnDetached("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps]);
+  },
+
+  // Bring the session's terminal window to front by title substring (verbatim
+  // EnumWindows/SetForegroundWindow). execFile gives a real exit code.
+  focusWindow(s) {
+    const target = focusTarget(s);
+    if (!target) return Promise.reject(new Error("no focus target"));
+    const ps = `
+$target = '${target.replace(/'/g, "''")}';
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; using System.Text; public class W { public delegate bool EP(IntPtr h, IntPtr l); [DllImport("user32.dll")] public static extern bool EnumWindows(EP cb, IntPtr l); [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n); [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h); [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c); }';
+$found = [IntPtr]::Zero;
+[void][W]::EnumWindows({ param($h, $l) $sb = New-Object System.Text.StringBuilder 512; [void][W]::GetWindowText($h, $sb, 512); if ([W]::IsWindowVisible($h) -and $sb.ToString().ToLower().Contains($target)) { $script:found = $h; return $false }; return $true }, [IntPtr]::Zero);
+if ($found -eq [IntPtr]::Zero) { exit 1 };
+[void][W]::ShowWindow($found, 9); [void][W]::SetForegroundWindow($found); exit 0`;
+    return new Promise((resolve, reject) => {
+      execFile("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], (err) => (err ? reject(err) : resolve()));
+    });
+  },
+
+  // Windows Terminal (new foreground window) with a PowerShell fallback. The
+  // whole fallback chain stays internal and settles the Promise once (spec §5.8).
+  openTerminal(dir) {
+    return new Promise((resolve, reject) => {
+      const psFallback = () => {
+        const fb = spawn("cmd.exe", ["/c", "start", "", "powershell", "-NoExit", "-Command", `cd '${dir}'; claude`], { detached: true, stdio: "ignore" });
+        fb.once("error", reject);
+        fb.once("spawn", () => { fb.unref(); resolve(); });
+      };
+      const wt = spawn("cmd.exe", ["/c", "start", "", "wt", "-w", "new", "-d", dir, "powershell", "-NoExit", "-Command", "claude"], { detached: true, stdio: "ignore" });
+      wt.once("error", psFallback);
+      wt.once("exit", (code) => { if (code === 0) resolve(); else psFallback(); });
+      wt.unref();
+    });
+  },
+};
+
+const macPlatform = {
+  launchDesktop() {
+    return openMac(["-b", "com.anthropic.claudefordesktop"]).catch(() => openMac(["-a", "Claude"]));
+  },
+  openUrl(url) { return openMac([url]); },
+  runCustom(command) {
+    const c = classifyCustomCommand(command, { home: os.homedir(), exists: fs.existsSync });
+    if (!c) return Promise.reject(new Error("empty command"));
+    return c.mode === "open" ? openMac([c.arg]) : openMac(["-a", c.arg]);
+  },
+  openTerminal(dir) {
+    const d = escapeAppleScript(dir);
+    return runOsa([
+      "with timeout of 7 seconds",
+      'tell application "Terminal"',
+      `do script "cd " & quoted form of "${d}" & " && claude"`,
+      "activate",
+      "end tell",
+      "end timeout",
+    ]);
+  },
+  fireHotkey(hotkey) {
+    const clause = hotkeyClause(parseHotkey(hotkey));
+    if (!clause) return Promise.reject(new Error("no hotkey configured"));
+    return runOsa([
+      "with timeout of 7 seconds",
+      `tell application "System Events" to ${clause}`,
+      "end timeout",
+    ]);
+  },
+  pasteInto(hotkey, text, enter) {
+    const clause = hotkeyClause(parseHotkey(hotkey));
+    if (!clause) return Promise.reject(new Error("no hotkey configured"));
+    const lines = [
+      "with timeout of 7 seconds",
+      'tell application "System Events"',
+      `  ${clause}`,
+      "  delay 0.8",
+      '  keystroke "v" using {command down}',
+    ];
+    if (enter) { lines.push("  delay 0.2", "  key code 36"); }
+    lines.push("end tell", "end timeout");
+    return pbcopy(text).then(() => runOsa(lines));
+  },
+  focusWindow(s) {
+    const target = escapeAppleScript(focusTarget(s));
+    if (!target) return Promise.reject(new Error("no focus target"));
+    return runOsa([
+      "with timeout of 7 seconds",
+      'tell application "Terminal"',
+      `  set t to "${target}"`,
+      "  repeat with w in windows",
+      "    if (name of w as string) contains t then",
+      "      set index of w to 1",
+      "      activate",
+      "      return",
+      "    end if",
+      "  end repeat",
+      "end tell",
+      'error "not found"',
+      "end timeout",
+    ]);
+  },
+};
+
+const platform = IS_MAC ? macPlatform : winPlatform;
+
+// Uniform Stream Deck feedback: OK on resolve, Alert on reject.
+function act(context, p) {
+  p.then(() => showOk(context)).catch(() => showAlert(context));
 }
 
 // ---------- key actions ----------
