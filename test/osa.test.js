@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand } from "../src/osa.js";
+import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken } from "../src/osa.js";
 
 test("escapeAppleScript leaves plain text alone", () => {
   assert.equal(escapeAppleScript("hello world"), "hello world");
@@ -102,4 +102,18 @@ test("classifyCustomCommand: empty/null -> null", () => {
   assert.equal(classifyCustomCommand("", {}), null);
   assert.equal(classifyCustomCommand(null, {}), null);
   assert.equal(classifyCustomCommand("   ", {}), null);
+});
+
+test("parseKeychainToken: extracts nested access token", () => {
+  const raw = JSON.stringify({ claudeAiOauth: { accessToken: "sk-abc123" } });
+  assert.equal(parseKeychainToken(raw), "sk-abc123");
+});
+
+test("parseKeychainToken: missing token -> null", () => {
+  assert.equal(parseKeychainToken(JSON.stringify({ other: true })), null);
+});
+
+test("parseKeychainToken: invalid JSON -> null", () => {
+  assert.equal(parseKeychainToken("not json at all"), null);
+  assert.equal(parseKeychainToken(""), null);
 });

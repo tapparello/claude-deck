@@ -62,3 +62,13 @@ export function classifyCustomCommand(cmd, { home = "", exists = () => false } =
   if (exists(path)) return { mode: "open", arg: path };
   return { mode: "app", arg: raw };
 }
+
+// Parse the JSON printed by `security find-generic-password ... -w`.
+export function parseKeychainToken(raw) {
+  try {
+    const j = JSON.parse(raw);
+    return j?.claudeAiOauth?.accessToken ?? null;
+  } catch {
+    return null;
+  }
+}
