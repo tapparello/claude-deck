@@ -747,7 +747,7 @@ const macPlatform = {
             'error "not found"',
             "end timeout",
           ]).catch(activateApp);
-        });
+        }).catch(activateApp);
       }
       if (strat === "vscode") {
         const base = path.basename(s.cwd ?? "");
