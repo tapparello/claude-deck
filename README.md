@@ -78,15 +78,16 @@ Settings → Privacy & Security**:
 | Key | Needs | Why |
 |---|---|---|
 | Quick Chat, Quick Prompt | **Accessibility** + **Automation → System Events** | send the global hotkey / paste keystrokes |
-| Focus Session, Claude Code Terminal, Project Terminal | **Automation → Terminal** | control Terminal.app |
+| Claude Code Terminal, Project Terminal | **Automation → Terminal** | control Terminal.app |
 
 Grant these to the **Elgato Stream Deck** app (macOS prompts on first use — approve
 whatever it names, which may include `node`/`osascript`). Until granted, those
 keys flash the Stream Deck "failed" icon rather than acting. The **Quick Chat**
 and **Quick Prompt** keys have a *hotkey* field in their settings — set it to
 your Claude Desktop quick-entry shortcut (e.g. `option+space`). **Focus Session**
-is best-effort on macOS: it matches a Terminal window by the session name or its
-folder name, which may not always be present in the window title.
+brings the app hosting a running session (VS Code, Terminal, iTerm, …) to the
+front — resolved from the session's process, no permission needed. A session
+running under `screen`/`tmux` (detached from its app) can't be resolved.
 
 ## How usage data works
 

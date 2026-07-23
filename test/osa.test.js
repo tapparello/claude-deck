@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken } from "../src/osa.js";
+import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, outermostAppBundle, parsePsTree, hostAppForPid } from "../src/osa.js";
 
 test("escapeAppleScript leaves plain text alone", () => {
   assert.equal(escapeAppleScript("hello world"), "hello world");
@@ -116,4 +116,53 @@ test("parseKeychainToken: missing token -> null", () => {
 test("parseKeychainToken: invalid JSON -> null", () => {
   assert.equal(parseKeychainToken("not json at all"), null);
   assert.equal(parseKeychainToken(""), null);
+});
+
+test("outermostAppBundle: outermost .app from a nested helper path", () => {
+  assert.equal(
+    outermostAppBundle("/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)"),
+    "/Applications/Visual Studio Code.app",
+  );
+});
+test("outermostAppBundle: main app binary path", () => {
+  assert.equal(outermostAppBundle("/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"), "/System/Applications/Utilities/Terminal.app");
+});
+test("outermostAppBundle: non-app paths and junk -> null", () => {
+  assert.equal(outermostAppBundle("/Users/me/.vscode/extensions/x/native-binary/claude"), null);
+  assert.equal(outermostAppBundle("/bin/zsh"), null);
+  assert.equal(outermostAppBundle("/Users/me/My.app.backup/foo"), null);
+  assert.equal(outermostAppBundle(""), null);
+  assert.equal(outermostAppBundle(null), null);
+});
+test("parsePsTree parses pid/ppid/comm (comm has spaces)", () => {
+  const out = [
+    "41178 36727 /Users/me/.vscode/extensions/x/native-binary/claude",
+    "36727 35464 /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)",
+    "35464     1 /Applications/Visual Studio Code.app/Contents/MacOS/Code",
+    "",
+  ].join("\n");
+  const tree = parsePsTree(out);
+  assert.equal(tree.get("41178").ppid, "36727");
+  assert.equal(tree.get("35464").comm, "/Applications/Visual Studio Code.app/Contents/MacOS/Code");
+  assert.equal(tree.size, 3);
+});
+test("hostAppForPid walks ancestry to the VS Code bundle", () => {
+  const tree = parsePsTree([
+    "41178 36727 /Users/me/.vscode/extensions/x/native-binary/claude",
+    "36727 35464 /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)",
+    "35464 1 /Applications/Visual Studio Code.app/Contents/MacOS/Code",
+  ].join("\n"));
+  assert.equal(hostAppForPid(tree, 41178), "/Applications/Visual Studio Code.app");
+});
+test("hostAppForPid returns null for a screen-detached session (no .app ancestor)", () => {
+  const tree = parsePsTree([
+    "68351 68000 /opt/homebrew/bin/screen",
+    "68000 1 /sbin/launchd",
+  ].join("\n"));
+  assert.equal(hostAppForPid(tree, 68351), null);
+});
+test("hostAppForPid guards cycles and unknown pids", () => {
+  const tree = parsePsTree("500 500 /bin/zsh");
+  assert.equal(hostAppForPid(tree, 500), null);
+  assert.equal(hostAppForPid(tree, 999), null);
 });

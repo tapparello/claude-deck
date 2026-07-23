@@ -99,9 +99,12 @@ today/burn, it's a property of the log format.
   on macOS, file as fallback. On a Foundry/enterprise Mac there is no consumer
   token, so the gauges read **n/a** by design — do not "fix" that.
 - **Permissions:** Quick Chat / Quick Prompt need Accessibility + Automation
-  (System Events); Focus Session and the Terminal keys need Automation
-  (Terminal). Every `osascript` call is time-bounded (`OSA_TIMEOUT_MS` +
-  AppleScript `with timeout`) so a pending TCC prompt can't hang a key.
+  (System Events); the Claude Code Terminal / Project Terminal keys need
+  Automation (Terminal). **Focus Session** is permission-free: it activates the
+  session's host app by PID (`ps -axo pid=,ppid=,comm=` walked to the outermost
+  `.app` bundle, then `open` that bundle) — no `osascript` involved. Every
+  `osascript` call is time-bounded (`OSA_TIMEOUT_MS` + AppleScript
+  `with timeout`) so a pending TCC prompt can't hang a key.
 - **Deferred:** a Foundry-friendly local token/cost usage key (from
   `~/.claude/usage-data/` or transcript aggregation) — its own plan.
 

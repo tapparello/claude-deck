@@ -72,3 +72,38 @@ export function parseKeychainToken(raw) {
     return null;
   }
 }
+
+// --- Focus Session (macOS): resolve the GUI app hosting a session's PID ---
+
+// The outermost .app bundle in an executable path, or null.
+export function outermostAppBundle(execPath) {
+  const m = /^(.*?\.app)\//.exec(String(execPath ?? ""));
+  return m ? m[1] : null;
+}
+
+// Parse `ps -axo pid=,ppid=,comm=` output into Map(pid -> {ppid, comm}).
+// comm is a full executable path that may contain spaces.
+export function parsePsTree(out) {
+  const tree = new Map();
+  for (const line of String(out ?? "").split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*\S)\s*$/.exec(line);
+    if (m) tree.set(m[1], { ppid: m[2], comm: m[3] });
+  }
+  return tree;
+}
+
+// Walk from pid toward the root; return the first ancestor (including pid)
+// whose executable lives inside a .app bundle, else null.
+export function hostAppForPid(tree, pid, maxDepth = 16) {
+  let cur = String(pid);
+  const seen = new Set();
+  for (let i = 0; i < maxDepth && cur && !seen.has(cur); i++) {
+    seen.add(cur);
+    const node = tree.get(cur);
+    if (!node) break;
+    const bundle = outermostAppBundle(node.comm);
+    if (bundle) return bundle;
+    cur = node.ppid;
+  }
+  return null;
+}

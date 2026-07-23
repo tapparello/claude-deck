@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken } from "./osa.js";
+import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid } from "./osa.js";
 
 const IS_MAC = process.platform === "darwin";
 
@@ -706,24 +706,21 @@ const macPlatform = {
     lines.push("end tell", "end timeout");
     return pbcopy(text).then(() => runOsa(lines));
   },
+  // Bring the GUI app hosting this session's process to the front (VS Code,
+  // Terminal, iTerm, …): resolve the app bundle from the PID's ancestry and
+  // `open` it. Permission-free (no osascript). A session with no .app ancestor
+  // (e.g. under screen/tmux, reparented to launchd) can't be resolved.
   focusWindow(s) {
-    const target = escapeAppleScript(focusTarget(s));
-    if (!target) return Promise.reject(new Error("no focus target"));
-    return runOsa([
-      "with timeout of 7 seconds",
-      'tell application "Terminal"',
-      `  set t to "${target}"`,
-      "  repeat with w in windows",
-      "    if (name of w as string) contains t then",
-      "      set index of w to 1",
-      "      activate",
-      "      return",
-      "    end if",
-      "  end repeat",
-      "end tell",
-      'error "not found"',
-      "end timeout",
-    ]);
+    const pid = s?.pid;
+    if (!pid) return Promise.reject(new Error("no pid for session"));
+    return new Promise((resolve, reject) => {
+      execFile("ps", ["-axo", "pid=,ppid=,comm="], { timeout: OSA_TIMEOUT_MS }, (err, out) => {
+        if (err) return reject(err);
+        const bundle = hostAppForPid(parsePsTree(out), pid);
+        if (!bundle) return reject(new Error("no host app for pid " + pid));
+        execFile("open", [bundle], (e) => (e ? reject(e) : resolve()));
+      });
+    });
   },
 
   // OAuth token from the login Keychain (service "Claude Code-credentials"),
