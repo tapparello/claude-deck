@@ -72,7 +72,7 @@ The plugin speaks the Stream Deck WebSocket protocol directly — the only runti
 
 ## macOS permissions
 
-Three keys drive other apps and need one-time permission grants in **System
+Some keys drive other apps and need one-time permission grants in **System
 Settings → Privacy & Security**:
 
 | Key | Needs | Why |
