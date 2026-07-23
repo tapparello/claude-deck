@@ -1,6 +1,6 @@
 # Claude Deck — Stream Deck plugin
 
-Live Claude usage gauges, running Claude Code sessions, and quick-launch keys for the Elgato Stream Deck (Windows).
+Live Claude usage gauges, running Claude Code sessions, and quick-launch keys for the Elgato Stream Deck (Windows and macOS).
 
 The usage gauges show the **same session/weekly percentages Claude Desktop and Claude Code's `/usage` display** — pulled with your local Claude sign-in, refreshed every couple of minutes. No extra login, nothing leaves your machine.
 
@@ -34,15 +34,19 @@ The sessions key shows an animated dot cycle while any session is actively worki
 
 ## Requirements
 
-- Windows, Stream Deck software 6.5+ (Node.js plugin runtime)
-- [Claude Code](https://claude.com/claude-code) signed in (provides `~/.claude/.credentials.json`, session and activity data)
-- Claude Desktop (optional, for the launcher/quick-chat keys)
+- Windows 10+ or macOS 11+, Stream Deck software 6.5+ (Node.js plugin runtime)
+- [Claude Code](https://claude.com/claude-code) signed in — provides session and activity data, and the OAuth token used for the usage gauges (Windows: `~/.claude/.credentials.json`; macOS: the login Keychain, service `Claude Code-credentials`)
+- Claude Desktop (optional, for the launcher / quick-chat keys)
+- **macOS only:** the usage gauges show a live percentage only for a consumer Pro/Max subscription. On an enterprise/Foundry setup (no subscription limits) they read **n/a** — Sessions / Today / Burn Rate still work.
+- **macOS only:** the Quick Chat, Quick Prompt, and Focus Session keys need Accessibility + Automation permission (see **macOS permissions** below).
 
 ## Install
 
 1. Download/clone this repo.
 2. Close the Stream Deck app.
-3. Copy `com.technicallybrantley.claude-deck.sdPlugin` into `%APPDATA%\Elgato\StreamDeck\Plugins\`.
+3. Copy `com.technicallybrantley.claude-deck.sdPlugin` into your plugins folder:
+   - **Windows:** `%APPDATA%\Elgato\StreamDeck\Plugins\`
+   - **macOS:** `~/Library/Application Support/com.elgato.StreamDeck/Plugins/` (or run `./deploy.sh`)
 4. Start the Stream Deck app — the actions appear under the **Claude Deck** category.
 5. Optional: double-click `Claude.streamDeckProfile` to import a ready-made Stream Deck XL profile.
 
@@ -54,7 +58,35 @@ npm run build      # bundles src/plugin.js -> com.technicallybrantley.claude-dec
 npm run selftest   # exercises the usage endpoint + local data without Stream Deck
 ```
 
+On macOS:
+
+```bash
+npm install
+npm run build      # bundles src/plugin.js -> com.technicallybrantley.claude-deck.sdPlugin/bin/plugin.mjs
+npm test           # runs the src/osa.js unit tests (node:test)
+npm run selftest   # exercises the usage/session/today/burn pollers without Stream Deck
+./deploy.sh        # installs to ~/Library/Application Support/com.elgato.StreamDeck/Plugins/, restarts Stream Deck
+```
+
 The plugin speaks the Stream Deck WebSocket protocol directly — the only runtime dependency is `ws`. Debug log: `claude-deck.log` inside the installed plugin folder.
+
+## macOS permissions
+
+Three keys drive other apps and need one-time permission grants in **System
+Settings → Privacy & Security**:
+
+| Key | Needs | Why |
+|---|---|---|
+| Quick Chat, Quick Prompt | **Accessibility** + **Automation → System Events** | send the global hotkey / paste keystrokes |
+| Focus Session, Claude Code Terminal, Project Terminal | **Automation → Terminal** | control Terminal.app |
+
+Grant these to the **Elgato Stream Deck** app (macOS prompts on first use — approve
+whatever it names, which may include `node`/`osascript`). Until granted, those
+keys flash the Stream Deck "failed" icon rather than acting. The **Quick Chat**
+and **Quick Prompt** keys have a *hotkey* field in their settings — set it to
+your Claude Desktop quick-entry shortcut (e.g. `option+space`). **Focus Session**
+is best-effort on macOS: it matches a Terminal window by the session name or its
+folder name, which may not always be present in the window title.
 
 ## How usage data works
 

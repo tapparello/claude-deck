@@ -82,6 +82,29 @@ today/burn, it's a property of the log format.
   expected and already noted in the README; don't "fix" Today to match the
   gauges by inflating it — the discrepancy is real and directional, not a bug.
 
+## macOS support (added 2026-07)
+
+- Cross-platform from one bundle. `src/plugin.js` selects a platform adapter at
+  load (`IS_MAC = process.platform === "darwin"`): `winPlatform` holds the
+  original PowerShell/`cmd`/`wt` commands verbatim; `macPlatform` uses
+  `open` / `osascript` / `pbcopy` / `security`. Change platform behavior in the
+  adapter, not in `onKeyDown`.
+- Pure, testable helpers live in `src/osa.js` (hotkey parsing, AppleScript
+  escaping, custom-command classification, Keychain-JSON parsing) with
+  `node:test` unit tests in `test/osa.test.js`. Run `npm test`.
+- Deploy on macOS with `./deploy.sh` (bash sibling of `deploy.ps1`); target is
+  `~/Library/Application Support/com.elgato.StreamDeck/Plugins/`.
+- **Credentials differ by OS:** `readToken()` reads `~/.claude/.credentials.json`
+  on Windows and the login **Keychain** (`security -s "Claude Code-credentials"`)
+  on macOS, file as fallback. On a Foundry/enterprise Mac there is no consumer
+  token, so the gauges read **n/a** by design — do not "fix" that.
+- **Permissions:** Quick Chat / Quick Prompt need Accessibility + Automation
+  (System Events); Focus Session and the Terminal keys need Automation
+  (Terminal). Every `osascript` call is time-bounded (`OSA_TIMEOUT_MS` +
+  AppleScript `with timeout`) so a pending TCC prompt can't hang a key.
+- **Deferred:** a Foundry-friendly local token/cost usage key (from
+  `~/.claude/usage-data/` or transcript aggregation) — its own plan.
+
 ## Git push quirk observed on this box
 
 `git push` from an agent's non-interactive shell has hung here before,
