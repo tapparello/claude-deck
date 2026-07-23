@@ -100,11 +100,19 @@ today/burn, it's a property of the log format.
   token, so the gauges read **n/a** by design — do not "fix" that.
 - **Permissions:** Quick Chat / Quick Prompt need Accessibility + Automation
   (System Events); the Claude Code Terminal / Project Terminal keys need
-  Automation (Terminal). **Focus Session** is permission-free: it activates the
-  session's host app by PID (`ps -axo pid=,ppid=,comm=` walked to the outermost
-  `.app` bundle, then `open` that bundle) — no `osascript` involved. Every
-  `osascript` call is time-bounded (`OSA_TIMEOUT_MS` + AppleScript
-  `with timeout`) so a pending TCC prompt can't hang a key.
+  Automation (Terminal). **Focus Session** resolves the session's host app by
+  PID (`ps -axo pid=,ppid=,comm=` walked to the outermost `.app` bundle via
+  `hostAppForPid`/`parsePsTree`), then tries to raise the *exact window*
+  per-app (`focusStrategyForBundle` in `src/osa.js` picks the strategy):
+  Terminal.app matches the session's controlling tty (`ps -o tty=`) against
+  each window's tabs (needs Automation → Terminal); VS Code matches the
+  session's cwd folder name against each window's title via System Events
+  (needs Accessibility) — fragile by nature. Any other app just gets
+  activated. On no match / missing permission / timeout / no tty, it falls
+  back to `open`ing the host bundle (plain app-activation), so the key
+  degrades gracefully instead of doing nothing. Every `osascript` call is
+  time-bounded (`OSA_TIMEOUT_MS` + AppleScript `with timeout`) so a pending
+  TCC prompt can't hang a key.
 - **Deferred:** a Foundry-friendly local token/cost usage key (from
   `~/.claude/usage-data/` or transcript aggregation) — its own plan.
 

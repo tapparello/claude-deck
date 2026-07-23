@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, outermostAppBundle, parsePsTree, hostAppForPid } from "../src/osa.js";
+import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, outermostAppBundle, parsePsTree, hostAppForPid, focusStrategyForBundle } from "../src/osa.js";
 
 test("escapeAppleScript leaves plain text alone", () => {
   assert.equal(escapeAppleScript("hello world"), "hello world");
@@ -165,4 +165,12 @@ test("hostAppForPid guards cycles and unknown pids", () => {
   const tree = parsePsTree("500 500 /bin/zsh");
   assert.equal(hostAppForPid(tree, 500), null);
   assert.equal(hostAppForPid(tree, 999), null);
+});
+
+test("focusStrategyForBundle maps known apps", () => {
+  assert.equal(focusStrategyForBundle("/System/Applications/Utilities/Terminal.app"), "terminal");
+  assert.equal(focusStrategyForBundle("/Applications/Visual Studio Code.app"), "vscode");
+  assert.equal(focusStrategyForBundle("/Applications/iTerm.app"), "app");
+  assert.equal(focusStrategyForBundle("/Applications/Terminal.app/"), "terminal"); // trailing slash tolerated
+  assert.equal(focusStrategyForBundle(null), null);
 });

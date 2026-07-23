@@ -79,15 +79,23 @@ Settings → Privacy & Security**:
 |---|---|---|
 | Quick Chat, Quick Prompt | **Accessibility** + **Automation → System Events** | send the global hotkey / paste keystrokes |
 | Claude Code Terminal, Project Terminal | **Automation → Terminal** | control Terminal.app |
+| Focus Session (Terminal/VS Code sessions) | **Automation → Terminal** and/or **Accessibility** | raise the exact window, best-effort |
 
 Grant these to the **Elgato Stream Deck** app (macOS prompts on first use — approve
 whatever it names, which may include `node`/`osascript`). Until granted, those
 keys flash the Stream Deck "failed" icon rather than acting. The **Quick Chat**
 and **Quick Prompt** keys have a *hotkey* field in their settings — set it to
 your Claude Desktop quick-entry shortcut (e.g. `option+space`). **Focus Session**
-brings the app hosting a running session (VS Code, Terminal, iTerm, …) to the
-front — resolved from the session's process, no permission needed. A session
-running under `screen`/`tmux` (detached from its app) can't be resolved.
+resolves the app hosting a running session (VS Code, Terminal, iTerm, …) from
+the session's process, then tries to raise the *exact window*: for
+Terminal.app it matches the session's controlling tty against each window's
+tabs (needs **Automation → Terminal**); for VS Code it matches the session's
+cwd folder name against each window's title via System Events (needs
+**Accessibility**) — a best-effort, fragile-by-nature heuristic. Any other app
+(iTerm, …) just gets activated. If the window match fails — permission not
+granted, no match found, timeout, or no tty — it falls back to activating the
+app, so the key never does nothing. A session running under `screen`/`tmux`
+(detached from its app) can't be resolved at all.
 
 ## How usage data works
 

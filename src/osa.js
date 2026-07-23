@@ -107,3 +107,13 @@ export function hostAppForPid(tree, pid, maxDepth = 16) {
   }
   return null;
 }
+
+// Which focus strategy an app bundle gets: exact-window for Terminal (by tty)
+// and VS Code (by window title), plain app-activation for anything else.
+export function focusStrategyForBundle(bundle) {
+  if (!bundle) return null;
+  const base = String(bundle).replace(/\/+$/, "").split("/").pop();
+  if (base === "Terminal.app") return "terminal";
+  if (base === "Visual Studio Code.app") return "vscode";
+  return "app";
+}
