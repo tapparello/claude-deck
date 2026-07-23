@@ -183,7 +183,9 @@ async function readToken() {
 function pickBucket(o) {
   if (!o || typeof o !== "object") return null;
   let pct = null;
-  if (typeof o.utilization === "number") pct = o.utilization <= 1 && o.utilization > 0 ? o.utilization * 100 : o.utilization;
+  // The usage endpoint reports utilization on a 0–100 scale (e.g. 13 = 13%), so
+  // use it as-is. An earlier 0–1 fraction heuristic mis-scaled exactly 1% to 100%.
+  if (typeof o.utilization === "number") pct = o.utilization;
   const resetsAt = o.resets_at ?? o.resetsAt ?? null;
   return pct == null && !resetsAt ? null : { pct, resetsAt };
 }

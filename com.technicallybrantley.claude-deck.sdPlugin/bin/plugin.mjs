@@ -3875,7 +3875,7 @@ async function readToken() {
 function pickBucket(o) {
   if (!o || typeof o !== "object") return null;
   let pct = null;
-  if (typeof o.utilization === "number") pct = o.utilization <= 1 && o.utilization > 0 ? o.utilization * 100 : o.utilization;
+  if (typeof o.utilization === "number") pct = o.utilization;
   const resetsAt = o.resets_at ?? o.resetsAt ?? null;
   return pct == null && !resetsAt ? null : { pct, resetsAt };
 }
