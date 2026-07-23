@@ -179,12 +179,6 @@ const state = {
   loggedRaw: false,
 };
 
-async function readToken() {
-  const raw = await fsp.readFile(CREDS_FILE, "utf8");
-  const creds = JSON.parse(raw);
-  return creds?.claudeAiOauth?.accessToken ?? null;
-}
-
 function pickBucket(o) {
   if (!o || typeof o !== "object") return null;
   let pct = null;
@@ -207,7 +201,7 @@ try {
 async function pollUsage() {
   lastUsageAttempt = Date.now();
   try {
-    const token = await readToken();
+    const token = await platform.readToken();
     if (!token) throw new Error("no OAuth token in credentials file");
     const res = await fetch(USAGE_URL, {
       headers: {
@@ -475,12 +469,12 @@ const kindOf = (action) => action.replace("com.technicallybrantley.claude-deck."
 function render(context, kind) {
   switch (kind) {
     case "usage-session": {
-      if (state.usageErr && !state.usage) return setImage(context, gaugeKey("SESSION 5H", null, state.usageErr.includes("429") ? "throttled" : "sign in?"));
+      if (state.usageErr && !state.usage) return setImage(context, gaugeKey("SESSION 5H", null, state.usageErr.includes("429") ? "throttled" : state.usageErr.includes("no OAuth token") ? "n/a" : "sign in?"));
       const b = state.usage?.fiveHour;
       return setImage(context, gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt) : "no data", b?.pct >= 90 ? animPhase : null));
     }
     case "usage-weekly": {
-      if (state.usageErr && !state.usage) return setImage(context, gaugeKey("WEEKLY", null, state.usageErr.includes("429") ? "throttled" : "sign in?"));
+      if (state.usageErr && !state.usage) return setImage(context, gaugeKey("WEEKLY", null, state.usageErr.includes("429") ? "throttled" : state.usageErr.includes("no OAuth token") ? "n/a" : "sign in?"));
       const b = state.usage?.weekly;
       const u = state.usage;
       const sub = u?.scopedPct != null && u.scopedName
@@ -656,6 +650,16 @@ if ($found -eq [IntPtr]::Zero) { exit 1 };
       wt.unref();
     });
   },
+
+  // OAuth token from the credentials file (Windows/Linux location).
+  async readToken() {
+    try {
+      const raw = await fsp.readFile(CREDS_FILE, "utf8");
+      return parseKeychainToken(raw);
+    } catch {
+      return null;
+    }
+  },
 };
 
 const macPlatform = {
@@ -720,6 +724,28 @@ const macPlatform = {
       'error "not found"',
       "end timeout",
     ]);
+  },
+
+  // OAuth token from the login Keychain (service "Claude Code-credentials"),
+  // falling back to the credentials file if a user exported it.
+  readToken() {
+    return new Promise((resolve) => {
+      execFile(
+        "security",
+        ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+        { timeout: OSA_TIMEOUT_MS },
+        async (err, out) => {
+          const tok = err ? null : parseKeychainToken(out);
+          if (tok) return resolve(tok);
+          try {
+            const raw = await fsp.readFile(CREDS_FILE, "utf8");
+            resolve(parseKeychainToken(raw));
+          } catch {
+            resolve(null);
+          }
+        },
+      );
+    });
   },
 };
 
