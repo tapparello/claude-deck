@@ -1002,6 +1002,13 @@ if (process.argv.includes("--selftest")) {
     log("selftest usage:", state.usage ? JSON.stringify(state.usage) : `ERROR: ${state.usageErr}`);
     await pollSessions();
     log("selftest sessions:", state.sessions.map((s) => `${s.name}[${s.status}]`).join(", ") || "(none)");
+    log("selftest status (auto k0):", JSON.stringify(statusEntry(resolveStatusKey(state.sessions, "", 0))));
+    const demo0 = state.sessions[0];
+    if (demo0) {
+      const proj = path.basename(demo0.cwd ?? "");
+      const r = resolveStatusKey(state.sessions, proj, 0);
+      log(`selftest status (explicit ${proj}) count=${r.count}:`, JSON.stringify(statusEntry(r)));
+    }
     await pollToday();
     log("selftest today:", JSON.stringify(state.today));
     await pollBurn();
