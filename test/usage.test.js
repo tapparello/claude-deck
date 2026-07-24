@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { windowStartMs, rateFor, estimateCost } from "../src/usage.js";
+import { windowStartMs, rateFor, estimateCost, parseRequests, mergeById, aggregate } from "../src/usage.js";
 
 test("windowStartMs 7day is exactly now - 7 days", () => {
   const now = 1_800_000_000_000;
@@ -61,4 +61,46 @@ test("estimateCost is 0 for unpriceable models", () => {
   const M = 1_000_000;
   assert.equal(estimateCost("<synthetic>", { in: M, out: M, cacheRead: 0, cacheCreate: 0 }), 0);
   assert.equal(estimateCost("some-future-model", { in: M }), 0);
+});
+
+test("parseRequests dedupes by message.id taking the max snapshot", () => {
+  const text = [
+    '{"type":"user","timestamp":"2026-07-23T10:00:00Z"}',
+    '{"type":"assistant","timestamp":"2026-07-23T10:00:01Z","message":{"id":"m1","model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":0}}}',
+    '{"type":"assistant","timestamp":"2026-07-23T10:00:02Z","message":{"id":"m1","model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":10}}}',
+    '{"type":"assistant","timestamp":"2026-07-23T10:00:03Z","message":{"id":"m2","model":"claude-sonnet-5","usage":{"input_tokens":200,"output_tokens":20}}}',
+    '{"type":"assistant","timestamp":"2026-07-23T10:00:04Z","message":{"model":"claude-haiku-4-5","usage":{"output_tokens":5}}}',
+    "",
+  ].join("\n");
+  const reqs = parseRequests(text);
+  assert.equal(reqs.length, 3);
+  const m1 = reqs.find((r) => r.id === "m1");
+  assert.equal(m1.tok.out, 50);
+  assert.equal(m1.tok.cacheRead, 10); // the fuller (max) snapshot won
+  assert.equal(reqs.find((r) => r.id === "m2").tok.in, 200);
+  assert.ok(reqs.some((r) => r.id == null && r.tok.out === 5)); // no-id line kept
+});
+
+test("mergeById keeps the global max per id and all no-id entries", () => {
+  const a = [{ id: "a", t: 1, model: "x", tok: { in: 10, out: 0, cacheRead: 0, cacheCreate: 0 } }];
+  const b = [{ id: "a", t: 2, model: "x", tok: { in: 30, out: 0, cacheRead: 0, cacheCreate: 0 } }];
+  const merged = mergeById([a, b]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].tok.in, 30);
+
+  const n1 = [{ id: null, t: 1, model: "x", tok: { in: 1, out: 0, cacheRead: 0, cacheCreate: 0 } }];
+  const n2 = [{ id: null, t: 2, model: "x", tok: { in: 2, out: 0, cacheRead: 0, cacheCreate: 0 } }];
+  assert.equal(mergeById([n1, n2]).length, 2);
+});
+
+test("aggregate filters by window and sums tokens (all) + cost (priced)", () => {
+  const M = 1_000_000;
+  const reqs = [
+    { t: 200, model: "claude-opus-4-8", tok: { in: M, out: 0, cacheRead: 0, cacheCreate: 0 } },
+    { t: 100, model: "claude-opus-4-8", tok: { in: M, out: 0, cacheRead: 0, cacheCreate: 0 } }, // before window
+    { t: 300, model: "<synthetic>", tok: { in: 500_000, out: 0, cacheRead: 0, cacheCreate: 0 } },
+  ];
+  const { tokens, cost } = aggregate(reqs, 150);
+  assert.equal(tokens, 1_500_000); // opus 1M + synthetic 0.5M in window; t=100 excluded
+  assert.equal(cost, 5); // opus 1M input = $5; synthetic priced 0
 });
