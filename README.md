@@ -1,6 +1,6 @@
 # Claude Deck — Stream Deck plugin
 
-Live Claude usage gauges, running Claude Code sessions, and quick-launch keys for the Elgato Stream Deck (Windows and macOS).
+Live Claude usage gauges, running Claude Code sessions, per-session status, and quick-launch keys for the Elgato Stream Deck (Windows and macOS).
 
 The usage gauges show the **same session/weekly percentages Claude Desktop and Claude Code's `/usage` display** — pulled with your local Claude sign-in, refreshed every couple of minutes. No extra login, nothing leaves your machine.
 
@@ -46,7 +46,7 @@ The sessions key shows an animated dot cycle while any session is actively worki
 
 1. Download/clone this repo.
 2. Close the Stream Deck app.
-3. Copy `com.technicallybrantley.claude-deck.sdPlugin` into your plugins folder:
+3. Copy `dev.tapparello.claude-deck.sdPlugin` into your plugins folder:
    - **Windows:** `%APPDATA%\Elgato\StreamDeck\Plugins\`
    - **macOS:** `~/Library/Application Support/com.elgato.StreamDeck/Plugins/` (or run `./deploy.sh`)
 4. Start the Stream Deck app — the actions appear under the **Claude Deck** category.
@@ -56,7 +56,7 @@ The sessions key shows an animated dot cycle while any session is actively worki
 
 ```powershell
 npm install
-npm run build      # bundles src/plugin.js -> com.technicallybrantley.claude-deck.sdPlugin/bin/plugin.mjs
+npm run build      # bundles src/plugin.js -> dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs
 npm run selftest   # exercises the usage endpoint + local data without Stream Deck
 ```
 
@@ -64,7 +64,7 @@ On macOS:
 
 ```bash
 npm install
-npm run build      # bundles src/plugin.js -> com.technicallybrantley.claude-deck.sdPlugin/bin/plugin.mjs
+npm run build      # bundles src/plugin.js -> dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs
 npm test           # runs the src/osa.js unit tests (node:test)
 npm run selftest   # exercises the usage/session/today/burn pollers without Stream Deck
 ./deploy.sh        # installs to ~/Library/Application Support/com.elgato.StreamDeck/Plugins/, restarts Stream Deck
@@ -105,6 +105,18 @@ app, so the key never does nothing. A session running under `screen`/`tmux`
 - **Sessions**: `~/.claude/sessions/*.json`, filtered to live processes.
 - **Today / Burn / Usage**: parsed from `~/.claude/projects/**/*.jsonl` transcripts, walked **recursively** so subagent/Task activity (`<uuid>/subagents/*.jsonl`) is included. Claude Code activity on this machine only — desktop/web chats don't write local logs.
 
+## Enterprise / non-Anthropic Claude Code (Azure AI Foundry, Bedrock, Vertex)
+
+Claude Code can talk to Anthropic's API directly **or** run through a cloud gateway — **Azure AI Foundry** (`CLAUDE_CODE_USE_FOUNDRY`), **Amazon Bedrock**, or **Google Vertex**. Those enterprise backends bill per token and have **no consumer subscription rate limits**, so the **Session / Weekly / Model percentage gauges have nothing to report** — on macOS they show a clean **`n/a`** (on Windows, "sign in?", since there's no consumer OAuth token).
+
+Everything sourced from your **local** Claude Code data works the same regardless of backend:
+
+- **Sessions**, **Claude Status**, **Focus Session** — live session activity
+- **Today**, **Burn Rate** — local token activity
+- **Usage** — local token volume + **estimated cost** for a window; set your exact per-model `$/M`-token rates in the key's settings for accurate Foundry / Bedrock / Vertex spend
+
+So on Foundry (or any enterprise backend), skip the `%` rings and lean on **Usage** for spend and **Status / Sessions** for activity.
+
 ## Notes
 
 - Not affiliated with or endorsed by Anthropic. The spark icons are original artwork drawn in a similar spirit; official Anthropic/Claude logos are trademarks and are not included.
@@ -113,4 +125,4 @@ app, so the key never does nothing. A session running under `screen`/`tmux`
 
 ## License
 
-MIT
+MIT — see [`LICENSE`](LICENSE). Originally forked from [technicallybrantley/claude-deck](https://github.com/technicallybrantley/claude-deck) and extended (per-session Claude Status key, macOS support, local cost/usage). Not affiliated with or endorsed by Anthropic.

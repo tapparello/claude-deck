@@ -22,27 +22,27 @@
 let ws, piUuid, settings = {}, action = "", models = [], gs = {}, gsReady = false;
 const RATE_DEFAULTS = { opus: [5, 25], sonnet: [3, 15], haiku: [1, 5], fable: [10, 50] };
 const FIELDS = {
-  "com.technicallybrantley.claude-deck.usage-model": [
+  "dev.tapparello.claude-deck.usage-model": [
     { key: "model", type: "modelselect", label: "Model to display" },
   ],
-  "com.technicallybrantley.claude-deck.project": [
+  "dev.tapparello.claude-deck.project": [
     { key: "label", type: "text", label: "Button label" },
     { key: "path", type: "text", label: "Project folder (full path)" },
   ],
-  "com.technicallybrantley.claude-deck.quick-prompt": [
+  "dev.tapparello.claude-deck.quick-prompt": [
     { key: "label", type: "text", label: "Button label" },
     { key: "prompt", type: "textarea", label: "Prompt (pasted into quick chat — overwrites clipboard)" },
     { key: "hotkey", type: "text", label: "Quick-chat hotkey (macOS only, e.g. option+space)" },
     { key: "enter", type: "checkbox", label: "Press Enter automatically" },
   ],
-  "com.technicallybrantley.claude-deck.quick-chat": [
+  "dev.tapparello.claude-deck.quick-chat": [
     { key: "hotkey", type: "text", label: "Quick-chat hotkey (macOS only, e.g. option+space)" },
   ],
-  "com.technicallybrantley.claude-deck.custom": [
+  "dev.tapparello.claude-deck.custom": [
     { key: "label", type: "text", label: "Button label" },
     { key: "command", type: "text", label: "Open (app path, URL, or folder)" },
   ],
-  "com.technicallybrantley.claude-deck.usage-meter": [
+  "dev.tapparello.claude-deck.usage-meter": [
     { key: "window", type: "select", label: "Time window", default: "today", options: [
       { value: "today", label: "Today" },
       { value: "month", label: "Month-to-date" },
@@ -50,7 +50,7 @@ const FIELDS = {
     ] },
     { key: "label", type: "text", label: "Button label (optional)" },
   ],
-  "com.technicallybrantley.claude-deck.approver-status": [
+  "dev.tapparello.claude-deck.approver-status": [
     { key: "label", type: "text", label: "Button label (optional)" },
     { key: "project", type: "text", label: "Project to track (folder name, blank = auto)" },
   ],
@@ -114,7 +114,7 @@ function build() {
     }
     form.append(div);
   }
-  if (action === "com.technicallybrantley.claude-deck.usage-meter") buildRates();
+  if (action === "dev.tapparello.claude-deck.usage-meter") buildRates();
 }
 function buildRates() {
   let box = document.getElementById("rates");
@@ -156,10 +156,10 @@ function connectElgatoStreamDeckSocket(port, uuid, evt, info, actionInfo) {
   ws.onopen = () => {
     ws.send(JSON.stringify({ event: evt, uuid }));
     build();
-    if (action === "com.technicallybrantley.claude-deck.usage-model") {
+    if (action === "dev.tapparello.claude-deck.usage-model") {
       ws.send(JSON.stringify({ event: "sendToPlugin", action, context: piUuid, payload: { cmd: "getModels" } }));
     }
-    if (action === "com.technicallybrantley.claude-deck.usage-meter") {
+    if (action === "dev.tapparello.claude-deck.usage-meter") {
       ws.send(JSON.stringify({ event: "getGlobalSettings", context: piUuid }));
     }
   };
@@ -169,7 +169,7 @@ function connectElgatoStreamDeckSocket(port, uuid, evt, info, actionInfo) {
     if (m.event === "didReceiveGlobalSettings") {
       gs = m.payload?.settings ?? {};
       gsReady = true;
-      if (action === "com.technicallybrantley.claude-deck.usage-meter") buildRates();
+      if (action === "dev.tapparello.claude-deck.usage-meter") buildRates();
       return;
     }
     if (m.event === "sendToPropertyInspector" && Array.isArray(m.payload?.models)) {
