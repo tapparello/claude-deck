@@ -4241,7 +4241,7 @@ async function pollToday() {
     const files = await walkTranscripts(PROJECTS_DIR, dayStart.getTime());
     for (const st of files) {
       const fp = st.path;
-      if (!fp.includes("/subagents/")) chats.add(fp);
+      if (!fp.split(path.sep).includes("subagents")) chats.add(fp);
       const cached = fileCache.get(fp);
       if (cached && cached.size === st.size && cached.day === day) {
         msgs += cached.msgs;
