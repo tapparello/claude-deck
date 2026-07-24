@@ -50,7 +50,7 @@ The sessions key shows an animated dot cycle while any session is actively worki
    - **Windows:** `%APPDATA%\Elgato\StreamDeck\Plugins\`
    - **macOS:** `~/Library/Application Support/com.elgato.StreamDeck/Plugins/` (or run `./deploy.sh`)
 4. Start the Stream Deck app — the actions appear under the **Claude Deck** category.
-5. Optional: double-click `Claude.streamDeckProfile` to import a ready-made Stream Deck XL profile.
+5. Optional: double-click `Claude.streamDeckProfile` to import a ready-made profile with all keys pre-arranged.
 
 ## Build from source
 
