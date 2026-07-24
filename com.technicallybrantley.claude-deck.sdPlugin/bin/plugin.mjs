@@ -3844,16 +3844,23 @@ function windowStartMs(kind, now) {
   return d.getTime();
 }
 var RATES = { opus: [5, 25], sonnet: [3, 15], haiku: [1, 5], fable: [10, 50] };
-function rateFor(model) {
-  const m = String(model ?? "").toLowerCase();
-  if (m.includes("opus")) return RATES.opus;
-  if (m.includes("sonnet")) return RATES.sonnet;
-  if (m.includes("haiku")) return RATES.haiku;
-  if (m.includes("fable") || m.includes("mythos")) return RATES.fable;
-  return null;
+function validNum(v) {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : void 0;
 }
-function estimateCost(model, tok) {
-  const r = rateFor(model);
+function rateFor(model, overrides) {
+  const m = String(model ?? "").toLowerCase();
+  let fam = null;
+  if (m.includes("opus")) fam = "opus";
+  else if (m.includes("sonnet")) fam = "sonnet";
+  else if (m.includes("haiku")) fam = "haiku";
+  else if (m.includes("fable") || m.includes("mythos")) fam = "fable";
+  if (!fam) return null;
+  const [dIn, dOut] = RATES[fam];
+  const o = overrides?.[fam];
+  return [validNum(o?.in) ?? dIn, validNum(o?.out) ?? dOut];
+}
+function estimateCost(model, tok, overrides) {
+  const r = rateFor(model, overrides);
   if (!r) return 0;
   const [inR, outR] = r;
   const t = tok || {};
@@ -3907,12 +3914,12 @@ function mergeById(lists) {
   }
   return [...byId.values(), ...noId];
 }
-function aggregate(requests, startMs) {
+function aggregate(requests, startMs, overrides) {
   let tokens = 0, cost = 0;
   for (const r of requests) {
     if (r.t < startMs) continue;
     tokens += totalOf(r.tok);
-    cost += estimateCost(r.model, r.tok);
+    cost += estimateCost(r.model, r.tok, overrides);
   }
   return { tokens, cost };
 }
@@ -4076,7 +4083,8 @@ var state = {
   today: null,
   burn: null,
   pctHistory: [],
-  loggedRaw: false
+  loggedRaw: false,
+  rates: {}
 };
 function pickBucket(o) {
   if (!o || typeof o !== "object") return null;
@@ -4377,7 +4385,7 @@ async function pollUsageMeter(forceWins) {
     for (const fp of usageFileCache.keys()) if (!seen.has(fp)) usageFileCache.delete(fp);
     const merged = mergeById(lists);
     const out = {};
-    for (const w of wins) out[w] = aggregate(merged, windowStartMs(w, now));
+    for (const w of wins) out[w] = aggregate(merged, windowStartMs(w, now), state.rates);
     state.usageMeter = out;
     renderAll(["usage-meter"]);
   } catch (e) {
@@ -4848,6 +4856,7 @@ if (process.argv.includes("--selftest")) {
   ws.on("open", () => {
     send({ event: registerEvent, uuid: pluginUUID });
     log("registered with Stream Deck");
+    send({ event: "getGlobalSettings", context: pluginUUID });
     if (Date.now() - state.usageAt > 9e4) pollUsage();
     pollSessions();
     pollToday();
@@ -4884,6 +4893,9 @@ if (process.argv.includes("--selftest")) {
         render(context, v.kind);
         if (v.kind === "usage-meter") pollUsageMeter();
       }
+    } else if (event === "didReceiveGlobalSettings") {
+      state.rates = msg.payload?.settings?.rates ?? {};
+      pollUsageMeter();
     } else if (event === "sendToPlugin" && action) {
       if (msg.payload?.cmd === "getModels") {
         send({ event: "sendToPropertyInspector", context, payload: { models: (state.usage?.models ?? []).map((m) => m.name) } });
