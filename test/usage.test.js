@@ -104,3 +104,15 @@ test("aggregate filters by window and sums tokens (all) + cost (priced)", () => 
   assert.equal(tokens, 1_500_000); // opus 1M + synthetic 0.5M in window; t=100 excluded
   assert.equal(cost, 5); // opus 1M input = $5; synthetic priced 0
 });
+
+test("parseRequests falls back to requestId when message.id is absent", () => {
+  const text = [
+    '{"type":"assistant","timestamp":"2026-07-23T10:00:00Z","requestId":"r9","message":{"model":"claude-opus-4-8","usage":{"input_tokens":300}}}',
+    '{"type":"assistant","timestamp":"2026-07-23T10:00:01Z","requestId":"r9","message":{"model":"claude-opus-4-8","usage":{"input_tokens":300,"output_tokens":40}}}',
+    "",
+  ].join("\n");
+  const reqs = parseRequests(text);
+  assert.equal(reqs.length, 1); // deduped by requestId (message.id absent)
+  assert.equal(reqs[0].id, "r9");
+  assert.equal(reqs[0].tok.out, 40); // max snapshot won
+});
