@@ -187,6 +187,7 @@ const state = {
   burn: null,
   pctHistory: [],
   loggedRaw: false,
+  rates: {},
 };
 
 function pickBucket(o) {
@@ -467,7 +468,7 @@ async function pollUsageMeter(forceWins) {
     for (const fp of usageFileCache.keys()) if (!seen.has(fp)) usageFileCache.delete(fp);
     const merged = mergeById(lists);
     const out = {};
-    for (const w of wins) out[w] = aggregate(merged, windowStartMs(w, now));
+    for (const w of wins) out[w] = aggregate(merged, windowStartMs(w, now), state.rates);
     state.usageMeter = out;
     renderAll(["usage-meter"]);
   } catch (e) {
@@ -956,6 +957,7 @@ if (process.argv.includes("--selftest")) {
   ws.on("open", () => {
     send({ event: registerEvent, uuid: pluginUUID });
     log("registered with Stream Deck");
+    send({ event: "getGlobalSettings", context: pluginUUID });
     if (Date.now() - state.usageAt > 90_000) pollUsage();
     pollSessions();
     pollToday();
@@ -979,6 +981,9 @@ if (process.argv.includes("--selftest")) {
     } else if (event === "didReceiveSettings" && action) {
       const v = views.get(context);
       if (v) { v.settings = msg.payload?.settings ?? {}; render(context, v.kind); if (v.kind === "usage-meter") pollUsageMeter(); }
+    } else if (event === "didReceiveGlobalSettings") {
+      state.rates = msg.payload?.settings?.rates ?? {};
+      pollUsageMeter();
     } else if (event === "sendToPlugin" && action) {
       if (msg.payload?.cmd === "getModels") {
         send({ event: "sendToPropertyInspector", context, payload: { models: (state.usage?.models ?? []).map((m) => m.name) } });
