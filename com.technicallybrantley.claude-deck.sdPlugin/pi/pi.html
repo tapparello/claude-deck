@@ -36,6 +36,14 @@ const FIELDS = {
     { key: "label", type: "text", label: "Button label" },
     { key: "command", type: "text", label: "Open (app path, URL, or folder)" },
   ],
+  "com.technicallybrantley.claude-deck.usage-meter": [
+    { key: "window", type: "select", label: "Time window", default: "today", options: [
+      { value: "today", label: "Today" },
+      { value: "month", label: "Month-to-date" },
+      { value: "7day", label: "7-day" },
+    ] },
+    { key: "label", type: "text", label: "Button label (optional)" },
+  ],
 };
 function save() { ws.send(JSON.stringify({ event: "setSettings", context: piUuid, payload: settings })); }
 function build() {
@@ -62,6 +70,20 @@ function build() {
       if (s.selectedIndex < 0) s.value = "";
       s.onchange = () => { settings[f.key] = s.value; save(); };
       div.append(l, s);
+    } else if (f.type === "select") {
+      const l = document.createElement("label");
+      l.textContent = f.label;
+      const sel = document.createElement("select");
+      for (const o of f.options) {
+        const opt = document.createElement("option");
+        opt.value = o.value;
+        opt.textContent = o.label;
+        sel.append(opt);
+      }
+      sel.value = settings[f.key] ?? f.default ?? "";
+      if (sel.selectedIndex < 0) sel.value = f.default ?? (sel.options[0] ? sel.options[0].value : "");
+      sel.onchange = () => { settings[f.key] = sel.value; save(); };
+      div.append(l, sel);
     } else if (f.type === "checkbox") {
       const l = document.createElement("label");
       l.className = "chk";
