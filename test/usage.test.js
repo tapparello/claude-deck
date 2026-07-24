@@ -116,3 +116,39 @@ test("parseRequests falls back to requestId when message.id is absent", () => {
   assert.equal(reqs[0].id, "r9");
   assert.equal(reqs[0].tok.out, 40); // max snapshot won
 });
+
+test("rateFor applies input/output overrides per family (partial keeps default)", () => {
+  const ov = { opus: { in: 4, out: 20 }, sonnet: { in: 2 } };
+  assert.deepEqual(rateFor("claude-opus-4-8", ov), [4, 20]);
+  assert.deepEqual(rateFor("claude-sonnet-5", ov), [2, 15]); // out defaults
+  assert.deepEqual(rateFor("claude-haiku-4-5", ov), [1, 5]); // no override → default
+});
+
+test("rateFor override validNum: 0 accepted, junk/negative/string → default", () => {
+  assert.deepEqual(rateFor("opus", { opus: { in: 0, out: 0 } }), [0, 0]);
+  assert.deepEqual(rateFor("opus", { opus: { in: -1, out: NaN } }), [5, 25]);
+  assert.deepEqual(rateFor("opus", { opus: { in: "3" } }), [5, 25]);
+  assert.deepEqual(rateFor("opus", {}), [5, 25]);
+});
+
+test("rateFor: overrides never price an unpriceable model", () => {
+  assert.equal(rateFor("<synthetic>", { opus: { in: 4 } }), null);
+  assert.equal(rateFor("gpt-4", { opus: { in: 4 } }), null);
+});
+
+test("rateFor: mythos uses the fable override key", () => {
+  assert.deepEqual(rateFor("claude-mythos-5", { fable: { in: 8, out: 40 } }), [8, 40]);
+});
+
+test("estimateCost applies overrides incl. cache multipliers on overridden input", () => {
+  const M = 1_000_000;
+  assert.equal(estimateCost("claude-opus-4-8", { in: M, out: 0, cacheRead: 0, cacheCreate: 0 }, { opus: { in: 4 } }), 4);
+  assert.equal(estimateCost("claude-opus-4-8", { in: 0, out: 0, cacheRead: M, cacheCreate: 0 }, { opus: { in: 4 } }), 0.4); // 0.1×4
+});
+
+test("aggregate applies overrides to cost; tokens unchanged; default when omitted", () => {
+  const M = 1_000_000;
+  const reqs = [{ t: 200, model: "claude-opus-4-8", tok: { in: M, out: 0, cacheRead: 0, cacheCreate: 0 } }];
+  assert.deepEqual(aggregate(reqs, 100, { opus: { in: 4 } }), { tokens: M, cost: 4 });
+  assert.deepEqual(aggregate(reqs, 100), { tokens: M, cost: 5 });
+});

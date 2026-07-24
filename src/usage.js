@@ -13,20 +13,29 @@ export function windowStartMs(kind, now) {
 // Per-MTok rates (USD): [inputRate, outputRate], keyed by model family.
 const RATES = { opus: [5, 25], sonnet: [3, 15], haiku: [1, 5], fable: [10, 50] };
 
+function validNum(v) {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined;
+}
+
 // [inR, outR] for a model id (family-prefix match), or null if unpriceable.
-export function rateFor(model) {
+// `overrides` (per family {in,out}) win over defaults; mythos uses the fable key.
+export function rateFor(model, overrides) {
   const m = String(model ?? "").toLowerCase();
-  if (m.includes("opus")) return RATES.opus;
-  if (m.includes("sonnet")) return RATES.sonnet;
-  if (m.includes("haiku")) return RATES.haiku;
-  if (m.includes("fable") || m.includes("mythos")) return RATES.fable;
-  return null;
+  let fam = null;
+  if (m.includes("opus")) fam = "opus";
+  else if (m.includes("sonnet")) fam = "sonnet";
+  else if (m.includes("haiku")) fam = "haiku";
+  else if (m.includes("fable") || m.includes("mythos")) fam = "fable";
+  if (!fam) return null;
+  const [dIn, dOut] = RATES[fam];
+  const o = overrides?.[fam];
+  return [validNum(o?.in) ?? dIn, validNum(o?.out) ?? dOut];
 }
 
 // Estimated USD for one request's token usage. Unpriceable model -> 0.
 // tok = {in, out, cacheRead, cacheCreate}. cache-read ≈0.1×input, create ≈1.25×input.
-export function estimateCost(model, tok) {
-  const r = rateFor(model);
+export function estimateCost(model, tok, overrides) {
+  const r = rateFor(model, overrides);
   if (!r) return 0;
   const [inR, outR] = r;
   const t = tok || {};
@@ -83,12 +92,12 @@ export function mergeById(lists) {
 
 // Aggregate tokens (all models) and estimated cost (priced models) over
 // requests with t >= startMs.
-export function aggregate(requests, startMs) {
+export function aggregate(requests, startMs, overrides) {
   let tokens = 0, cost = 0;
   for (const r of requests) {
     if (r.t < startMs) continue;
     tokens += totalOf(r.tok);
-    cost += estimateCost(r.model, r.tok);
+    cost += estimateCost(r.model, r.tok, overrides);
   }
   return { tokens, cost };
 }
