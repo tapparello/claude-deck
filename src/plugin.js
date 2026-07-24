@@ -296,6 +296,27 @@ async function pollSessions() {
   }
 }
 
+// Recursively collect .jsonl transcript files (including <uuid>/subagents/)
+// whose mtime is at/after cutoffMs. Returns [{ path, size, mtimeMs }].
+async function walkTranscripts(dir, cutoffMs) {
+  const out = [];
+  async function rec(d) {
+    let entries;
+    try { entries = await fsp.readdir(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { await rec(p); continue; }
+      if (!e.name.endsWith(".jsonl")) continue;
+      let st;
+      try { st = await fsp.stat(p); } catch { continue; }
+      if (st.mtimeMs < cutoffMs) continue;
+      out.push({ path: p, size: st.size, mtimeMs: st.mtimeMs });
+    }
+  }
+  await rec(dir);
+  return out;
+}
+
 // ---------- data: today's activity (local JSONL, incremental-ish) ----------
 const fileCache = new Map(); // path -> { size, mtime, msgs, tokens }
 const todayKey = () => new Date().toISOString().slice(0, 10);
@@ -310,18 +331,10 @@ async function pollToday() {
     const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
     let msgs = 0, tokens = 0;
     const chats = new Set();
-    const dirs = await fsp.readdir(PROJECTS_DIR).catch(() => []);
-    for (const d of dirs) {
-      const dir = path.join(PROJECTS_DIR, d);
-      let files;
-      try { files = await fsp.readdir(dir); } catch { continue; }
-      for (const f of files) {
-        if (!f.endsWith(".jsonl")) continue;
-        const fp = path.join(dir, f);
-        let st;
-        try { st = await fsp.stat(fp); } catch { continue; }
-        if (st.mtimeMs < dayStart.getTime()) continue; // untouched today
-        chats.add(fp);
+    const files = await walkTranscripts(PROJECTS_DIR, dayStart.getTime());
+    for (const st of files) {
+      const fp = st.path;
+        if (!fp.includes("/subagents/")) chats.add(fp); // conversations only
         const cached = fileCache.get(fp);
         if (cached && cached.size === st.size && cached.day === day) {
           msgs += cached.msgs; tokens += cached.tokens;
@@ -356,7 +369,6 @@ async function pollToday() {
         } catch { continue; }
         fileCache.set(fp, { size: st.size, day, msgs: fMsgs, tokens: fTokens });
         msgs += fMsgs; tokens += fTokens;
-      }
     }
     state.today = { chats: chats.size, msgs, tokens };
     renderAll(["today"]);
@@ -372,17 +384,9 @@ async function pollBurn() {
   try {
     const now = Date.now();
     const scanCutoff = now - 90 * 60_000;
-    const dirs = await fsp.readdir(PROJECTS_DIR).catch(() => []);
-    for (const d of dirs) {
-      const dir = path.join(PROJECTS_DIR, d);
-      let files;
-      try { files = await fsp.readdir(dir); } catch { continue; }
-      for (const f of files) {
-        if (!f.endsWith(".jsonl")) continue;
-        const fp = path.join(dir, f);
-        let st;
-        try { st = await fsp.stat(fp); } catch { continue; }
-        if (st.mtimeMs < scanCutoff) continue;
+    const files = await walkTranscripts(PROJECTS_DIR, scanCutoff);
+    for (const st of files) {
+      const fp = st.path;
         let rec = hourTracker.get(fp);
         if (!rec || st.size < rec.offset || !rec.seen) rec = { offset: 0, rest: "", events: [], seen: new Map() };
         if (st.size > rec.offset) {
@@ -416,7 +420,6 @@ async function pollBurn() {
         rec.events = rec.events.filter((e) => now - e.t < 65 * 60_000);
         for (const [mid, ev] of rec.seen) if (now - ev.t >= 65 * 60_000) rec.seen.delete(mid);
         hourTracker.set(fp, rec);
-      }
     }
     let tokensHour = 0;
     for (const rec of hourTracker.values()) for (const e of rec.events) if (now - e.t < 3.6e6) tokensHour += e.tok;
