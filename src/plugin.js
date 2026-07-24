@@ -542,7 +542,7 @@ const setTitle = (context) => send({ event: "setTitle", context, payload: { titl
 const showOk = (context) => send({ event: "showOk", context });
 const showAlert = (context) => send({ event: "showAlert", context });
 
-const kindOf = (action) => action.replace("com.technicallybrantley.claude-deck.", "");
+const kindOf = (action) => action.replace("dev.tapparello.claude-deck.", "");
 
 function render(context, kind) {
   switch (kind) {

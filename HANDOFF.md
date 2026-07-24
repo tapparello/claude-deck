@@ -7,14 +7,14 @@ rediscover" doc. Keep it updated when you learn something the hard way.
 ## Repo shape
 
 - `src/plugin.js` — the actual source. Edit this, never the bundle.
-- `com.technicallybrantley.claude-deck.sdPlugin/bin/plugin.mjs` — esbuild
+- `dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs` — esbuild
   output, checked in because Stream Deck loads directly from the installed
   plugin folder. Regenerate with `npm run build`; don't hand-edit it.
-- `com.technicallybrantley.claude-deck.sdPlugin/manifest.json` — action
+- `dev.tapparello.claude-deck.sdPlugin/manifest.json` — action
   definitions Stream Deck reads. Bump `"Version"` (4-part, e.g. `1.0.1.0`)
   on any behavior change so old cached state doesn't get confused with new.
 - `deploy.ps1` — stops Stream Deck, replaces the installed plugin folder
-  with a fresh copy of `com.technicallybrantley.claude-deck.sdPlugin/`,
+  with a fresh copy of `dev.tapparello.claude-deck.sdPlugin/`,
   restarts it. This is Windows-only (PowerShell) — use the `PowerShell`
   tool, not `Bash`, to run it.
 - `docs/*.png` — README screenshots. `local-assets/claude-logo.png` is

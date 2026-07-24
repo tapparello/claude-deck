@@ -4470,7 +4470,7 @@ var setImage = (context, image) => send({ event: "setImage", context, payload: {
 var setTitle = (context) => send({ event: "setTitle", context, payload: { title: "", target: 0 } });
 var showOk = (context) => send({ event: "showOk", context });
 var showAlert = (context) => send({ event: "showAlert", context });
-var kindOf = (action) => action.replace("com.technicallybrantley.claude-deck.", "");
+var kindOf = (action) => action.replace("dev.tapparello.claude-deck.", "");
 function render(context, kind) {
   switch (kind) {
     case "usage-session": {
