@@ -50,6 +50,10 @@ const FIELDS = {
     ] },
     { key: "label", type: "text", label: "Button label (optional)" },
   ],
+  "com.technicallybrantley.claude-deck.approver-status": [
+    { key: "label", type: "text", label: "Button label (optional)" },
+    { key: "project", type: "text", label: "Project to track (folder name, blank = auto)" },
+  ],
 };
 function save() { ws.send(JSON.stringify({ event: "setSettings", context: piUuid, payload: settings })); }
 function build() {

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
   "Name": "Claude Deck",
-  "Version": "1.2.0.0",
+  "Version": "1.3.0.0",
   "Author": "Brantley",
   "Description": "Live Claude usage limits, running Claude Code sessions, and quick-launch keys for Claude Desktop.",
   "UUID": "com.technicallybrantley.claude-deck",
@@ -172,6 +172,17 @@
       "SupportedInMultiActions": false,
       "UserTitleEnabled": false,
       "States": [{ "Image": "imgs/usage", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.technicallybrantley.claude-deck.approver-status",
+      "Name": "Claude Status",
+      "Tooltip": "Live status of a Claude Code session (Working / Idle). Bind to a project in settings, or leave blank to auto-track the most active session.",
+      "Icon": "imgs/status",
+      "PropertyInspectorPath": "pi/pi.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/status", "ShowTitle": false }]
     }
   ]
 }
