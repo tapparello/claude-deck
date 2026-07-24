@@ -144,6 +144,7 @@ command passthrough in Claude Code).
   `(size, mtime)`.
 - The `usage-meter` action is cross-platform (pure data) and needs no
   permissions.
+- Note: `pollToday` dedups token totals **per file**, while `pollUsageMeter` dedups **globally** (`mergeById`). If one `message.id` appears in multiple transcripts (forked/resumed sessions), the Today key can read slightly higher than a "today" Usage key. The Usage key's global dedup is the more accurate; the difference is usually nil (ids are unique per file).
 
 ## Things NOT to do
 
