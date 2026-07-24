@@ -9,6 +9,7 @@ import path from "node:path";
 import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle } from "./osa.js";
+import { windowStartMs, parseRequests, mergeById, aggregate } from "./usage.js";
 
 const IS_MAC = process.platform === "darwin";
 
@@ -430,6 +431,41 @@ async function pollBurn() {
   }
 }
 
+// ---------- data: Usage key (per-window token volume + estimated cost) ----------
+const usageFileCache = new Map(); // path -> { size, mtimeMs, requests }
+
+async function pollUsageMeter(forceWins) {
+  const wins = new Set();
+  if (forceWins) for (const w of forceWins) wins.add(w);
+  else for (const v of views.values()) if (v.kind === "usage-meter") wins.add(v.settings?.window ?? "today");
+  if (!wins.size) return; // gated: no Usage keys visible
+  const now = Date.now();
+  const cutoff = Math.min(...[...wins].map((w) => windowStartMs(w, now)));
+  try {
+    const files = await walkTranscripts(PROJECTS_DIR, cutoff);
+    const seen = new Set();
+    const lists = [];
+    for (const { path: fp, size, mtimeMs } of files) {
+      seen.add(fp);
+      const c = usageFileCache.get(fp);
+      if (c && c.size === size && c.mtimeMs === mtimeMs) { lists.push(c.requests); continue; }
+      let text;
+      try { text = await fsp.readFile(fp, "utf8"); } catch { continue; }
+      const requests = parseRequests(text);
+      usageFileCache.set(fp, { size, mtimeMs, requests });
+      lists.push(requests);
+    }
+    for (const fp of usageFileCache.keys()) if (!seen.has(fp)) usageFileCache.delete(fp);
+    const merged = mergeById(lists);
+    const out = {};
+    for (const w of wins) out[w] = aggregate(merged, windowStartMs(w, now));
+    state.usageMeter = out;
+    renderAll(["usage-meter"]);
+  } catch (e) {
+    log("usage-meter poll failed:", String(e));
+  }
+}
+
 // Projects time-to-cap from the trend of 5h utilization samples
 function sessionEta() {
   const h = state.pctHistory;
@@ -456,6 +492,7 @@ function argOf(name) {
 const views = new Map(); // context -> { kind, settings }
 const cycle = new Map(); // context -> { idx, timer }
 const focusIdx = new Map(); // context -> session index
+const usageView = new Map(); // context -> "cost" | "tokens" (Usage key toggle)
 let ws = null;
 let animPhase = 0;
 
@@ -880,6 +917,8 @@ if (process.argv.includes("--selftest")) {
     log("selftest today:", JSON.stringify(state.today));
     await pollBurn();
     log("selftest burn:", JSON.stringify(state.burn), "eta:", sessionEta());
+    await pollUsageMeter(["today", "month", "7day"]);
+    log("selftest usage-meter:", JSON.stringify(state.usageMeter));
     process.exit(0);
   })();
 } else {
@@ -927,6 +966,7 @@ if (process.argv.includes("--selftest")) {
   setInterval(pollToday, 300_000);
   pollBurn();
   setInterval(pollBurn, 60_000);
+  setInterval(pollUsageMeter, 60_000);
   // Animation ticker: busy-session dots + red pulse on gauges at 90%+
   setInterval(() => {
     animPhase = (animPhase + 1) % 3;
