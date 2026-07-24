@@ -60,6 +60,16 @@ test("missing cwd/status handled gracefully", () => {
   const r = resolveStatusKey([{ sessionId: "z", pid: 1 }], "");
   assert.equal(statusEntry(r).state, "idle"); // absent status => idle
   assert.equal(sessionProject({}), "");
+  assert.equal(statusEntry(resolveStatusKey([{ sessionId: "z", pid: 1 }], "")).name, "claude");
+});
+
+test("recency tiebreak: same state, more-recent updatedAt wins", () => {
+  const sessions = [
+    S({ cwd: "/a/proj", status: "idle", updatedAt: 5, pid: 1 }),
+    S({ cwd: "/b/proj", status: "idle", updatedAt: 50, pid: 9 }),
+  ];
+  const r = resolveStatusKey(sessions, "proj");
+  assert.equal(statusEntry(r).cwd, "/b/proj"); // newer wins despite higher pid
 });
 
 test("cycle offset selects a specific candidate", () => {

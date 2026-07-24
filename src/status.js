@@ -21,15 +21,14 @@ function byDisplayOrder(a, b) {
 // Resolve one Status key to the sessions it could display.
 //   sessions    - live sessions (state.sessions)
 //   project     - the key's configured project (basename match); "" => auto
-//   autoOrdinal - for auto keys, this key's 0-based position among visible auto
+//   autoIdx     - for auto keys, this key's 0-based position among visible auto
 //                 keys, so multiple auto keys bind to distinct sessions; ignored
 //                 for explicit keys.
-export function resolveStatusKey(sessions, project, autoOrdinal = 0) {
+export function resolveStatusKey(sessions, project, autoIdx = 0) {
   const explicit = !!(project && String(project).trim());
   const want = explicit ? String(project).trim().toLowerCase() : null;
   const list = (sessions ?? [])
     .filter((s) => (explicit ? sessionProject(s) === want : true))
-    .slice()
     .sort(byDisplayOrder)
     .map((s) => ({
       name: path.basename(s.cwd ?? "") || "claude",
@@ -37,7 +36,7 @@ export function resolveStatusKey(sessions, project, autoOrdinal = 0) {
       cwd: s.cwd ?? "",
       sessionId: s.sessionId ?? null,
     }));
-  return { list, index: explicit ? 0 : autoOrdinal, count: list.length };
+  return { list, index: explicit ? 0 : autoIdx, count: list.length };
 }
 
 // The entry a key should show now (honoring an active cycle offset), or a
