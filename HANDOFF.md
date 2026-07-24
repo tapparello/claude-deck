@@ -127,6 +127,24 @@ refreshed/cached from an interactive login elsewhere in the meantime). If
 ask the user to run it themselves (they can do so live via the `!`-prefixed
 command passthrough in Claude Code).
 
+## Usage key + recursive transcript walk (added 2026-07)
+
+- `src/usage.js` — pure helpers (`windowStartMs`, `rateFor`/`estimateCost`,
+  `parseRequests`, `mergeById`, `aggregate`) with `node:test` tests in
+  `test/usage.test.js`. Cost is an **estimate** from a standard per-model rate
+  table (family-prefix match); always shown with an `est` marker.
+- `walkTranscripts(dir, cutoffMs)` in `plugin.js` walks `~/.claude/projects`
+  **recursively** (incl. `<uuid>/subagents/`). `pollToday`/`pollBurn` were
+  switched to it — they previously scanned one level and undercounted subagent
+  usage by ~half. Their numbers are correspondingly higher now (a fix, not a
+  regression).
+- `pollUsageMeter()` builds one globally-deduped request set (max per
+  `message.id`) and aggregates per window; it's gated on ≥1 visible `usage-meter`
+  key and scans only the earliest window in use. Per-file cache keyed by
+  `(size, mtime)`.
+- The `usage-meter` action is cross-platform (pure data) and needs no
+  permissions.
+
 ## Things NOT to do
 
 - Don't hand-edit `bin/plugin.mjs` — it's regenerated and your edit will

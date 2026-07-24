@@ -20,6 +20,7 @@ The usage gauges show the **same session/weekly percentages Claude Desktop and C
 | **Claude Code Terminal** | Opens a terminal running `claude` in `Documents\GitHub` (falls back to your home folder). |
 | **Model Usage (weekly)** | Per-model weekly limit % (e.g. your Fable allowance). |
 | **Burn Rate** | Tokens/hour over the last hour + estimated time until the 5h session cap ("cap in ~1h 20m" / "steady"). |
+| **Usage** | Local Claude Code token volume + estimated cost over a window (Today / Month-to-date / 7-day, set per key). Press to toggle cost ↔ tokens. Cost is an estimate (`est`). Especially useful on enterprise/Foundry accounts where the % gauges read n/a. |
 | **Project Terminal** | Configurable: opens Claude Code in a specific project folder (label + path in key settings). |
 | **Focus Session** | Press to cycle running sessions and bring each one's terminal window to the front. |
 | **Quick Prompt** | Configurable: opens quick chat and pastes a canned prompt (optionally presses Enter). Overwrites the clipboard. |
@@ -101,7 +102,7 @@ app, so the key never does nothing. A session running under `screen`/`tmux`
 
 - **Limits**: `GET https://api.anthropic.com/api/oauth/usage` authorized with the OAuth token Claude Code keeps in `~/.claude/.credentials.json` (Windows/Linux); on macOS the token is read from the login Keychain (service `Claude Code-credentials`), falling back to the credentials file. This is the same source the `/usage` command uses. It is not a publicly documented API, so it may change; the plugin logs the raw response shape to make fixes easy.
 - **Sessions**: `~/.claude/sessions/*.json`, filtered to live processes.
-- **Today**: parsed from `~/.claude/projects/**/*.jsonl` transcripts (Claude Code activity only — desktop chats don't write local logs, though they do count toward the limit gauges).
+- **Today / Burn / Usage**: parsed from `~/.claude/projects/**/*.jsonl` transcripts, walked **recursively** so subagent/Task activity (`<uuid>/subagents/*.jsonl`) is included. Claude Code activity on this machine only — desktop/web chats don't write local logs.
 
 ## Notes
 
