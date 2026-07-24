@@ -3,3 +3,4 @@ node_modules/
 local-assets/
 usage-cache.json
 product/
+.superpowers/

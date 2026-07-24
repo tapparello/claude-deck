@@ -3718,6 +3718,125 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
+
+// src/osa.js
+function escapeAppleScript(s) {
+  return String(s ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+var HK_MODIFIERS = {
+  cmd: "command down",
+  command: "command down",
+  "\u2318": "command down",
+  opt: "option down",
+  option: "option down",
+  alt: "option down",
+  "\u2325": "option down",
+  ctrl: "control down",
+  control: "control down",
+  "\u2303": "control down",
+  shift: "shift down",
+  "\u21E7": "shift down"
+};
+var HK_KEY_CODES = {
+  space: 49,
+  return: 36,
+  enter: 36,
+  tab: 48,
+  escape: 53,
+  esc: 53,
+  up: 126,
+  down: 125,
+  left: 123,
+  right: 124,
+  f1: 122,
+  f2: 120,
+  f3: 99,
+  f4: 118,
+  f5: 96,
+  f6: 97,
+  f7: 98,
+  f8: 100,
+  f9: 101,
+  f10: 109,
+  f11: 103,
+  f12: 111
+};
+function parseHotkey(str) {
+  if (str == null) return null;
+  const tokens = String(str).split("+").map((t) => t.trim().toLowerCase()).filter(Boolean);
+  if (!tokens.length) return null;
+  const keyTok = tokens.pop();
+  const modifiers = [];
+  for (const t of tokens) {
+    const m = HK_MODIFIERS[t];
+    if (!m) return null;
+    if (!modifiers.includes(m)) modifiers.push(m);
+  }
+  if (Object.prototype.hasOwnProperty.call(HK_KEY_CODES, keyTok)) {
+    return { modifiers, key: { kind: "code", code: HK_KEY_CODES[keyTok] } };
+  }
+  if (keyTok.length === 1) return { modifiers, key: { kind: "char", char: keyTok } };
+  return null;
+}
+function hotkeyClause(parsed) {
+  if (!parsed) return null;
+  const using = parsed.modifiers.length ? ` using {${parsed.modifiers.join(", ")}}` : "";
+  if (parsed.key.kind === "code") return `key code ${parsed.key.code}${using}`;
+  return `keystroke "${escapeAppleScript(parsed.key.char)}"${using}`;
+}
+function classifyCustomCommand(cmd, { home = "", exists = () => false } = {}) {
+  const raw = String(cmd ?? "").trim();
+  if (!raw) return null;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return { mode: "open", arg: raw };
+  let path2 = raw;
+  if (raw === "~") path2 = home;
+  else if (raw.startsWith("~/")) path2 = home + raw.slice(1);
+  if (exists(path2)) return { mode: "open", arg: path2 };
+  return { mode: "app", arg: raw };
+}
+function parseKeychainToken(raw) {
+  try {
+    const j = JSON.parse(raw);
+    return j?.claudeAiOauth?.accessToken ?? null;
+  } catch {
+    return null;
+  }
+}
+function outermostAppBundle(execPath) {
+  const m = /^(.*?\.app)\//.exec(String(execPath ?? ""));
+  return m ? m[1] : null;
+}
+function parsePsTree(out) {
+  const tree = /* @__PURE__ */ new Map();
+  for (const line of String(out ?? "").split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*\S)\s*$/.exec(line);
+    if (m) tree.set(m[1], { ppid: m[2], comm: m[3] });
+  }
+  return tree;
+}
+function hostAppForPid(tree, pid, maxDepth = 16) {
+  let cur = String(pid);
+  const seen = /* @__PURE__ */ new Set();
+  for (let i = 0; i < maxDepth && cur && !seen.has(cur); i++) {
+    seen.add(cur);
+    const node = tree.get(cur);
+    if (!node) break;
+    const bundle = outermostAppBundle(node.comm);
+    if (bundle) return bundle;
+    cur = node.ppid;
+  }
+  return null;
+}
+function focusStrategyForBundle(bundle) {
+  if (!bundle) return null;
+  const base = String(bundle).replace(/\/+$/, "").split("/").pop();
+  if (base === "Terminal.app") return "terminal";
+  if (base === "Visual Studio Code.app") return "vscode";
+  return "app";
+}
+
+// src/plugin.js
+var IS_MAC = process.platform === "darwin";
 var PLUGIN_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 var CLAUDE_DIR = path.join(os.homedir(), ".claude");
 var CREDS_FILE = path.join(CLAUDE_DIR, ".credentials.json");
@@ -3728,18 +3847,20 @@ var USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 var githubDir = path.join(os.homedir(), "Documents", "GitHub");
 var DEFAULT_CODE_DIR = fs.existsSync(githubDir) ? githubDir : os.homedir();
 var desktopAppId = "shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude";
-execFile(
-  "powershell.exe",
-  [
-    "-NoProfile",
-    "-Command",
-    "Get-StartApps | Where-Object {$_.Name -eq 'Claude'} | Select-Object -First 1 -ExpandProperty AppID"
-  ],
-  (err, out) => {
-    const id = out?.trim();
-    if (!err && id) desktopAppId = "shell:AppsFolder\\" + id;
-  }
-);
+if (!IS_MAC) {
+  execFile(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-Command",
+      "Get-StartApps | Where-Object {$_.Name -eq 'Claude'} | Select-Object -First 1 -ExpandProperty AppID"
+    ],
+    (err, out) => {
+      const id = out?.trim();
+      if (!err && id) desktopAppId = "shell:AppsFolder\\" + id;
+    }
+  );
+}
 var LOG_FILE = path.join(process.cwd(), "claude-deck.log");
 function log(...args) {
   const line = `${(/* @__PURE__ */ new Date()).toISOString()} ${args.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(" ")}`;
@@ -3783,38 +3904,38 @@ function gaugeKey(label, pct, sub, pulsePhase = null) {
   const pulse = pulsePhase == null ? "" : `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.bad}" stroke-width="6" opacity="${[0.2, 0.55, 0.95][pulsePhase % 3]}"/>`;
   return svgWrap(`
     ${pulse}
-    <text x="14" y="27" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(label)}</text>
-    <text x="72" y="78" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="${has ? 46 : 34}" font-weight="700" fill="${has ? col : C.dim}">${has ? Math.round(p) + "%" : "--"}</text>
+    <text x="14" y="27" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(label)}</text>
+    <text x="72" y="78" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${has ? 46 : 34}" font-weight="700" fill="${has ? col : C.dim}">${has ? Math.round(p) + "%" : "--"}</text>
     <rect x="14" y="90" width="116" height="12" rx="6" fill="${C.track}"/>
     ${has ? `<rect x="14" y="90" width="${Math.max(8, 116 * p / 100)}" height="12" rx="6" fill="${col}"/>` : ""}
-    <text x="72" y="128" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="16" fill="${C.dim}">${esc(sub ?? "")}</text>`);
+    <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="16" fill="${C.dim}">${esc(sub ?? "")}</text>`);
 }
 function linesKey(title, rows, accent = C.accent) {
   const rowSvg = rows.map((r, i) => {
     const y = 62 + i * 31;
-    return `<text x="14" y="${y}" font-family="Segoe UI, sans-serif" font-size="${r.big ? 28 : 20}" font-weight="${r.big ? 700 : 600}" fill="${r.color ?? C.text}">${esc(r.text)}</text>`;
+    return `<text x="14" y="${y}" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${r.big ? 28 : 20}" font-weight="${r.big ? 700 : 600}" fill="${r.color ?? C.text}">${esc(r.text)}</text>`;
   }).join("");
   return svgWrap(`
     <rect x="0" y="0" width="144" height="34" rx="18" fill="${C.panel}"/>
     <rect x="0" y="17" width="144" height="17" fill="${C.panel}"/>
-    <text x="14" y="24" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${accent}">${esc(title)}</text>
+    <text x="14" y="24" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${accent}">${esc(title)}</text>
     ${rowSvg}`);
 }
 function bigCountKey(title, count, sub, subColor, animPhase2 = null) {
   const dots = animPhase2 == null ? "" : [0, 1, 2].map((i) => `<circle cx="122" cy="${56 + i * 16}" r="${i === animPhase2 ? 4.5 : 3}" fill="${i === animPhase2 ? C.ok : C.track}"/>`).join("");
   return svgWrap(`
-    <text x="14" y="27" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(title)}</text>
+    <text x="14" y="27" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(title)}</text>
     ${dots}
-    <text x="72" y="96" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="64" font-weight="700" fill="${count > 0 ? C.text : C.dim}">${count}</text>
-    <text x="72" y="128" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="17" fill="${subColor ?? C.dim}">${esc(sub ?? "")}</text>`);
+    <text x="72" y="96" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="64" font-weight="700" fill="${count > 0 ? C.text : C.dim}">${count}</text>
+    <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" fill="${subColor ?? C.dim}">${esc(sub ?? "")}</text>`);
 }
 function burnKey(tokensHour, sub) {
   const has = tokensHour != null;
   return svgWrap(`
-    <text x="14" y="27" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">BURN RATE</text>
-    <text x="72" y="82" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="40" font-weight="700" fill="${has ? C.accent : C.dim}">${has ? fmtNum(tokensHour) : "--"}</text>
-    <text x="72" y="104" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="16" fill="${C.dim}">tok/hr</text>
-    <text x="72" y="128" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="15" fill="${C.dim}">${esc(sub ?? "")}</text>`);
+    <text x="14" y="27" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">BURN RATE</text>
+    <text x="72" y="82" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="40" font-weight="700" fill="${has ? C.accent : C.dim}">${has ? fmtNum(tokensHour) : "--"}</text>
+    <text x="72" y="104" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="16" fill="${C.dim}">tok/hr</text>
+    <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub ?? "")}</text>`);
 }
 function labelKey(title, label, sub, accent = C.accent) {
   const text = String(label ?? "").trim() || "\u2014";
@@ -3830,11 +3951,11 @@ function labelKey(title, label, sub, accent = C.accent) {
     }
   }
   if (cur && lines.length < 2) lines.push(cur);
-  const lineSvg = lines.slice(0, 2).map((l, i) => `<text x="72" y="${lines.length > 1 ? 68 + i * 27 : 82}" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="22" font-weight="700" fill="${C.text}">${esc(l.slice(0, 12))}</text>`).join("");
+  const lineSvg = lines.slice(0, 2).map((l, i) => `<text x="72" y="${lines.length > 1 ? 68 + i * 27 : 82}" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="22" font-weight="700" fill="${C.text}">${esc(l.slice(0, 12))}</text>`).join("");
   return svgWrap(`
-    <text x="14" y="27" font-family="Segoe UI, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${accent}">${esc(title)}</text>
+    <text x="14" y="27" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${accent}">${esc(title)}</text>
     ${lineSvg}
-    <text x="72" y="128" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="15" fill="${C.dim}">${esc(sub ?? "")}</text>`);
+    <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub ?? "")}</text>`);
 }
 function fmtReset(iso) {
   if (!iso) return "";
@@ -3867,11 +3988,6 @@ var state = {
   pctHistory: [],
   loggedRaw: false
 };
-async function readToken() {
-  const raw = await fsp.readFile(CREDS_FILE, "utf8");
-  const creds = JSON.parse(raw);
-  return creds?.claudeAiOauth?.accessToken ?? null;
-}
 function pickBucket(o) {
   if (!o || typeof o !== "object") return null;
   let pct = null;
@@ -3894,7 +4010,7 @@ try {
 async function pollUsage() {
   lastUsageAttempt = Date.now();
   try {
-    const token = await readToken();
+    const token = await platform.readToken();
     if (!token) throw new Error("no OAuth token in credentials file");
     const res = await fetch(USAGE_URL, {
       headers: {
@@ -4179,12 +4295,12 @@ var kindOf = (action) => action.replace("com.technicallybrantley.claude-deck.", 
 function render(context, kind) {
   switch (kind) {
     case "usage-session": {
-      if (state.usageErr && !state.usage) return setImage(context, gaugeKey("SESSION 5H", null, state.usageErr.includes("429") ? "throttled" : "sign in?"));
+      if (state.usageErr && !state.usage) return setImage(context, gaugeKey("SESSION 5H", null, state.usageErr.includes("429") ? "throttled" : IS_MAC && state.usageErr.includes("no OAuth token") ? "n/a" : "sign in?"));
       const b = state.usage?.fiveHour;
       return setImage(context, gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt) : "no data", b?.pct >= 90 ? animPhase : null));
     }
     case "usage-weekly": {
-      if (state.usageErr && !state.usage) return setImage(context, gaugeKey("WEEKLY", null, state.usageErr.includes("429") ? "throttled" : "sign in?"));
+      if (state.usageErr && !state.usage) return setImage(context, gaugeKey("WEEKLY", null, state.usageErr.includes("429") ? "throttled" : IS_MAC && state.usageErr.includes("no OAuth token") ? "n/a" : "sign in?"));
       const b = state.usage?.weekly;
       const u = state.usage;
       const sub = u?.scopedPct != null && u.scopedName ? `${u.scopedName} ${Math.round(u.scopedPct)}%` : u?.weeklyOpus?.pct != null ? `opus ${Math.round(u.weeklyOpus.pct)}%` : b ? fmtReset(b.resetsAt) : "no data";
@@ -4195,7 +4311,7 @@ function render(context, kind) {
       const want = views.get(context)?.settings?.model;
       const m = models.find((x) => x.name === want) ?? models[0];
       const name = (m?.name ?? want ?? "MODEL").toUpperCase().slice(0, 8);
-      return setImage(context, gaugeKey(`${name} 7D`, m?.pct ?? null, m?.resetsAt ? fmtReset(m.resetsAt) : "no data", m?.pct >= 90 ? animPhase : null));
+      return setImage(context, gaugeKey(`${name} 7D`, m?.pct ?? null, m?.resetsAt ? fmtReset(m.resetsAt) : IS_MAC && state.usageErr?.includes("no OAuth token") ? "n/a" : "no data", m?.pct >= 90 ? animPhase : null));
     }
     case "burn-rate":
       return setImage(context, burnKey(state.burn?.tokensHour ?? null, sessionEta()));
@@ -4245,60 +4361,68 @@ function render(context, kind) {
 function renderAll(kinds) {
   for (const [context, v] of views) if (kinds.includes(v.kind)) render(context, v.kind);
 }
-function launchDesktop(context) {
-  const child = spawn("explorer.exe", [desktopAppId], { detached: true, stdio: "ignore" });
-  child.on("error", () => showAlert(context));
-  child.unref();
-  showOk(context);
+var OSA_TIMEOUT_MS = 8e3;
+function spawnDetached(cmd, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
+  });
 }
-function quickChat(context) {
-  const ps = `
+function openMac(args) {
+  return new Promise((resolve, reject) => {
+    execFile("open", args, (err) => err ? reject(err) : resolve());
+  });
+}
+function runOsa(lines) {
+  return new Promise((resolve, reject) => {
+    const args = [];
+    for (const l of lines) {
+      args.push("-e", l);
+    }
+    execFile("osascript", args, { timeout: OSA_TIMEOUT_MS }, (err) => err ? reject(err) : resolve());
+  });
+}
+function pbcopy(text) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("pbcopy");
+    child.once("error", reject);
+    child.stdin.once("error", reject);
+    child.once("close", (code) => code === 0 ? resolve() : reject(new Error("pbcopy exit " + code)));
+    child.stdin.end(String(text ?? ""));
+  });
+}
+function focusTarget(s) {
+  const name = String(s.name ?? "").replace(/["'‘’“”]/g, "").slice(0, 40);
+  return (name || path.basename(s.cwd ?? "")).toLowerCase();
+}
+var winPlatform = {
+  launchDesktop() {
+    return spawnDetached("explorer.exe", [desktopAppId]);
+  },
+  openUrl(url) {
+    return spawnDetached("cmd.exe", ["/c", "start", "", url]);
+  },
+  runCustom(command) {
+    return spawnDetached("cmd.exe", ["/c", "start", "", command]);
+  },
+  // Global quick-chat hotkey Ctrl+Alt+Space via keybd_event (verbatim from the
+  // original quickChat). The `hotkey` arg is ignored on Windows.
+  fireHotkey(_hotkey) {
+    const ps = `
 Add-Type -Namespace K -Name W -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e);';
 [K.W]::keybd_event(0x11,0,0,[UIntPtr]::Zero); [K.W]::keybd_event(0x12,0,0,[UIntPtr]::Zero); [K.W]::keybd_event(0x20,0,0,[UIntPtr]::Zero);
 Start-Sleep -Milliseconds 60;
 [K.W]::keybd_event(0x20,0,2,[UIntPtr]::Zero); [K.W]::keybd_event(0x12,0,2,[UIntPtr]::Zero); [K.W]::keybd_event(0x11,0,2,[UIntPtr]::Zero);`;
-  const child = spawn("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], { detached: true, stdio: "ignore" });
-  child.on("error", () => showAlert(context));
-  child.unref();
-  showOk(context);
-}
-function openWeb(context) {
-  const child = spawn("cmd.exe", ["/c", "start", "", "https://claude.ai/new"], { detached: true, stdio: "ignore" });
-  child.on("error", () => showAlert(context));
-  child.unref();
-  showOk(context);
-}
-function openTerminalAt(dir, context) {
-  const psFallback = () => {
-    const fb = spawn("cmd.exe", ["/c", "start", "", "powershell", "-NoExit", "-Command", `cd '${dir}'; claude`], { detached: true, stdio: "ignore" });
-    fb.on("error", () => showAlert(context));
-    fb.unref();
-  };
-  const wt = spawn("cmd.exe", ["/c", "start", "", "wt", "-w", "new", "-d", dir, "powershell", "-NoExit", "-Command", "claude"], { detached: true, stdio: "ignore" });
-  wt.on("error", psFallback);
-  wt.on("exit", (code) => {
-    if (code !== 0) psFallback();
-  });
-  wt.unref();
-  showOk(context);
-}
-function focusWindow(s, context) {
-  const target = (String(s.name ?? "").replace(/["'‘’“”]/g, "").slice(0, 40) || path.basename(s.cwd ?? "")).toLowerCase();
-  if (!target) return showAlert(context);
-  const ps = `
-$target = '${target.replace(/'/g, "''")}';
-Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; using System.Text; public class W { public delegate bool EP(IntPtr h, IntPtr l); [DllImport("user32.dll")] public static extern bool EnumWindows(EP cb, IntPtr l); [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n); [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h); [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c); }';
-$found = [IntPtr]::Zero;
-[void][W]::EnumWindows({ param($h, $l) $sb = New-Object System.Text.StringBuilder 512; [void][W]::GetWindowText($h, $sb, 512); if ([W]::IsWindowVisible($h) -and $sb.ToString().ToLower().Contains($target)) { $script:found = $h; return $false }; return $true }, [IntPtr]::Zero);
-if ($found -eq [IntPtr]::Zero) { exit 1 };
-[void][W]::ShowWindow($found, 9); [void][W]::SetForegroundWindow($found); exit 0`;
-  execFile("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], (err) => {
-    if (err) showAlert(context);
-    else showOk(context);
-  });
-}
-function sendPrompt(text, enter, context) {
-  const ps = `
+    return spawnDetached("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps]);
+  },
+  // Set-Clipboard + keybd_event chord + Ctrl+V + optional Enter (verbatim from
+  // the original sendPrompt). `hotkey` ignored on Windows.
+  pasteInto(_hotkey, text, enter) {
+    const ps = `
 Set-Clipboard -Value '${String(text).replace(/'/g, "''")}';
 Add-Type -Namespace K -Name W -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e);';
 function P([byte]$k){[K.W]::keybd_event($k,0,0,[UIntPtr]::Zero)}; function R([byte]$k){[K.W]::keybd_event($k,0,2,[UIntPtr]::Zero)};
@@ -4306,16 +4430,195 @@ P 0x11; P 0x12; P 0x20; Start-Sleep -Milliseconds 60; R 0x20; R 0x12; R 0x11;
 Start-Sleep -Milliseconds 800;
 P 0x11; P 0x56; Start-Sleep -Milliseconds 60; R 0x56; R 0x11;
 ${enter ? "Start-Sleep -Milliseconds 200; P 0x0D; R 0x0D;" : ""}`;
-  const child = spawn("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], { detached: true, stdio: "ignore" });
-  child.on("error", () => showAlert(context));
-  child.unref();
-  showOk(context);
-}
-function runCustom(command, context) {
-  const child = spawn("cmd.exe", ["/c", "start", "", command], { detached: true, stdio: "ignore" });
-  child.on("error", () => showAlert(context));
-  child.unref();
-  showOk(context);
+    return spawnDetached("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps]);
+  },
+  // Bring the session's terminal window to front by title substring (verbatim
+  // EnumWindows/SetForegroundWindow). execFile gives a real exit code.
+  focusWindow(s) {
+    const target = focusTarget(s);
+    if (!target) return Promise.reject(new Error("no focus target"));
+    const ps = `
+$target = '${target.replace(/'/g, "''")}';
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; using System.Text; public class W { public delegate bool EP(IntPtr h, IntPtr l); [DllImport("user32.dll")] public static extern bool EnumWindows(EP cb, IntPtr l); [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n); [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h); [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c); }';
+$found = [IntPtr]::Zero;
+[void][W]::EnumWindows({ param($h, $l) $sb = New-Object System.Text.StringBuilder 512; [void][W]::GetWindowText($h, $sb, 512); if ([W]::IsWindowVisible($h) -and $sb.ToString().ToLower().Contains($target)) { $script:found = $h; return $false }; return $true }, [IntPtr]::Zero);
+if ($found -eq [IntPtr]::Zero) { exit 1 };
+[void][W]::ShowWindow($found, 9); [void][W]::SetForegroundWindow($found); exit 0`;
+    return new Promise((resolve, reject) => {
+      execFile("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], (err) => err ? reject(err) : resolve());
+    });
+  },
+  // Windows Terminal (new foreground window) with a PowerShell fallback. The
+  // whole fallback chain stays internal and settles the Promise once (spec §5.8).
+  openTerminal(dir) {
+    return new Promise((resolve, reject) => {
+      const psFallback = () => {
+        const fb = spawn("cmd.exe", ["/c", "start", "", "powershell", "-NoExit", "-Command", `cd '${dir}'; claude`], { detached: true, stdio: "ignore" });
+        fb.once("error", reject);
+        fb.once("spawn", () => {
+          fb.unref();
+          resolve();
+        });
+      };
+      const wt = spawn("cmd.exe", ["/c", "start", "", "wt", "-w", "new", "-d", dir, "powershell", "-NoExit", "-Command", "claude"], { detached: true, stdio: "ignore" });
+      wt.once("error", psFallback);
+      wt.once("exit", (code) => {
+        if (code === 0) resolve();
+        else psFallback();
+      });
+      wt.unref();
+    });
+  },
+  // OAuth token from the credentials file (Windows/Linux location).
+  async readToken() {
+    try {
+      const raw = await fsp.readFile(CREDS_FILE, "utf8");
+      return parseKeychainToken(raw);
+    } catch {
+      return null;
+    }
+  }
+};
+var macPlatform = {
+  launchDesktop() {
+    return openMac(["-b", "com.anthropic.claudefordesktop"]).catch(() => openMac(["-a", "Claude"]));
+  },
+  openUrl(url) {
+    return openMac([url]);
+  },
+  runCustom(command) {
+    const c = classifyCustomCommand(command, { home: os.homedir(), exists: fs.existsSync });
+    if (!c) return Promise.reject(new Error("empty command"));
+    return c.mode === "open" ? openMac([c.arg]) : openMac(["-a", c.arg]);
+  },
+  openTerminal(dir) {
+    const d = escapeAppleScript(dir);
+    return runOsa([
+      "with timeout of 7 seconds",
+      'tell application "Terminal"',
+      `do script "cd " & quoted form of "${d}" & " && claude"`,
+      "activate",
+      "end tell",
+      "end timeout"
+    ]);
+  },
+  fireHotkey(hotkey) {
+    const clause = hotkeyClause(parseHotkey(hotkey));
+    if (!clause) return Promise.reject(new Error("no hotkey configured"));
+    return runOsa([
+      "with timeout of 7 seconds",
+      `tell application "System Events" to ${clause}`,
+      "end timeout"
+    ]);
+  },
+  pasteInto(hotkey, text, enter) {
+    const clause = hotkeyClause(parseHotkey(hotkey));
+    if (!clause) return Promise.reject(new Error("no hotkey configured"));
+    const lines = [
+      "with timeout of 7 seconds",
+      'tell application "System Events"',
+      `  ${clause}`,
+      "  delay 0.8",
+      '  keystroke "v" using {command down}'
+    ];
+    if (enter) {
+      lines.push("  delay 0.2", "  key code 36");
+    }
+    lines.push("end tell", "end timeout");
+    return pbcopy(text).then(() => runOsa(lines));
+  },
+  // Bring the exact window hosting this session to the front. The GUI app is
+  // resolved from the session PID's ancestry; then, best-effort per app:
+  //   Terminal -> raise the window whose tab tty matches the session tty
+  //   VS Code  -> raise the window whose title contains the session's folder
+  //   otherwise -> just activate the app.
+  // Falls back to activating the app if the window match/permission fails, so
+  // it degrades to "app to front" rather than nothing. Terminal needs
+  // Automation->Terminal; VS Code needs Accessibility.
+  focusWindow(s) {
+    const pid = s?.pid;
+    if (!pid) return Promise.reject(new Error("no pid for session"));
+    const ps = (args) => new Promise((resolve, reject) => execFile("ps", args, { timeout: OSA_TIMEOUT_MS }, (e, out) => e ? reject(e) : resolve(String(out))));
+    return ps(["-axo", "pid=,ppid=,comm="]).then((out) => {
+      const bundle = hostAppForPid(parsePsTree(out), pid);
+      if (!bundle) throw new Error("no host app for pid " + pid);
+      const activateApp = () => openMac([bundle]);
+      const strat = focusStrategyForBundle(bundle);
+      if (strat === "terminal") {
+        return ps(["-o", "tty=", "-p", String(pid)]).then((t) => {
+          const tty = t.trim();
+          if (!tty || tty === "??") return activateApp();
+          const esc2 = escapeAppleScript(tty);
+          return runOsa([
+            "with timeout of 7 seconds",
+            'tell application "Terminal"',
+            "  repeat with w in windows",
+            "    repeat with t in tabs of w",
+            `      if (tty of t) ends with "${esc2}" then`,
+            "        set selected of t to true",
+            "        set index of w to 1",
+            "        activate",
+            "        return",
+            "      end if",
+            "    end repeat",
+            "  end repeat",
+            "end tell",
+            'error "not found"',
+            "end timeout"
+          ]).catch(activateApp);
+        }).catch(activateApp);
+      }
+      if (strat === "vscode") {
+        const base = path.basename(s.cwd ?? "");
+        if (!base) return activateApp();
+        const esc2 = escapeAppleScript(base);
+        return runOsa([
+          "with timeout of 7 seconds",
+          'tell application "System Events"',
+          '  tell process "Code"',
+          "    set matched to false",
+          "    repeat with w in windows",
+          `      if (name of w) contains "${esc2}" then`,
+          '        perform action "AXRaise" of w',
+          "        set frontmost to true",
+          "        set matched to true",
+          "        exit repeat",
+          "      end if",
+          "    end repeat",
+          '    if not matched then error "not found"',
+          "  end tell",
+          "end tell",
+          "end timeout"
+        ]).catch(activateApp);
+      }
+      return activateApp();
+    });
+  },
+  // OAuth token from the login Keychain (service "Claude Code-credentials"),
+  // falling back to the credentials file if a user exported it.
+  readToken() {
+    return new Promise((resolve) => {
+      execFile(
+        "security",
+        ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+        { timeout: OSA_TIMEOUT_MS },
+        async (err, out) => {
+          const tok = err ? null : parseKeychainToken(out);
+          if (tok) return resolve(tok);
+          try {
+            const raw = await fsp.readFile(CREDS_FILE, "utf8");
+            resolve(parseKeychainToken(raw));
+          } catch {
+            resolve(null);
+          }
+        }
+      );
+    });
+  }
+};
+var platform = IS_MAC ? macPlatform : winPlatform;
+function act(context, p) {
+  p.then(() => showOk(context)).catch(() => showAlert(context));
 }
 function onKeyDown(context, kind) {
   switch (kind) {
@@ -4348,34 +4651,36 @@ function onKeyDown(context, kind) {
     case "project": {
       const s = views.get(context)?.settings ?? {};
       if (!s.path) return showAlert(context);
-      return openTerminalAt(s.path, context);
+      return act(context, platform.openTerminal(s.path));
     }
     case "focus-session": {
       const n = state.sessions.length;
       if (!n) return showAlert(context);
       const i = ((focusIdx.get(context) ?? -1) + 1) % n;
       focusIdx.set(context, i);
-      focusWindow(state.sessions[i], context);
+      act(context, platform.focusWindow(state.sessions[i]));
       return render(context, "focus-session");
     }
     case "quick-prompt": {
       const s = views.get(context)?.settings ?? {};
       if (!s.prompt) return showAlert(context);
-      return sendPrompt(s.prompt, !!s.enter, context);
+      return act(context, platform.pasteInto(s.hotkey, s.prompt, !!s.enter));
     }
     case "custom": {
       const s = views.get(context)?.settings ?? {};
       if (!s.command) return showAlert(context);
-      return runCustom(s.command, context);
+      return act(context, platform.runCustom(s.command));
     }
     case "launch":
-      return launchDesktop(context);
-    case "quick-chat":
-      return quickChat(context);
+      return act(context, platform.launchDesktop());
+    case "quick-chat": {
+      const s = views.get(context)?.settings ?? {};
+      return act(context, platform.fireHotkey(s.hotkey));
+    }
     case "open-web":
-      return openWeb(context);
+      return act(context, platform.openUrl("https://claude.ai/new"));
     case "claude-code":
-      return openTerminalAt(DEFAULT_CODE_DIR, context);
+      return act(context, platform.openTerminal(DEFAULT_CODE_DIR));
   }
 }
 if (process.argv.includes("--selftest")) {

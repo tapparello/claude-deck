@@ -1,7 +1,7 @@
 {
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
   "Name": "Claude Deck",
-  "Version": "1.0.1.0",
+  "Version": "1.1.0.0",
   "Author": "Brantley",
   "Description": "Live Claude usage limits, running Claude Code sessions, and quick-launch keys for Claude Desktop.",
   "UUID": "com.technicallybrantley.claude-deck",
@@ -21,6 +21,10 @@
     {
       "Platform": "windows",
       "MinimumVersion": "10"
+    },
+    {
+      "Platform": "mac",
+      "MinimumVersion": "11.0"
     }
   ],
   "Actions": [
@@ -75,8 +79,9 @@
     {
       "UUID": "com.technicallybrantley.claude-deck.quick-chat",
       "Name": "Claude Quick Chat",
-      "Tooltip": "Trigger Claude's quick-chat hotkey (Ctrl+Alt+Space).",
+      "Tooltip": "Trigger Claude's quick-chat hotkey (Ctrl+Alt+Space on Windows; set your hotkey in settings on macOS).",
       "Icon": "imgs/chat",
+      "PropertyInspectorPath": "pi/pi.html",
       "Controllers": ["Keypad"],
       "States": [{ "Image": "imgs/chat" }]
     },
