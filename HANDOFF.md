@@ -145,6 +145,7 @@ command passthrough in Claude Code).
 - The `usage-meter` action is cross-platform (pure data) and needs no
   permissions.
 - Note: `pollToday` dedups token totals **per file**, while `pollUsageMeter` dedups **globally** (`mergeById`). If one `message.id` appears in multiple transcripts (forked/resumed sessions), the Today key can read slightly higher than a "today" Usage key. The Usage key's global dedup is the more accurate; the difference is usually nil (ids are unique per file).
+- Cost rates are user-overridable via **Stream Deck global settings** (`{rates:{opus:{in,out},…}}`), edited in the Usage key's Property Inspector (a grid bound to `getGlobalSettings`/`setGlobalSettings`, not the per-key `setSettings`). The plugin loads them on `getGlobalSettings` at register + every `didReceiveGlobalSettings` into `state.rates`, threaded into `aggregate`→`estimateCost`→`rateFor` (family-prefix, blank→default via `validNum`+`??`; `0` is a valid free rate). Cache multipliers (0.1×/1.25×) are not configurable; the `est` marker stays. Note: `Version` stays `1.2.0.0` — rates fold into that still-unshipped version, so the standing "bump Version on behavior change" rule doesn't apply here.
 
 ## Things NOT to do
 
