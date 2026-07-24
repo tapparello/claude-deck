@@ -126,6 +126,15 @@ function burnKey(tokensHour, sub) {
     <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub ?? "")}</text>`);
 }
 
+function usageMeterKey(header, big, sub, isCost) {
+  const dim = String(big) === "--";
+  return svgWrap(`
+    <text x="14" y="27" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(header)}</text>
+    <text x="72" y="84" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${String(big).length > 6 ? 30 : 40}" font-weight="700" fill="${dim ? C.dim : C.accent}">${esc(big)}</text>
+    ${isCost && !dim ? `<text x="130" y="58" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" fill="${C.dim}">est</text>` : ""}
+    <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub)}</text>`);
+}
+
 // Generic key for configurable actions: header + big wrapped label + footer
 function labelKey(title, label, sub, accent = C.accent) {
   const text = String(label ?? "").trim() || "—";
@@ -573,6 +582,17 @@ function render(context, kind) {
         { text: `${fmtNum(t?.tokens)} tok`, color: C.accent },
       ]));
     }
+    case "usage-meter": {
+      const s = views.get(context)?.settings ?? {};
+      const win = s.window ?? "today";
+      const header = { today: "TODAY", month: "THIS MONTH", "7day": "7-DAY" }[win] ?? "TODAY";
+      const view = usageView.get(context) ?? "cost";
+      const agg = state.usageMeter?.[win];
+      const suffix = s.label ? " · " + s.label : "";
+      if (!agg) return setImage(context, usageMeterKey(header, "--", "no data", view === "cost"));
+      if (view === "cost") return setImage(context, usageMeterKey(header, "$" + agg.cost.toFixed(2), "cost" + suffix, true));
+      return setImage(context, usageMeterKey(header, fmtNum(agg.tokens), "tokens" + suffix, false));
+    }
   }
 }
 
@@ -902,6 +922,11 @@ function onKeyDown(context, kind) {
     }
     case "open-web": return act(context, platform.openUrl("https://claude.ai/new"));
     case "claude-code": return act(context, platform.openTerminal(DEFAULT_CODE_DIR));
+    case "usage-meter": {
+      usageView.set(context, (usageView.get(context) ?? "cost") === "cost" ? "tokens" : "cost");
+      pollUsageMeter();
+      return render(context, "usage-meter");
+    }
   }
 }
 
@@ -945,13 +970,15 @@ if (process.argv.includes("--selftest")) {
       views.set(context, { kind: kindOf(action), settings: msg.payload?.settings ?? {} });
       setTitle(context);
       render(context, kindOf(action));
+      if (kindOf(action) === "usage-meter") pollUsageMeter();
     } else if (event === "willDisappear") {
       views.delete(context);
       cycle.delete(context);
       focusIdx.delete(context);
+      usageView.delete(context);
     } else if (event === "didReceiveSettings" && action) {
       const v = views.get(context);
-      if (v) { v.settings = msg.payload?.settings ?? {}; render(context, v.kind); }
+      if (v) { v.settings = msg.payload?.settings ?? {}; render(context, v.kind); if (v.kind === "usage-meter") pollUsageMeter(); }
     } else if (event === "sendToPlugin" && action) {
       if (msg.payload?.cmd === "getModels") {
         send({ event: "sendToPropertyInspector", context, payload: { models: (state.usage?.models ?? []).map((m) => m.name) } });
