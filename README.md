@@ -25,6 +25,7 @@ The usage gauges show the **same session/weekly percentages Claude Desktop and C
 | **Focus Session** | Press to cycle running sessions and bring each one's terminal window to the front. |
 | **Quick Prompt** | Configurable: opens quick chat and pastes a canned prompt (optionally presses Enter). Overwrites the clipboard. |
 | **Claude Custom** | A Claude-styled spare key that opens anything you set: app, URL, or folder. |
+| **Claude Status** | Live status of one Claude Code session: project name + **Working**/**Idle**. Bind it to a project folder name in the key's settings, or leave blank to auto-track the most active session. Shows a count badge when several sessions share a project name; press to cycle them (each shows its parent folder + index). |
 
 Bar colors: green < 60%, amber 60–85%, red ≥ 85%. At 90%+ the gauge pulses red.
 The sessions key shows an animated dot cycle while any session is actively working.
@@ -108,6 +109,7 @@ app, so the key never does nothing. A session running under `screen`/`tmux`
 
 - Not affiliated with or endorsed by Anthropic. The spark icons are original artwork drawn in a similar spirit; official Anthropic/Claude logos are trademarks and are not included.
 - Usage percentages are account-wide, so desktop app, claude.ai, and Claude Code usage all show up in the gauges.
+- The **Claude Status** key reflects Claude Code sessions running on this machine (from `~/.claude/sessions/`), the same source as the Sessions key. A full Allow / Deny approval feature (surfacing Claude Code's permission prompts on the deck) is planned as a follow-up.
 
 ## License
 

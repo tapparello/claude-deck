@@ -3715,7 +3715,7 @@ var import_websocket_server = __toESM(require_websocket_server(), 1);
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
+import path2 from "node:path";
 import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -3788,10 +3788,10 @@ function classifyCustomCommand(cmd, { home = "", exists = () => false } = {}) {
   const raw = String(cmd ?? "").trim();
   if (!raw) return null;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return { mode: "open", arg: raw };
-  let path2 = raw;
-  if (raw === "~") path2 = home;
-  else if (raw.startsWith("~/")) path2 = home + raw.slice(1);
-  if (exists(path2)) return { mode: "open", arg: path2 };
+  let path3 = raw;
+  if (raw === "~") path3 = home;
+  else if (raw.startsWith("~/")) path3 = home + raw.slice(1);
+  if (exists(path3)) return { mode: "open", arg: path3 };
   return { mode: "app", arg: raw };
 }
 function parseKeychainToken(raw) {
@@ -3924,16 +3924,46 @@ function aggregate(requests, startMs, overrides) {
   return { tokens, cost };
 }
 
+// src/status.js
+import path from "node:path";
+var isWorking = (s) => !!(s.status && s.status !== "idle");
+function sessionProject(s) {
+  return path.basename(s.cwd ?? "").toLowerCase();
+}
+function byDisplayOrder(a, b) {
+  if (isWorking(a) !== isWorking(b)) return isWorking(a) ? -1 : 1;
+  if ((b.updatedAt ?? 0) !== (a.updatedAt ?? 0)) return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+  return (a.pid ?? 0) - (b.pid ?? 0);
+}
+function resolveStatusKey(sessions, project, autoIdx = 0) {
+  const explicit = !!(project && String(project).trim());
+  const want = explicit ? String(project).trim().toLowerCase() : null;
+  const list = (sessions ?? []).filter((s) => explicit ? sessionProject(s) === want : true).sort(byDisplayOrder).map((s) => ({
+    name: path.basename(s.cwd ?? "") || "claude",
+    state: isWorking(s) ? "working" : "idle",
+    cwd: s.cwd ?? "",
+    sessionId: s.sessionId ?? null
+  }));
+  return { list, index: explicit ? 0 : autoIdx, count: list.length };
+}
+function statusEntry(resolved, cycleIdx = null) {
+  const i = cycleIdx != null ? cycleIdx : resolved.index;
+  return resolved.list[i] ?? { name: "", state: "none", cwd: "", sessionId: null };
+}
+function autoOrdinal(autoContexts, context) {
+  return Math.max(0, (autoContexts ?? []).slice().sort().indexOf(context));
+}
+
 // src/plugin.js
 var IS_MAC = process.platform === "darwin";
-var PLUGIN_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-var CLAUDE_DIR = path.join(os.homedir(), ".claude");
-var CREDS_FILE = path.join(CLAUDE_DIR, ".credentials.json");
-var SESSIONS_DIR = path.join(CLAUDE_DIR, "sessions");
-var PROJECTS_DIR = path.join(CLAUDE_DIR, "projects");
-var STATS_CACHE = path.join(CLAUDE_DIR, "stats-cache.json");
+var PLUGIN_DIR = path2.dirname(path2.dirname(fileURLToPath(import.meta.url)));
+var CLAUDE_DIR = path2.join(os.homedir(), ".claude");
+var CREDS_FILE = path2.join(CLAUDE_DIR, ".credentials.json");
+var SESSIONS_DIR = path2.join(CLAUDE_DIR, "sessions");
+var PROJECTS_DIR = path2.join(CLAUDE_DIR, "projects");
+var STATS_CACHE = path2.join(CLAUDE_DIR, "stats-cache.json");
 var USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
-var githubDir = path.join(os.homedir(), "Documents", "GitHub");
+var githubDir = path2.join(os.homedir(), "Documents", "GitHub");
 var DEFAULT_CODE_DIR = fs.existsSync(githubDir) ? githubDir : os.homedir();
 var desktopAppId = "shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude";
 if (!IS_MAC) {
@@ -3950,7 +3980,7 @@ if (!IS_MAC) {
     }
   );
 }
-var LOG_FILE = path.join(process.cwd(), "claude-deck.log");
+var LOG_FILE = path2.join(process.cwd(), "claude-deck.log");
 function log(...args) {
   const line = `${(/* @__PURE__ */ new Date()).toISOString()} ${args.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(" ")}`;
   console.log(line);
@@ -3969,7 +3999,9 @@ var C = {
   ok: "#4ade80",
   warn: "#fbbf24",
   bad: "#f87171",
-  track: "#3a3745"
+  track: "#3a3745",
+  info: "#60a5fa"
+  // status: working (blue)
 };
 var pctColor = (p) => p == null ? C.dim : p >= 85 ? C.bad : p >= 60 ? C.warn : C.ok;
 var esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -3977,7 +4009,7 @@ var SPARK_PATH = "M121.79 21.82 L120.60 9.01 L118.39 21.68 Z M122.56 22.82 L125.
 var sparkAt = (x, y, color = C.accent, opacity = 1, scale = 1) => `<g transform="translate(${x} ${y}) scale(${scale}) translate(-120 -24)"><path d="${SPARK_PATH}" fill="${color}" stroke="${color}" stroke-width="0.8" stroke-linejoin="round" opacity="${opacity}"/></g>`;
 var WATERMARK;
 try {
-  const b64 = fs.readFileSync(path.join(PLUGIN_DIR, "imgs", "launch.png")).toString("base64");
+  const b64 = fs.readFileSync(path2.join(PLUGIN_DIR, "imgs", "launch.png")).toString("base64");
   WATERMARK = `<image xlink:href="data:image/png;base64,${b64}" href="data:image/png;base64,${b64}" x="24" y="24" width="96" height="96" opacity="0.12"/>`;
 } catch {
   WATERMARK = sparkAt(72, 76, C.accent, 0.08, 2.4);
@@ -4054,6 +4086,20 @@ function labelKey(title, label, sub, accent = C.accent) {
     ${lineSvg}
     <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub ?? "")}</text>`);
 }
+function statusKey(name, st, count, detail = "") {
+  const label = { working: "Working", idle: "Idle", none: "no session" }[st] ?? "";
+  const col = st === "working" ? C.info : C.dim;
+  const shown = name || "CLAUDE";
+  const border = st === "working" ? `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.info}" stroke-width="4" opacity="0.9"/>` : `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.track}" stroke-width="3"/>`;
+  const badge = count > 1 ? `<circle cx="120" cy="24" r="13" fill="${C.panel}" stroke="${C.track}" stroke-width="1"/><text x="120" y="29" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${count}</text>` : "";
+  const detailSvg = detail ? `<text x="72" y="126" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" fill="${C.dim}">${esc(detail)}</text>` : "";
+  return svgWrap(`
+    ${border}
+    ${badge}
+    <text x="72" y="70" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="26" font-weight="700" fill="${st === "none" ? C.dim : C.text}">${esc(String(shown).slice(0, 11))}</text>
+    <text x="72" y="100" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="18" font-weight="600" fill="${col}">${esc(label)}</text>
+    ${detailSvg}`);
+}
 function fmtReset(iso) {
   if (!iso) return "";
   const ms = new Date(iso).getTime() - Date.now();
@@ -4096,7 +4142,7 @@ function pickBucket(o) {
 var USAGE_DELAY_BASE = 12e4;
 var usageDelay = USAGE_DELAY_BASE;
 var lastUsageAttempt = 0;
-var CACHE_FILE = path.join(PLUGIN_DIR, "usage-cache.json");
+var CACHE_FILE = path2.join(PLUGIN_DIR, "usage-cache.json");
 try {
   const c = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
   if (Date.now() - c.at < 30 * 6e4) {
@@ -4192,7 +4238,7 @@ async function pollSessions() {
     for (const f of files) {
       if (!f.endsWith(".json")) continue;
       try {
-        const s = JSON.parse(await fsp.readFile(path.join(SESSIONS_DIR, f), "utf8"));
+        const s = JSON.parse(await fsp.readFile(path2.join(SESSIONS_DIR, f), "utf8"));
         if (s.pid && pidAlive(s.pid)) out.push(s);
       } catch {
       }
@@ -4200,7 +4246,7 @@ async function pollSessions() {
     out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
     const changed = JSON.stringify(out.map((s) => [s.pid, s.status])) !== JSON.stringify(state.sessions.map((s) => [s.pid, s.status]));
     state.sessions = out;
-    if (changed) renderAll(["sessions", "focus-session"]);
+    if (changed) renderAll(["sessions", "focus-session", "approver-status"]);
   } catch (e) {
     log("sessions poll failed:", String(e));
   }
@@ -4215,7 +4261,7 @@ async function walkTranscripts(dir, cutoffMs) {
       return;
     }
     for (const e of entries) {
-      const p = path.join(d, e.name);
+      const p = path2.join(d, e.name);
       if (e.isDirectory()) {
         await rec(p);
         continue;
@@ -4249,7 +4295,7 @@ async function pollToday() {
     const files = await walkTranscripts(PROJECTS_DIR, dayStart.getTime());
     for (const st of files) {
       const fp = st.path;
-      if (!fp.split(path.sep).includes("subagents")) chats.add(fp);
+      if (!fp.split(path2.sep).includes("subagents")) chats.add(fp);
       const cached = fileCache.get(fp);
       if (cached && cached.size === st.size && cached.day === day) {
         msgs += cached.msgs;
@@ -4450,7 +4496,7 @@ function render(context, kind) {
       return setImage(context, burnKey(state.burn?.tokensHour ?? null, sessionEta()));
     case "project": {
       const s = views.get(context)?.settings ?? {};
-      const label = s.label || (s.path ? path.basename(s.path) : "");
+      const label = s.label || (s.path ? path2.basename(s.path) : "");
       return setImage(context, labelKey("PROJECT", label || "configure", s.path ? "" : "set folder in settings"));
     }
     case "focus-session": {
@@ -4500,10 +4546,29 @@ function render(context, kind) {
       if (view === "cost") return setImage(context, usageMeterKey(header, "$" + agg.cost.toFixed(2), "cost" + suffix, true));
       return setImage(context, usageMeterKey(header, fmtNum(agg.tokens), "tokens" + suffix, false));
     }
+    case "approver-status": {
+      const s = views.get(context)?.settings ?? {};
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context));
+      const cy = cycle.get(context);
+      const cycling = !!(cy && cy.idx >= 0);
+      const entry = statusEntry(resolved, cycling ? cy.idx : null);
+      const explicit = !!(s.project && s.project.trim());
+      const name = s.label || entry.name || (s.project ?? "");
+      let detail = "";
+      if (cycling && resolved.count > 1) {
+        const parent = entry.cwd ? path2.basename(path2.dirname(entry.cwd)) : "";
+        detail = `${cy.idx + 1}/${resolved.count}${parent ? " \xB7 " + parent : ""}`;
+      }
+      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail));
+    }
   }
 }
 function renderAll(kinds) {
   for (const [context, v] of views) if (kinds.includes(v.kind)) render(context, v.kind);
+}
+function autoOrdinalFor(context) {
+  const autos = [...views.entries()].filter(([, v]) => v.kind === "approver-status" && !(v.settings?.project && v.settings.project.trim())).map(([ctx]) => ctx);
+  return autoOrdinal(autos, context);
 }
 var OSA_TIMEOUT_MS = 8e3;
 function spawnDetached(cmd, args) {
@@ -4541,7 +4606,7 @@ function pbcopy(text) {
 }
 function focusTarget(s) {
   const name = String(s.name ?? "").replace(/["'‘’“”]/g, "").slice(0, 40);
-  return (name || path.basename(s.cwd ?? "")).toLowerCase();
+  return (name || path2.basename(s.cwd ?? "")).toLowerCase();
 }
 var winPlatform = {
   launchDesktop() {
@@ -4713,7 +4778,7 @@ var macPlatform = {
         }).catch(activateApp);
       }
       if (strat === "vscode") {
-        const base = path.basename(s.cwd ?? "");
+        const base = path2.basename(s.cwd ?? "");
         if (!base) return activateApp();
         const esc2 = escapeAppleScript(base);
         return runOsa([
@@ -4830,6 +4895,20 @@ function onKeyDown(context, kind) {
       pollUsageMeter();
       return render(context, "usage-meter");
     }
+    case "approver-status": {
+      const s = views.get(context)?.settings ?? {};
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context));
+      if (resolved.count <= 1) return showOk(context);
+      const cy = cycle.get(context) ?? { idx: resolved.index, timer: null };
+      cy.idx = (cy.idx + 1) % resolved.count;
+      if (cy.timer) clearTimeout(cy.timer);
+      cy.timer = setTimeout(() => {
+        cycle.set(context, { idx: -1, timer: null });
+        render(context, "approver-status");
+      }, 4e3);
+      cycle.set(context, cy);
+      return render(context, "approver-status");
+    }
   }
 }
 if (process.argv.includes("--selftest")) {
@@ -4839,6 +4918,13 @@ if (process.argv.includes("--selftest")) {
     log("selftest usage:", state.usage ? JSON.stringify(state.usage) : `ERROR: ${state.usageErr}`);
     await pollSessions();
     log("selftest sessions:", state.sessions.map((s) => `${s.name}[${s.status}]`).join(", ") || "(none)");
+    log("selftest status (auto k0):", JSON.stringify(statusEntry(resolveStatusKey(state.sessions, "", 0))));
+    const demo0 = state.sessions[0];
+    if (demo0) {
+      const proj = path2.basename(demo0.cwd ?? "");
+      const r = resolveStatusKey(state.sessions, proj, 0);
+      log(`selftest status (explicit ${proj}) count=${r.count}:`, JSON.stringify(statusEntry(r)));
+    }
     await pollToday();
     log("selftest today:", JSON.stringify(state.today));
     await pollBurn();

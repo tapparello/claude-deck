@@ -147,6 +147,10 @@ command passthrough in Claude Code).
 - Note: `pollToday` dedups token totals **per file**, while `pollUsageMeter` dedups **globally** (`mergeById`). If one `message.id` appears in multiple transcripts (forked/resumed sessions), the Today key can read slightly higher than a "today" Usage key. The Usage key's global dedup is the more accurate; the difference is usually nil (ids are unique per file).
 - Cost rates are user-overridable via **Stream Deck global settings** (`{rates:{opus:{in,out},…}}`), edited in the Usage key's Property Inspector (a grid bound to `getGlobalSettings`/`setGlobalSettings`, not the per-key `setSettings`). The plugin loads them on `getGlobalSettings` at register + every `didReceiveGlobalSettings` into `state.rates`, threaded into `aggregate`→`estimateCost`→`rateFor` (family-prefix, blank→default via `validNum`+`??`; `0` is a valid free rate). Cache multipliers (0.1×/1.25×) are not configurable; the `est` marker stays. Note: `Version` stays `1.2.0.0` — rates fold into that still-unshipped version, so the standing "bump Version on behavior change" rule doesn't apply here.
 
+## Claude Status key (added 2026-07)
+
+- `src/status.js` — pure resolver for the **Claude Status** key (`resolveStatusKey`/`statusEntry`/`autoOrdinal`). Status shares the existing `pollSessions` source of truth (session `status` + pid liveness), keyed on `sessionId`, bound by project-folder name (or auto). No hooks/IPC — the Allow/Deny approver is a planned phase 2 (see `docs/superpowers/specs/2026-07-24-claude-code-approver-design.md` §12).
+
 ## Things NOT to do
 
 - Don't hand-edit `bin/plugin.mjs` — it's regenerated and your edit will
