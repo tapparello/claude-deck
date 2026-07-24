@@ -9,6 +9,7 @@ import path from "node:path";
 import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle } from "./osa.js";
+import { windowStartMs, parseRequests, mergeById, aggregate } from "./usage.js";
 
 const IS_MAC = process.platform === "darwin";
 
@@ -125,6 +126,15 @@ function burnKey(tokensHour, sub) {
     <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub ?? "")}</text>`);
 }
 
+function usageMeterKey(header, big, sub, isCost) {
+  const dim = String(big) === "--";
+  return svgWrap(`
+    <text x="14" y="27" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(header)}</text>
+    <text x="72" y="84" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${String(big).length > 6 ? 30 : 40}" font-weight="700" fill="${dim ? C.dim : C.accent}">${esc(big)}</text>
+    ${isCost && !dim ? `<text x="130" y="58" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" fill="${C.dim}">est</text>` : ""}
+    <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub)}</text>`);
+}
+
 // Generic key for configurable actions: header + big wrapped label + footer
 function labelKey(title, label, sub, accent = C.accent) {
   const text = String(label ?? "").trim() || "—";
@@ -177,6 +187,7 @@ const state = {
   burn: null,
   pctHistory: [],
   loggedRaw: false,
+  rates: {},
 };
 
 function pickBucket(o) {
@@ -298,6 +309,27 @@ async function pollSessions() {
   }
 }
 
+// Recursively collect .jsonl transcript files (including <uuid>/subagents/)
+// whose mtime is at/after cutoffMs. Returns [{ path, size, mtimeMs }].
+async function walkTranscripts(dir, cutoffMs) {
+  const out = [];
+  async function rec(d) {
+    let entries;
+    try { entries = await fsp.readdir(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { await rec(p); continue; }
+      if (!e.name.endsWith(".jsonl")) continue;
+      let st;
+      try { st = await fsp.stat(p); } catch { continue; }
+      if (st.mtimeMs < cutoffMs) continue;
+      out.push({ path: p, size: st.size, mtimeMs: st.mtimeMs });
+    }
+  }
+  await rec(dir);
+  return out;
+}
+
 // ---------- data: today's activity (local JSONL, incremental-ish) ----------
 const fileCache = new Map(); // path -> { size, mtime, msgs, tokens }
 const todayKey = () => new Date().toISOString().slice(0, 10);
@@ -312,18 +344,10 @@ async function pollToday() {
     const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
     let msgs = 0, tokens = 0;
     const chats = new Set();
-    const dirs = await fsp.readdir(PROJECTS_DIR).catch(() => []);
-    for (const d of dirs) {
-      const dir = path.join(PROJECTS_DIR, d);
-      let files;
-      try { files = await fsp.readdir(dir); } catch { continue; }
-      for (const f of files) {
-        if (!f.endsWith(".jsonl")) continue;
-        const fp = path.join(dir, f);
-        let st;
-        try { st = await fsp.stat(fp); } catch { continue; }
-        if (st.mtimeMs < dayStart.getTime()) continue; // untouched today
-        chats.add(fp);
+    const files = await walkTranscripts(PROJECTS_DIR, dayStart.getTime());
+    for (const st of files) {
+      const fp = st.path;
+        if (!fp.split(path.sep).includes("subagents")) chats.add(fp); // conversations only (cross-platform)
         const cached = fileCache.get(fp);
         if (cached && cached.size === st.size && cached.day === day) {
           msgs += cached.msgs; tokens += cached.tokens;
@@ -358,7 +382,6 @@ async function pollToday() {
         } catch { continue; }
         fileCache.set(fp, { size: st.size, day, msgs: fMsgs, tokens: fTokens });
         msgs += fMsgs; tokens += fTokens;
-      }
     }
     state.today = { chats: chats.size, msgs, tokens };
     renderAll(["today"]);
@@ -374,17 +397,9 @@ async function pollBurn() {
   try {
     const now = Date.now();
     const scanCutoff = now - 90 * 60_000;
-    const dirs = await fsp.readdir(PROJECTS_DIR).catch(() => []);
-    for (const d of dirs) {
-      const dir = path.join(PROJECTS_DIR, d);
-      let files;
-      try { files = await fsp.readdir(dir); } catch { continue; }
-      for (const f of files) {
-        if (!f.endsWith(".jsonl")) continue;
-        const fp = path.join(dir, f);
-        let st;
-        try { st = await fsp.stat(fp); } catch { continue; }
-        if (st.mtimeMs < scanCutoff) continue;
+    const files = await walkTranscripts(PROJECTS_DIR, scanCutoff);
+    for (const st of files) {
+      const fp = st.path;
         let rec = hourTracker.get(fp);
         if (!rec || st.size < rec.offset || !rec.seen) rec = { offset: 0, rest: "", events: [], seen: new Map() };
         if (st.size > rec.offset) {
@@ -418,7 +433,6 @@ async function pollBurn() {
         rec.events = rec.events.filter((e) => now - e.t < 65 * 60_000);
         for (const [mid, ev] of rec.seen) if (now - ev.t >= 65 * 60_000) rec.seen.delete(mid);
         hourTracker.set(fp, rec);
-      }
     }
     let tokensHour = 0;
     for (const rec of hourTracker.values()) for (const e of rec.events) if (now - e.t < 3.6e6) tokensHour += e.tok;
@@ -426,6 +440,41 @@ async function pollBurn() {
     renderAll(["burn-rate"]);
   } catch (e) {
     log("burn poll failed:", String(e));
+  }
+}
+
+// ---------- data: Usage key (per-window token volume + estimated cost) ----------
+const usageFileCache = new Map(); // path -> { size, mtimeMs, requests }
+
+async function pollUsageMeter(forceWins) {
+  const wins = new Set();
+  if (forceWins) for (const w of forceWins) wins.add(w);
+  else for (const v of views.values()) if (v.kind === "usage-meter") wins.add(v.settings?.window ?? "today");
+  if (!wins.size) return; // gated: no Usage keys visible
+  const now = Date.now();
+  const cutoff = Math.min(...[...wins].map((w) => windowStartMs(w, now)));
+  try {
+    const files = await walkTranscripts(PROJECTS_DIR, cutoff);
+    const seen = new Set();
+    const lists = [];
+    for (const { path: fp, size, mtimeMs } of files) {
+      seen.add(fp);
+      const c = usageFileCache.get(fp);
+      if (c && c.size === size && c.mtimeMs === mtimeMs) { lists.push(c.requests); continue; }
+      let text;
+      try { text = await fsp.readFile(fp, "utf8"); } catch { continue; }
+      const requests = parseRequests(text);
+      usageFileCache.set(fp, { size, mtimeMs, requests });
+      lists.push(requests);
+    }
+    for (const fp of usageFileCache.keys()) if (!seen.has(fp)) usageFileCache.delete(fp);
+    const merged = mergeById(lists);
+    const out = {};
+    for (const w of wins) out[w] = aggregate(merged, windowStartMs(w, now), state.rates);
+    state.usageMeter = out;
+    renderAll(["usage-meter"]);
+  } catch (e) {
+    log("usage-meter poll failed:", String(e));
   }
 }
 
@@ -455,6 +504,7 @@ function argOf(name) {
 const views = new Map(); // context -> { kind, settings }
 const cycle = new Map(); // context -> { idx, timer }
 const focusIdx = new Map(); // context -> session index
+const usageView = new Map(); // context -> "cost" | "tokens" (Usage key toggle)
 let ws = null;
 let animPhase = 0;
 
@@ -534,6 +584,17 @@ function render(context, kind) {
         { text: `${fmtNum(t?.msgs)} msgs`, color: C.text },
         { text: `${fmtNum(t?.tokens)} tok`, color: C.accent },
       ]));
+    }
+    case "usage-meter": {
+      const s = views.get(context)?.settings ?? {};
+      const win = s.window ?? "today";
+      const header = { today: "TODAY", month: "THIS MONTH", "7day": "7-DAY" }[win] ?? "TODAY";
+      const view = usageView.get(context) ?? "cost";
+      const agg = state.usageMeter?.[win];
+      const suffix = s.label ? " · " + s.label : "";
+      if (!agg) return setImage(context, usageMeterKey(header, "--", "no data", view === "cost"));
+      if (view === "cost") return setImage(context, usageMeterKey(header, "$" + agg.cost.toFixed(2), "cost" + suffix, true));
+      return setImage(context, usageMeterKey(header, fmtNum(agg.tokens), "tokens" + suffix, false));
     }
   }
 }
@@ -864,6 +925,11 @@ function onKeyDown(context, kind) {
     }
     case "open-web": return act(context, platform.openUrl("https://claude.ai/new"));
     case "claude-code": return act(context, platform.openTerminal(DEFAULT_CODE_DIR));
+    case "usage-meter": {
+      usageView.set(context, (usageView.get(context) ?? "cost") === "cost" ? "tokens" : "cost");
+      pollUsageMeter();
+      return render(context, "usage-meter");
+    }
   }
 }
 
@@ -879,6 +945,8 @@ if (process.argv.includes("--selftest")) {
     log("selftest today:", JSON.stringify(state.today));
     await pollBurn();
     log("selftest burn:", JSON.stringify(state.burn), "eta:", sessionEta());
+    await pollUsageMeter(["today", "month", "7day"]);
+    log("selftest usage-meter:", JSON.stringify(state.usageMeter));
     process.exit(0);
   })();
 } else {
@@ -891,6 +959,7 @@ if (process.argv.includes("--selftest")) {
   ws.on("open", () => {
     send({ event: registerEvent, uuid: pluginUUID });
     log("registered with Stream Deck");
+    send({ event: "getGlobalSettings", context: pluginUUID });
     if (Date.now() - state.usageAt > 90_000) pollUsage();
     pollSessions();
     pollToday();
@@ -905,13 +974,18 @@ if (process.argv.includes("--selftest")) {
       views.set(context, { kind: kindOf(action), settings: msg.payload?.settings ?? {} });
       setTitle(context);
       render(context, kindOf(action));
+      if (kindOf(action) === "usage-meter") pollUsageMeter();
     } else if (event === "willDisappear") {
       views.delete(context);
       cycle.delete(context);
       focusIdx.delete(context);
+      usageView.delete(context);
     } else if (event === "didReceiveSettings" && action) {
       const v = views.get(context);
-      if (v) { v.settings = msg.payload?.settings ?? {}; render(context, v.kind); }
+      if (v) { v.settings = msg.payload?.settings ?? {}; render(context, v.kind); if (v.kind === "usage-meter") pollUsageMeter(); }
+    } else if (event === "didReceiveGlobalSettings") {
+      state.rates = msg.payload?.settings?.rates ?? {};
+      pollUsageMeter();
     } else if (event === "sendToPlugin" && action) {
       if (msg.payload?.cmd === "getModels") {
         send({ event: "sendToPropertyInspector", context, payload: { models: (state.usage?.models ?? []).map((m) => m.name) } });
@@ -926,6 +1000,7 @@ if (process.argv.includes("--selftest")) {
   setInterval(pollToday, 300_000);
   pollBurn();
   setInterval(pollBurn, 60_000);
+  setInterval(pollUsageMeter, 60_000);
   // Animation ticker: busy-session dots + red pulse on gauges at 90%+
   setInterval(() => {
     animPhase = (animPhase + 1) % 3;

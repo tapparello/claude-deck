@@ -1,7 +1,7 @@
 {
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
   "Name": "Claude Deck",
-  "Version": "1.1.0.0",
+  "Version": "1.2.0.0",
   "Author": "Brantley",
   "Description": "Live Claude usage limits, running Claude Code sessions, and quick-launch keys for Claude Desktop.",
   "UUID": "com.technicallybrantley.claude-deck",
@@ -161,6 +161,17 @@
       "Controllers": ["Keypad"],
       "UserTitleEnabled": false,
       "States": [{ "Image": "imgs/custom", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.technicallybrantley.claude-deck.usage-meter",
+      "Name": "Usage",
+      "Tooltip": "Local Claude Code token volume + estimated cost for a time window. Press to toggle cost/tokens; pick the window in settings.",
+      "Icon": "imgs/usage",
+      "PropertyInspectorPath": "pi/pi.html",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/usage", "ShowTitle": false }]
     }
   ]
 }

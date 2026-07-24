@@ -7,6 +7,11 @@
   .item { margin-bottom: 10px; }
   label { display: block; margin-bottom: 4px; color: #969696; }
   input[type=text], textarea, select { width: 100%; box-sizing: border-box; background: #3d3d3d; border: 1px solid #555; color: #eee; border-radius: 4px; padding: 6px; font-size: 13px; }
+  input[type=number] { width: 100%; box-sizing: border-box; background: #3d3d3d; border: 1px solid #555; color: #eee; border-radius: 4px; padding: 6px; font-size: 13px; }
+  .rateshead { color: #969696; margin: 12px 0 4px; font-weight: 600; }
+  .raterow { display: grid; grid-template-columns: 64px 1fr 1fr; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .raterow span { color: #969696; }
+  .cap { color: #7a7a7a; font-size: 11px; margin-top: 8px; }
   textarea { height: 70px; resize: vertical; }
   .chk { display: flex; align-items: center; gap: 6px; color: #d8d8d8; }
 </style>
@@ -14,7 +19,8 @@
 <body>
 <div id="form"></div>
 <script>
-let ws, piUuid, settings = {}, action = "", models = [];
+let ws, piUuid, settings = {}, action = "", models = [], gs = {}, gsReady = false;
+const RATE_DEFAULTS = { opus: [5, 25], sonnet: [3, 15], haiku: [1, 5], fable: [10, 50] };
 const FIELDS = {
   "com.technicallybrantley.claude-deck.usage-model": [
     { key: "model", type: "modelselect", label: "Model to display" },
@@ -35,6 +41,14 @@ const FIELDS = {
   "com.technicallybrantley.claude-deck.custom": [
     { key: "label", type: "text", label: "Button label" },
     { key: "command", type: "text", label: "Open (app path, URL, or folder)" },
+  ],
+  "com.technicallybrantley.claude-deck.usage-meter": [
+    { key: "window", type: "select", label: "Time window", default: "today", options: [
+      { value: "today", label: "Today" },
+      { value: "month", label: "Month-to-date" },
+      { value: "7day", label: "7-day" },
+    ] },
+    { key: "label", type: "text", label: "Button label (optional)" },
   ],
 };
 function save() { ws.send(JSON.stringify({ event: "setSettings", context: piUuid, payload: settings })); }
@@ -62,6 +76,20 @@ function build() {
       if (s.selectedIndex < 0) s.value = "";
       s.onchange = () => { settings[f.key] = s.value; save(); };
       div.append(l, s);
+    } else if (f.type === "select") {
+      const l = document.createElement("label");
+      l.textContent = f.label;
+      const sel = document.createElement("select");
+      for (const o of f.options) {
+        const opt = document.createElement("option");
+        opt.value = o.value;
+        opt.textContent = o.label;
+        sel.append(opt);
+      }
+      sel.value = settings[f.key] ?? f.default ?? "";
+      if (sel.selectedIndex < 0) sel.value = f.default ?? (sel.options[0] ? sel.options[0].value : "");
+      sel.onchange = () => { settings[f.key] = sel.value; save(); };
+      div.append(l, sel);
     } else if (f.type === "checkbox") {
       const l = document.createElement("label");
       l.className = "chk";
@@ -82,6 +110,38 @@ function build() {
     }
     form.append(div);
   }
+  if (action === "com.technicallybrantley.claude-deck.usage-meter") buildRates();
+}
+function buildRates() {
+  let box = document.getElementById("rates");
+  if (!box) { box = document.createElement("div"); box.id = "rates"; document.getElementById("form").append(box); }
+  box.innerHTML = "";
+  const h = document.createElement("div"); h.className = "rateshead"; h.textContent = "Cost rates — shared ($/M tokens)"; box.append(h);
+  const rates = gs.rates ?? {};
+  for (const fam of ["opus", "sonnet", "haiku", "fable"]) {
+    const row = document.createElement("div"); row.className = "raterow";
+    const label = document.createElement("span"); label.textContent = fam; row.append(label);
+    ["in", "out"].forEach((io, idx) => {
+      const inp = document.createElement("input");
+      inp.type = "number"; inp.step = "any"; inp.min = "0";
+      inp.placeholder = String(RATE_DEFAULTS[fam][idx]);
+      const cur = rates[fam] ? rates[fam][io] : undefined;
+      inp.value = typeof cur === "number" ? String(cur) : "";
+      inp.onchange = () => {
+        if (!gsReady) return;
+        gs.rates = gs.rates ?? {};
+        gs.rates[fam] = gs.rates[fam] ?? {};
+        const n = parseFloat(inp.value);
+        if (Number.isFinite(n) && n >= 0) gs.rates[fam][io] = n; else delete gs.rates[fam][io];
+        ws.send(JSON.stringify({ event: "setGlobalSettings", context: piUuid, payload: gs }));
+      };
+      row.append(inp);
+    });
+    box.append(row);
+  }
+  const cap = document.createElement("div"); cap.className = "cap";
+  cap.textContent = "Shared across all Usage keys. Blank = default. Cost is still an estimate.";
+  box.append(cap);
 }
 function connectElgatoStreamDeckSocket(port, uuid, evt, info, actionInfo) {
   piUuid = uuid;
@@ -95,10 +155,19 @@ function connectElgatoStreamDeckSocket(port, uuid, evt, info, actionInfo) {
     if (action === "com.technicallybrantley.claude-deck.usage-model") {
       ws.send(JSON.stringify({ event: "sendToPlugin", action, context: piUuid, payload: { cmd: "getModels" } }));
     }
+    if (action === "com.technicallybrantley.claude-deck.usage-meter") {
+      ws.send(JSON.stringify({ event: "getGlobalSettings", context: piUuid }));
+    }
   };
   ws.onmessage = (e) => {
     let m;
     try { m = JSON.parse(e.data); } catch { return; }
+    if (m.event === "didReceiveGlobalSettings") {
+      gs = m.payload?.settings ?? {};
+      gsReady = true;
+      if (action === "com.technicallybrantley.claude-deck.usage-meter") buildRates();
+      return;
+    }
     if (m.event === "sendToPropertyInspector" && Array.isArray(m.payload?.models)) {
       models = m.payload.models;
       build();

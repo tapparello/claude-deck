@@ -127,6 +127,26 @@ refreshed/cached from an interactive login elsewhere in the meantime). If
 ask the user to run it themselves (they can do so live via the `!`-prefixed
 command passthrough in Claude Code).
 
+## Usage key + recursive transcript walk (added 2026-07)
+
+- `src/usage.js` — pure helpers (`windowStartMs`, `rateFor`/`estimateCost`,
+  `parseRequests`, `mergeById`, `aggregate`) with `node:test` tests in
+  `test/usage.test.js`. Cost is an **estimate** from a standard per-model rate
+  table (family-prefix match); always shown with an `est` marker.
+- `walkTranscripts(dir, cutoffMs)` in `plugin.js` walks `~/.claude/projects`
+  **recursively** (incl. `<uuid>/subagents/`). `pollToday`/`pollBurn` were
+  switched to it — they previously scanned one level and undercounted subagent
+  usage by ~half. Their numbers are correspondingly higher now (a fix, not a
+  regression).
+- `pollUsageMeter()` builds one globally-deduped request set (max per
+  `message.id`) and aggregates per window; it's gated on ≥1 visible `usage-meter`
+  key and scans only the earliest window in use. Per-file cache keyed by
+  `(size, mtime)`.
+- The `usage-meter` action is cross-platform (pure data) and needs no
+  permissions.
+- Note: `pollToday` dedups token totals **per file**, while `pollUsageMeter` dedups **globally** (`mergeById`). If one `message.id` appears in multiple transcripts (forked/resumed sessions), the Today key can read slightly higher than a "today" Usage key. The Usage key's global dedup is the more accurate; the difference is usually nil (ids are unique per file).
+- Cost rates are user-overridable via **Stream Deck global settings** (`{rates:{opus:{in,out},…}}`), edited in the Usage key's Property Inspector (a grid bound to `getGlobalSettings`/`setGlobalSettings`, not the per-key `setSettings`). The plugin loads them on `getGlobalSettings` at register + every `didReceiveGlobalSettings` into `state.rates`, threaded into `aggregate`→`estimateCost`→`rateFor` (family-prefix, blank→default via `validNum`+`??`; `0` is a valid free rate). Cache multipliers (0.1×/1.25×) are not configurable; the `est` marker stays. Note: `Version` stays `1.2.0.0` — rates fold into that still-unshipped version, so the standing "bump Version on behavior change" rule doesn't apply here.
+
 ## Things NOT to do
 
 - Don't hand-edit `bin/plugin.mjs` — it's regenerated and your edit will

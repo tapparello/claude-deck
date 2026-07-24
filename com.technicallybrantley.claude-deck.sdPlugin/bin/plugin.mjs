@@ -3835,6 +3835,95 @@ function focusStrategyForBundle(bundle) {
   return "app";
 }
 
+// src/usage.js
+function windowStartMs(kind, now) {
+  if (kind === "7day") return now - 7 * 24 * 3600 * 1e3;
+  const d = new Date(now);
+  if (kind === "month") d.setDate(1);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+var RATES = { opus: [5, 25], sonnet: [3, 15], haiku: [1, 5], fable: [10, 50] };
+function validNum(v) {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : void 0;
+}
+function rateFor(model, overrides) {
+  const m = String(model ?? "").toLowerCase();
+  let fam = null;
+  if (m.includes("opus")) fam = "opus";
+  else if (m.includes("sonnet")) fam = "sonnet";
+  else if (m.includes("haiku")) fam = "haiku";
+  else if (m.includes("fable") || m.includes("mythos")) fam = "fable";
+  if (!fam) return null;
+  const [dIn, dOut] = RATES[fam];
+  const o = overrides?.[fam];
+  return [validNum(o?.in) ?? dIn, validNum(o?.out) ?? dOut];
+}
+function estimateCost(model, tok, overrides) {
+  const r = rateFor(model, overrides);
+  if (!r) return 0;
+  const [inR, outR] = r;
+  const t = tok || {};
+  return ((t.in || 0) * inR + (t.out || 0) * outR + (t.cacheRead || 0) * 0.1 * inR + (t.cacheCreate || 0) * 1.25 * inR) / 1e6;
+}
+function totalOf(tok) {
+  return tok.in + tok.out + tok.cacheRead + tok.cacheCreate;
+}
+function parseRequests(text) {
+  const byId = /* @__PURE__ */ new Map();
+  const noId = [];
+  for (const line of String(text ?? "").split("\n")) {
+    if (!line) continue;
+    let j;
+    try {
+      j = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (j.type !== "assistant") continue;
+    const u = j.message?.usage;
+    if (!u || !j.timestamp) continue;
+    const tok = {
+      in: u.input_tokens || 0,
+      out: u.output_tokens || 0,
+      cacheRead: u.cache_read_input_tokens || 0,
+      cacheCreate: u.cache_creation_input_tokens || 0
+    };
+    const rec = { id: j.message?.id ?? j.requestId ?? null, t: new Date(j.timestamp).getTime(), model: j.message?.model ?? "", tok };
+    if (rec.id == null) {
+      noId.push(rec);
+      continue;
+    }
+    const prev = byId.get(rec.id);
+    if (!prev || totalOf(tok) > totalOf(prev.tok)) byId.set(rec.id, rec);
+  }
+  return [...byId.values(), ...noId];
+}
+function mergeById(lists) {
+  const byId = /* @__PURE__ */ new Map();
+  const noId = [];
+  for (const list of lists) {
+    for (const r of list) {
+      if (r.id == null) {
+        noId.push(r);
+        continue;
+      }
+      const prev = byId.get(r.id);
+      if (!prev || totalOf(r.tok) > totalOf(prev.tok)) byId.set(r.id, r);
+    }
+  }
+  return [...byId.values(), ...noId];
+}
+function aggregate(requests, startMs, overrides) {
+  let tokens = 0, cost = 0;
+  for (const r of requests) {
+    if (r.t < startMs) continue;
+    tokens += totalOf(r.tok);
+    cost += estimateCost(r.model, r.tok, overrides);
+  }
+  return { tokens, cost };
+}
+
 // src/plugin.js
 var IS_MAC = process.platform === "darwin";
 var PLUGIN_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -3937,6 +4026,14 @@ function burnKey(tokensHour, sub) {
     <text x="72" y="104" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="16" fill="${C.dim}">tok/hr</text>
     <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub ?? "")}</text>`);
 }
+function usageMeterKey(header, big, sub, isCost) {
+  const dim = String(big) === "--";
+  return svgWrap(`
+    <text x="14" y="27" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(header)}</text>
+    <text x="72" y="84" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${String(big).length > 6 ? 30 : 40}" font-weight="700" fill="${dim ? C.dim : C.accent}">${esc(big)}</text>
+    ${isCost && !dim ? `<text x="130" y="58" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" fill="${C.dim}">est</text>` : ""}
+    <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub)}</text>`);
+}
 function labelKey(title, label, sub, accent = C.accent) {
   const text = String(label ?? "").trim() || "\u2014";
   const words = text.split(/\s+/);
@@ -3986,7 +4083,8 @@ var state = {
   today: null,
   burn: null,
   pctHistory: [],
-  loggedRaw: false
+  loggedRaw: false,
+  rates: {}
 };
 function pickBucket(o) {
   if (!o || typeof o !== "object") return null;
@@ -4107,6 +4205,35 @@ async function pollSessions() {
     log("sessions poll failed:", String(e));
   }
 }
+async function walkTranscripts(dir, cutoffMs) {
+  const out = [];
+  async function rec(d) {
+    let entries;
+    try {
+      entries = await fsp.readdir(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) {
+        await rec(p);
+        continue;
+      }
+      if (!e.name.endsWith(".jsonl")) continue;
+      let st;
+      try {
+        st = await fsp.stat(p);
+      } catch {
+        continue;
+      }
+      if (st.mtimeMs < cutoffMs) continue;
+      out.push({ path: p, size: st.size, mtimeMs: st.mtimeMs });
+    }
+  }
+  await rec(dir);
+  return out;
+}
 var fileCache = /* @__PURE__ */ new Map();
 var localDay = (ts) => {
   const d = new Date(ts);
@@ -4119,66 +4246,49 @@ async function pollToday() {
     dayStart.setHours(0, 0, 0, 0);
     let msgs = 0, tokens = 0;
     const chats = /* @__PURE__ */ new Set();
-    const dirs = await fsp.readdir(PROJECTS_DIR).catch(() => []);
-    for (const d of dirs) {
-      const dir = path.join(PROJECTS_DIR, d);
-      let files;
+    const files = await walkTranscripts(PROJECTS_DIR, dayStart.getTime());
+    for (const st of files) {
+      const fp = st.path;
+      if (!fp.split(path.sep).includes("subagents")) chats.add(fp);
+      const cached = fileCache.get(fp);
+      if (cached && cached.size === st.size && cached.day === day) {
+        msgs += cached.msgs;
+        tokens += cached.tokens;
+        continue;
+      }
+      let fMsgs = 0, fTokens = 0;
       try {
-        files = await fsp.readdir(dir);
+        const text = await fsp.readFile(fp, "utf8");
+        const reqTok = /* @__PURE__ */ new Map();
+        const seenMsg = /* @__PURE__ */ new Set();
+        for (const line of text.split("\n")) {
+          if (!line) continue;
+          let j;
+          try {
+            j = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (!j.timestamp || localDay(j.timestamp) !== day) continue;
+          const mid = j.message?.id ?? j.requestId;
+          if (j.type === "user") fMsgs++;
+          else if (j.type === "assistant" && (!mid || !seenMsg.has(mid))) {
+            if (mid) seenMsg.add(mid);
+            fMsgs++;
+          }
+          const u = j.message?.usage;
+          if (!u) continue;
+          const tok = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+          if (mid) reqTok.set(mid, Math.max(reqTok.get(mid) ?? 0, tok));
+          else fTokens += tok;
+        }
+        for (const tok of reqTok.values()) fTokens += tok;
       } catch {
         continue;
       }
-      for (const f of files) {
-        if (!f.endsWith(".jsonl")) continue;
-        const fp = path.join(dir, f);
-        let st;
-        try {
-          st = await fsp.stat(fp);
-        } catch {
-          continue;
-        }
-        if (st.mtimeMs < dayStart.getTime()) continue;
-        chats.add(fp);
-        const cached = fileCache.get(fp);
-        if (cached && cached.size === st.size && cached.day === day) {
-          msgs += cached.msgs;
-          tokens += cached.tokens;
-          continue;
-        }
-        let fMsgs = 0, fTokens = 0;
-        try {
-          const text = await fsp.readFile(fp, "utf8");
-          const reqTok = /* @__PURE__ */ new Map();
-          const seenMsg = /* @__PURE__ */ new Set();
-          for (const line of text.split("\n")) {
-            if (!line) continue;
-            let j;
-            try {
-              j = JSON.parse(line);
-            } catch {
-              continue;
-            }
-            if (!j.timestamp || localDay(j.timestamp) !== day) continue;
-            const mid = j.message?.id ?? j.requestId;
-            if (j.type === "user") fMsgs++;
-            else if (j.type === "assistant" && (!mid || !seenMsg.has(mid))) {
-              if (mid) seenMsg.add(mid);
-              fMsgs++;
-            }
-            const u = j.message?.usage;
-            if (!u) continue;
-            const tok = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-            if (mid) reqTok.set(mid, Math.max(reqTok.get(mid) ?? 0, tok));
-            else fTokens += tok;
-          }
-          for (const tok of reqTok.values()) fTokens += tok;
-        } catch {
-          continue;
-        }
-        fileCache.set(fp, { size: st.size, day, msgs: fMsgs, tokens: fTokens });
-        msgs += fMsgs;
-        tokens += fTokens;
-      }
+      fileCache.set(fp, { size: st.size, day, msgs: fMsgs, tokens: fTokens });
+      msgs += fMsgs;
+      tokens += fTokens;
     }
     state.today = { chats: chats.size, msgs, tokens };
     renderAll(["today"]);
@@ -4191,66 +4301,49 @@ async function pollBurn() {
   try {
     const now = Date.now();
     const scanCutoff = now - 90 * 6e4;
-    const dirs = await fsp.readdir(PROJECTS_DIR).catch(() => []);
-    for (const d of dirs) {
-      const dir = path.join(PROJECTS_DIR, d);
-      let files;
-      try {
-        files = await fsp.readdir(dir);
-      } catch {
-        continue;
-      }
-      for (const f of files) {
-        if (!f.endsWith(".jsonl")) continue;
-        const fp = path.join(dir, f);
-        let st;
+    const files = await walkTranscripts(PROJECTS_DIR, scanCutoff);
+    for (const st of files) {
+      const fp = st.path;
+      let rec = hourTracker.get(fp);
+      if (!rec || st.size < rec.offset || !rec.seen) rec = { offset: 0, rest: "", events: [], seen: /* @__PURE__ */ new Map() };
+      if (st.size > rec.offset) {
+        const fh = await fsp.open(fp, "r");
         try {
-          st = await fsp.stat(fp);
-        } catch {
-          continue;
-        }
-        if (st.mtimeMs < scanCutoff) continue;
-        let rec = hourTracker.get(fp);
-        if (!rec || st.size < rec.offset || !rec.seen) rec = { offset: 0, rest: "", events: [], seen: /* @__PURE__ */ new Map() };
-        if (st.size > rec.offset) {
-          const fh = await fsp.open(fp, "r");
-          try {
-            const len = st.size - rec.offset;
-            const buf = Buffer.alloc(len);
-            await fh.read(buf, 0, len, rec.offset);
-            rec.offset = st.size;
-            const lines = (rec.rest + buf.toString("utf8")).split("\n");
-            rec.rest = lines.pop() ?? "";
-            for (const line of lines) {
-              if (!line) continue;
-              let j;
-              try {
-                j = JSON.parse(line);
-              } catch {
-                continue;
-              }
-              const u = j.message?.usage;
-              if (!u || !j.timestamp) continue;
-              const tok = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-              if (!tok) continue;
-              const mid = j.message?.id ?? j.requestId;
-              const ev = mid && rec.seen.get(mid);
-              if (ev) {
-                ev.tok = Math.max(ev.tok, tok);
-                continue;
-              }
-              const e = { t: new Date(j.timestamp).getTime(), tok };
-              if (mid) rec.seen.set(mid, e);
-              rec.events.push(e);
+          const len = st.size - rec.offset;
+          const buf = Buffer.alloc(len);
+          await fh.read(buf, 0, len, rec.offset);
+          rec.offset = st.size;
+          const lines = (rec.rest + buf.toString("utf8")).split("\n");
+          rec.rest = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line) continue;
+            let j;
+            try {
+              j = JSON.parse(line);
+            } catch {
+              continue;
             }
-          } finally {
-            await fh.close();
+            const u = j.message?.usage;
+            if (!u || !j.timestamp) continue;
+            const tok = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+            if (!tok) continue;
+            const mid = j.message?.id ?? j.requestId;
+            const ev = mid && rec.seen.get(mid);
+            if (ev) {
+              ev.tok = Math.max(ev.tok, tok);
+              continue;
+            }
+            const e = { t: new Date(j.timestamp).getTime(), tok };
+            if (mid) rec.seen.set(mid, e);
+            rec.events.push(e);
           }
+        } finally {
+          await fh.close();
         }
-        rec.events = rec.events.filter((e) => now - e.t < 65 * 6e4);
-        for (const [mid, ev] of rec.seen) if (now - ev.t >= 65 * 6e4) rec.seen.delete(mid);
-        hourTracker.set(fp, rec);
       }
+      rec.events = rec.events.filter((e) => now - e.t < 65 * 6e4);
+      for (const [mid, ev] of rec.seen) if (now - ev.t >= 65 * 6e4) rec.seen.delete(mid);
+      hourTracker.set(fp, rec);
     }
     let tokensHour = 0;
     for (const rec of hourTracker.values()) for (const e of rec.events) if (now - e.t < 36e5) tokensHour += e.tok;
@@ -4258,6 +4351,45 @@ async function pollBurn() {
     renderAll(["burn-rate"]);
   } catch (e) {
     log("burn poll failed:", String(e));
+  }
+}
+var usageFileCache = /* @__PURE__ */ new Map();
+async function pollUsageMeter(forceWins) {
+  const wins = /* @__PURE__ */ new Set();
+  if (forceWins) for (const w of forceWins) wins.add(w);
+  else for (const v of views.values()) if (v.kind === "usage-meter") wins.add(v.settings?.window ?? "today");
+  if (!wins.size) return;
+  const now = Date.now();
+  const cutoff = Math.min(...[...wins].map((w) => windowStartMs(w, now)));
+  try {
+    const files = await walkTranscripts(PROJECTS_DIR, cutoff);
+    const seen = /* @__PURE__ */ new Set();
+    const lists = [];
+    for (const { path: fp, size, mtimeMs } of files) {
+      seen.add(fp);
+      const c = usageFileCache.get(fp);
+      if (c && c.size === size && c.mtimeMs === mtimeMs) {
+        lists.push(c.requests);
+        continue;
+      }
+      let text;
+      try {
+        text = await fsp.readFile(fp, "utf8");
+      } catch {
+        continue;
+      }
+      const requests = parseRequests(text);
+      usageFileCache.set(fp, { size, mtimeMs, requests });
+      lists.push(requests);
+    }
+    for (const fp of usageFileCache.keys()) if (!seen.has(fp)) usageFileCache.delete(fp);
+    const merged = mergeById(lists);
+    const out = {};
+    for (const w of wins) out[w] = aggregate(merged, windowStartMs(w, now), state.rates);
+    state.usageMeter = out;
+    renderAll(["usage-meter"]);
+  } catch (e) {
+    log("usage-meter poll failed:", String(e));
   }
 }
 function sessionEta() {
@@ -4282,6 +4414,7 @@ function argOf(name) {
 var views = /* @__PURE__ */ new Map();
 var cycle = /* @__PURE__ */ new Map();
 var focusIdx = /* @__PURE__ */ new Map();
+var usageView = /* @__PURE__ */ new Map();
 var ws = null;
 var animPhase = 0;
 function send(obj) {
@@ -4355,6 +4488,17 @@ function render(context, kind) {
         { text: `${fmtNum(t?.msgs)} msgs`, color: C.text },
         { text: `${fmtNum(t?.tokens)} tok`, color: C.accent }
       ]));
+    }
+    case "usage-meter": {
+      const s = views.get(context)?.settings ?? {};
+      const win = s.window ?? "today";
+      const header = { today: "TODAY", month: "THIS MONTH", "7day": "7-DAY" }[win] ?? "TODAY";
+      const view = usageView.get(context) ?? "cost";
+      const agg = state.usageMeter?.[win];
+      const suffix = s.label ? " \xB7 " + s.label : "";
+      if (!agg) return setImage(context, usageMeterKey(header, "--", "no data", view === "cost"));
+      if (view === "cost") return setImage(context, usageMeterKey(header, "$" + agg.cost.toFixed(2), "cost" + suffix, true));
+      return setImage(context, usageMeterKey(header, fmtNum(agg.tokens), "tokens" + suffix, false));
     }
   }
 }
@@ -4681,6 +4825,11 @@ function onKeyDown(context, kind) {
       return act(context, platform.openUrl("https://claude.ai/new"));
     case "claude-code":
       return act(context, platform.openTerminal(DEFAULT_CODE_DIR));
+    case "usage-meter": {
+      usageView.set(context, (usageView.get(context) ?? "cost") === "cost" ? "tokens" : "cost");
+      pollUsageMeter();
+      return render(context, "usage-meter");
+    }
   }
 }
 if (process.argv.includes("--selftest")) {
@@ -4694,6 +4843,8 @@ if (process.argv.includes("--selftest")) {
     log("selftest today:", JSON.stringify(state.today));
     await pollBurn();
     log("selftest burn:", JSON.stringify(state.burn), "eta:", sessionEta());
+    await pollUsageMeter(["today", "month", "7day"]);
+    log("selftest usage-meter:", JSON.stringify(state.usageMeter));
     process.exit(0);
   })();
 } else {
@@ -4705,6 +4856,7 @@ if (process.argv.includes("--selftest")) {
   ws.on("open", () => {
     send({ event: registerEvent, uuid: pluginUUID });
     log("registered with Stream Deck");
+    send({ event: "getGlobalSettings", context: pluginUUID });
     if (Date.now() - state.usageAt > 9e4) pollUsage();
     pollSessions();
     pollToday();
@@ -4728,16 +4880,22 @@ if (process.argv.includes("--selftest")) {
       views.set(context, { kind: kindOf(action), settings: msg.payload?.settings ?? {} });
       setTitle(context);
       render(context, kindOf(action));
+      if (kindOf(action) === "usage-meter") pollUsageMeter();
     } else if (event === "willDisappear") {
       views.delete(context);
       cycle.delete(context);
       focusIdx.delete(context);
+      usageView.delete(context);
     } else if (event === "didReceiveSettings" && action) {
       const v = views.get(context);
       if (v) {
         v.settings = msg.payload?.settings ?? {};
         render(context, v.kind);
+        if (v.kind === "usage-meter") pollUsageMeter();
       }
+    } else if (event === "didReceiveGlobalSettings") {
+      state.rates = msg.payload?.settings?.rates ?? {};
+      pollUsageMeter();
     } else if (event === "sendToPlugin" && action) {
       if (msg.payload?.cmd === "getModels") {
         send({ event: "sendToPropertyInspector", context, payload: { models: (state.usage?.models ?? []).map((m) => m.name) } });
@@ -4756,6 +4914,7 @@ if (process.argv.includes("--selftest")) {
   setInterval(pollToday, 3e5);
   pollBurn();
   setInterval(pollBurn, 6e4);
+  setInterval(pollUsageMeter, 6e4);
   setInterval(() => {
     animPhase = (animPhase + 1) % 3;
     const kinds = [];
