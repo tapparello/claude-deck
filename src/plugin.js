@@ -10,6 +10,7 @@ import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle } from "./osa.js";
 import { windowStartMs, parseRequests, mergeById, aggregate } from "./usage.js";
+import { resolveStatusKey, statusEntry, autoOrdinal } from "./status.js";
 
 const IS_MAC = process.platform === "darwin";
 
@@ -51,6 +52,7 @@ const C = {
   warn: "#fbbf24",
   bad: "#f87171",
   track: "#3a3745",
+  info: "#60a5fa", // status: working (blue)
 };
 const pctColor = (p) => (p == null ? C.dim : p >= 85 ? C.bad : p >= 60 ? C.warn : C.ok);
 const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -153,6 +155,30 @@ function labelKey(title, label, sub, accent = C.accent) {
     <text x="14" y="27" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${accent}">${esc(title)}</text>
     ${lineSvg}
     <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub ?? "")}</text>`);
+}
+
+// Per-session status key: project name + state word, tinted by state.
+// st ∈ "working" | "idle" | "none". count>1 shows a collision badge;
+// detail (optional) is a small third line used while cycling collisions.
+function statusKey(name, st, count, detail = "") {
+  const label = { working: "Working", idle: "Idle", none: "no session" }[st] ?? "";
+  const col = st === "working" ? C.info : C.dim;
+  const shown = name || "CLAUDE";
+  const border = st === "working"
+    ? `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.info}" stroke-width="4" opacity="0.9"/>`
+    : `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.track}" stroke-width="3"/>`;
+  const badge = count > 1
+    ? `<circle cx="120" cy="24" r="13" fill="${C.panel}" stroke="${C.track}" stroke-width="1"/><text x="120" y="29" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${count}</text>`
+    : "";
+  const detailSvg = detail
+    ? `<text x="72" y="126" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" fill="${C.dim}">${esc(detail)}</text>`
+    : "";
+  return svgWrap(`
+    ${border}
+    ${badge}
+    <text x="72" y="70" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="26" font-weight="700" fill="${st === "none" ? C.dim : C.text}">${esc(String(shown).slice(0, 11))}</text>
+    <text x="72" y="100" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="18" font-weight="600" fill="${col}">${esc(label)}</text>
+    ${detailSvg}`);
 }
 
 // ---------- formatting ----------
@@ -303,7 +329,7 @@ async function pollSessions() {
     out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
     const changed = JSON.stringify(out.map((s) => [s.pid, s.status])) !== JSON.stringify(state.sessions.map((s) => [s.pid, s.status]));
     state.sessions = out;
-    if (changed) renderAll(["sessions", "focus-session"]);
+    if (changed) renderAll(["sessions", "focus-session", "approver-status"]);
   } catch (e) {
     log("sessions poll failed:", String(e));
   }
@@ -596,11 +622,35 @@ function render(context, kind) {
       if (view === "cost") return setImage(context, usageMeterKey(header, "$" + agg.cost.toFixed(2), "cost" + suffix, true));
       return setImage(context, usageMeterKey(header, fmtNum(agg.tokens), "tokens" + suffix, false));
     }
+    case "approver-status": {
+      const s = views.get(context)?.settings ?? {};
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context));
+      const cy = cycle.get(context);
+      const cycling = !!(cy && cy.idx >= 0);
+      const entry = statusEntry(resolved, cycling ? cy.idx : null);
+      const explicit = !!(s.project && s.project.trim());
+      const name = s.label || entry.name || (s.project ?? "");
+      let detail = "";
+      if (cycling && resolved.count > 1) {
+        const parent = entry.cwd ? path.basename(path.dirname(entry.cwd)) : "";
+        detail = `${cy.idx + 1}/${resolved.count}${parent ? " · " + parent : ""}`;
+      }
+      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail));
+    }
   }
 }
 
 function renderAll(kinds) {
   for (const [context, v] of views) if (kinds.includes(v.kind)) render(context, v.kind);
+}
+
+// Position of this auto (unbound) status key among all visible auto status
+// keys — delegated to the pure autoOrdinal() so the ordering is testable.
+function autoOrdinalFor(context) {
+  const autos = [...views.entries()]
+    .filter(([, v]) => v.kind === "approver-status" && !(v.settings?.project && v.settings.project.trim()))
+    .map(([ctx]) => ctx);
+  return autoOrdinal(autos, context);
 }
 
 // ---------- platform adapter ----------
@@ -929,6 +979,17 @@ function onKeyDown(context, kind) {
       usageView.set(context, (usageView.get(context) ?? "cost") === "cost" ? "tokens" : "cost");
       pollUsageMeter();
       return render(context, "usage-meter");
+    }
+    case "approver-status": {
+      const s = views.get(context)?.settings ?? {};
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context));
+      if (resolved.count <= 1) return showOk(context);
+      const cy = cycle.get(context) ?? { idx: resolved.index, timer: null };
+      cy.idx = (cy.idx + 1) % resolved.count;
+      if (cy.timer) clearTimeout(cy.timer);
+      cy.timer = setTimeout(() => { cycle.set(context, { idx: -1, timer: null }); render(context, "approver-status"); }, 4000);
+      cycle.set(context, cy);
+      return render(context, "approver-status");
     }
   }
 }
