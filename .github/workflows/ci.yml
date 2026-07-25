@@ -19,9 +19,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           # 20 is what Stream Deck's bundled runtime provides (manifest
           # Nodejs.Version), so that is the version that actually matters.

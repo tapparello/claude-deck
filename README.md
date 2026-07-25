@@ -1,5 +1,7 @@
 # Claude Deck — Stream Deck plugin
 
+[![CI](https://github.com/tapparello/claude-deck/actions/workflows/ci.yml/badge.svg)](https://github.com/tapparello/claude-deck/actions/workflows/ci.yml)
+
 Live Claude usage gauges, running Claude Code sessions, per-session status, and quick-launch keys for the Elgato Stream Deck (Windows and macOS).
 
 The usage gauges show the **same session/weekly percentages Claude Desktop and Claude Code's `/usage` display** — pulled with your local Claude sign-in, refreshed every couple of minutes. No extra login, nothing leaves your machine.
