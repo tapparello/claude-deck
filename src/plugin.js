@@ -683,7 +683,10 @@ function render(context, kind) {
       const s = views.get(context)?.settings ?? {};
       const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoSlotFor(context), Date.now(), state.activity);
       const cy = cycle.get(context);
-      const cycling = !!(cy && cy.idx >= 0);
+      // Only honour an in-flight cycle while the key opts into cycling, so
+      // unchecking the box takes effect immediately instead of leaving the key
+      // parked on a cycled session.
+      const cycling = !!s.cycle && !!(cy && cy.idx >= 0);
       const entry = statusEntry(resolved, cycling ? cy.idx : null);
       const explicit = !!(s.project && s.project.trim());
       const name = s.label || entry.name || (s.project ?? "");
@@ -1074,13 +1077,16 @@ function onKeyDown(context, kind) {
     }
     case "approver-status": {
       // Press takes you to that session's window — the point of seeing "Needs
-      // approval" is to go answer it. With several candidates, each press
-      // advances to the next one and focuses that.
+      // approval" is to go answer it. Opt in per key ("Press cycles through
+      // sessions") to instead walk the candidate list on each press; off by
+      // default so a row of keys keeps its fixed slots (1st/2nd/3rd busiest),
+      // which is the point of having several of them.
       const s = views.get(context)?.settings ?? {};
       const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoSlotFor(context), Date.now(), state.activity);
       if (!resolved.count) return showAlert(context);
+      const cycling = !!s.cycle && resolved.count > 1;
       let idx = resolved.index;
-      if (resolved.count > 1) {
+      if (cycling) {
         const cy = cycle.get(context) ?? { idx: resolved.index - 1, timer: null };
         cy.idx = (cy.idx + 1) % resolved.count;
         if (cy.timer) clearTimeout(cy.timer);
@@ -1088,7 +1094,7 @@ function onKeyDown(context, kind) {
         cycle.set(context, cy);
         idx = cy.idx;
       }
-      const entry = statusEntry(resolved, resolved.count > 1 ? idx : null);
+      const entry = statusEntry(resolved, cycling ? idx : null);
       render(context, "approver-status");
       return actQuiet(context, platform.focusWindow(sessionByPid(entry.pid)));
     }
