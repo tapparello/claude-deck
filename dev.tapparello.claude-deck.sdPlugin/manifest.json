@@ -1,7 +1,7 @@
 {
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
   "Name": "Claude Deck",
-  "Version": "1.6.0.0",
+  "Version": "1.7.0.0",
   "Author": "Cristiano Tapparello",
   "Description": "Live Claude usage limits, running Claude Code sessions, and quick-launch keys for Claude Desktop.",
   "UUID": "dev.tapparello.claude-deck",
@@ -195,6 +195,39 @@
       "SupportedInMultiActions": false,
       "UserTitleEnabled": false,
       "States": [{ "Image": "imgs/waiting", "ShowTitle": false }]
+    },
+    {
+      "UUID": "dev.tapparello.claude-deck.approve-allow",
+      "Name": "Claude Allow",
+      "Tooltip": "Approve the pending Claude Code permission prompt (same as pressing 1 in the terminal). Shows the command it would allow. Needs the one-time hook setup in this key's settings.",
+      "Icon": "imgs/approve-allow",
+      "Controllers": ["Keypad"],
+      "PropertyInspectorPath": "pi/pi.html",
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/approve-allow", "ShowTitle": false }]
+    },
+    {
+      "UUID": "dev.tapparello.claude-deck.approve-always",
+      "Name": "Claude Always Allow",
+      "Tooltip": "Approve and stop asking, using Claude Code's own suggested rule (same as pressing 2 in the terminal). The key shows the rule it would save. Greys out when no safe rule is offered.",
+      "Icon": "imgs/approve-always",
+      "Controllers": ["Keypad"],
+      "PropertyInspectorPath": "pi/pi.html",
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/approve-always", "ShowTitle": false }]
+    },
+    {
+      "UUID": "dev.tapparello.claude-deck.approve-deny",
+      "Name": "Claude Deny",
+      "Tooltip": "Refuse the pending Claude Code permission prompt (same as pressing 3 in the terminal). The turn continues and Claude adapts.",
+      "Icon": "imgs/approve-deny",
+      "Controllers": ["Keypad"],
+      "PropertyInspectorPath": "pi/pi.html",
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/approve-deny", "ShowTitle": false }]
     }
   ]
 }

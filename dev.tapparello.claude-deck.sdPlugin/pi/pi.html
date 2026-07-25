@@ -22,6 +22,7 @@
 let ws, piUuid, settings = {}, action = "", models = [], gs = {}, gsReady = false;
 const RATE_DEFAULTS = { opus: [5, 25], sonnet: [3, 15], haiku: [1, 5], fable: [10, 50] };
 const BUDGET_FIELD = { key: "budget", type: "number", label: "Budget $ for this window (optional - turns the key into a % ring)" };
+const INSTALL_FIELD = { key: "_install", type: "install", label: "One-time setup - merge into the \"hooks\" object of ~/.claude/settings.json, then restart Claude Code" };
 const FIELDS = {
   "dev.tapparello.claude-deck.usage-session": [BUDGET_FIELD],
   "dev.tapparello.claude-deck.usage-weekly": [BUDGET_FIELD],
@@ -58,6 +59,19 @@ const FIELDS = {
     { key: "label", type: "text", label: "Button label (optional)" },
     { key: "project", type: "text", label: "Project to track (folder name, blank = auto)" },
     { key: "cycle", type: "checkbox", label: "Press cycles through sessions (off = this key keeps its own slot)" },
+  ],
+  "dev.tapparello.claude-deck.approve-allow": [
+    { key: "label", type: "text", label: "Button label (optional)" },
+    INSTALL_FIELD,
+  ],
+  "dev.tapparello.claude-deck.approve-always": [
+    { key: "label", type: "text", label: "Button label (optional)" },
+    { key: "sessionOnly", type: "checkbox", label: "Remember for this session only (do not write project settings)" },
+    INSTALL_FIELD,
+  ],
+  "dev.tapparello.claude-deck.approve-deny": [
+    { key: "label", type: "text", label: "Button label (optional)" },
+    INSTALL_FIELD,
   ],
 };
 function save() { ws.send(JSON.stringify({ event: "setSettings", context: piUuid, payload: settings })); }
@@ -99,6 +113,23 @@ function build() {
       if (sel.selectedIndex < 0) sel.value = f.default ?? (sel.options[0] ? sel.options[0].value : "");
       sel.onchange = () => { settings[f.key] = sel.value; save(); };
       div.append(l, sel);
+    } else if (f.type === "install") {
+      const lab = document.createElement("label");
+      lab.textContent = f.label;
+      const ta = document.createElement("textarea");
+      ta.readOnly = true;
+      ta.rows = 9;
+      ta.id = "installSnippet";
+      ta.value = "loading…";
+      const btn = document.createElement("button");
+      btn.textContent = "Copy";
+      btn.onclick = () => { ta.select(); document.execCommand("copy"); btn.textContent = "Copied"; setTimeout(() => (btn.textContent = "Copy"), 1200); };
+      const note = document.createElement("div");
+      note.id = "installNote";
+      note.style.cssText = "font-size:11px;color:#9b96a8;margin-top:4px";
+      note.textContent = "A fragment: add it inside the \"hooks\" object, do not replace the file. The URL contains a secret unique to this install - treat it like a password.";
+      div.append(lab, ta, btn, note);
+      ws.send(JSON.stringify({ event: "sendToPlugin", action, context: piUuid, payload: { cmd: "getInstall" } }));
     } else if (f.type === "checkbox") {
       const l = document.createElement("label");
       l.className = "chk";
@@ -196,6 +227,15 @@ function connectElgatoStreamDeckSocket(port, uuid, evt, info, actionInfo) {
     if (m.event === "sendToPropertyInspector" && Array.isArray(m.payload?.models)) {
       models = m.payload.models;
       build();
+    }
+    if (m.event === "sendToPropertyInspector" && m.payload?.install) {
+      const ta = document.getElementById("installSnippet");
+      const note = document.getElementById("installNote");
+      if (ta) ta.value = m.payload.install.snippet;
+      if (note && m.payload.install.error) {
+        note.textContent = `Hook server problem: ${m.payload.install.error}. The keys will read "port busy" until it is free.`;
+        note.style.color = "#f87171";
+      }
     }
   };
 }
