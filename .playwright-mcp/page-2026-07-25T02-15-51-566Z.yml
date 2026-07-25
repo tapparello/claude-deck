@@ -1,0 +1,39 @@
+- generic [active] [ref=e1]:
+  - heading "Claude Status — current shipped" [level=2] [ref=e2]:
+    - text: Claude Status — current
+    - generic [ref=e3]: shipped
+  - generic [ref=e4]:
+    - generic [ref=e5]: working
+    - generic [ref=e8]: needs-approval
+    - generic [ref=e11]: input-needed
+    - generic [ref=e14]: finished
+    - generic [ref=e17]: idle
+  - heading "Claude Status — proposed translucent wash + glow border" [level=2] [ref=e20]:
+    - text: Claude Status — proposed
+    - generic [ref=e21]: translucent wash + glow border
+  - generic [ref=e22]:
+    - generic [ref=e23]: working
+    - generic [ref=e26]: needs-approval
+    - generic [ref=e29]: input-needed
+    - generic [ref=e32]: finished
+    - generic [ref=e35]: idle
+  - heading "Sessions & Focus — current green = working, contradicts the new palette" [level=2] [ref=e38]:
+    - text: Sessions & Focus — current
+    - generic [ref=e39]: green = working, contradicts the new palette
+  - generic [ref=e40]:
+    - generic [ref=e41]: green dots + green text
+    - generic [ref=e44]: green accent
+  - heading "Sessions & Focus — proposed blue = working · amber = needs you" [level=2] [ref=e47]:
+    - text: Sessions & Focus — proposed
+    - generic [ref=e48]: blue = working · amber = needs you
+  - generic [ref=e49]:
+    - generic [ref=e50]: blue while working
+    - generic [ref=e53]: "amber: one needs you"
+    - generic [ref=e56]: all idle
+    - generic [ref=e59]: "Focus: blue"
+    - generic [ref=e62]: "Focus: amber (blocked)"
+  - heading "Claude Waiting — proposed" [level=2] [ref=e65]
+  - generic [ref=e66]:
+    - generic [ref=e67]: nothing pending
+    - generic [ref=e70]: one waiting
+    - generic [ref=e73]: two waiting (badge)

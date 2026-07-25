@@ -53,6 +53,7 @@ const FIELDS = {
   "dev.tapparello.claude-deck.approver-status": [
     { key: "label", type: "text", label: "Button label (optional)" },
     { key: "project", type: "text", label: "Project to track (folder name, blank = auto)" },
+    { key: "cycle", type: "checkbox", label: "Press cycles through sessions (off = this key keeps its own slot)" },
   ],
 };
 function save() { ws.send(JSON.stringify({ event: "setSettings", context: piUuid, payload: settings })); }
