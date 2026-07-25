@@ -91,6 +91,33 @@ export function blockedSessions(sessions, now = Date.now(), activity = null) {
     .sort((a, b) => rank(a, now, activity) - rank(b, now, activity) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || (a.pid ?? 0) - (b.pid ?? 0));
 }
 
+// Compact duration for a key's sub-line: "18s" / "3m" / "1h 20m". Null/absent
+// input yields "" so callers can omit the segment rather than print a bogus age.
+export function fmtShort(ms) {
+  if (ms == null || !isFinite(ms)) return "";
+  const t = Math.max(0, ms);
+  if (t < 60_000) return Math.floor(t / 1000) + "s";
+  const m = Math.floor(t / 60_000);
+  if (m < 60) return m + "m";
+  return Math.floor(m / 60) + "h " + (m % 60) + "m";
+}
+
+// Display-shortened wait reason. The key's detail line is 13px with no
+// truncation, so "permission prompt · 1h 20m" overflowed a 144px key at both
+// ends; the first word carries the meaning. Unknown reasons pass through.
+const WAIT_SHORT = {
+  "permission prompt": "permission",
+  "sandbox request": "sandbox",
+  "worker request": "worker",
+  "input needed": "input",
+  "dialog open": "dialog",
+};
+export function shortWait(reason) {
+  const r = String(reason ?? "").toLowerCase();
+  if (!r) return "";
+  return WAIT_SHORT[r] ?? String(reason);
+}
+
 // Which slot an auto (unbound) Status key occupies, so several such keys show
 // DIFFERENT sessions: slot 0 gets the most urgent, slot 1 the next, and so on.
 //
@@ -145,6 +172,9 @@ export function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(
       // null when the session reports no timestamp at all (VS Code) — otherwise
       // `now - 0` renders as an absurd age like "495817h idle".
       statusAge: s.statusUpdatedAt ?? s.updatedAt ? Math.max(0, now - (s.statusUpdatedAt ?? s.updatedAt)) : null,
+      // When the wait began. statusUpdatedAt ONLY — never the updatedAt fallback,
+      // so every key measures the same wait from the same anchor.
+      waitingSince: s.status === "waiting" && s.statusUpdatedAt ? s.statusUpdatedAt : null,
       cwd: s.cwd ?? "",
       sessionId: s.sessionId ?? null,
       pid: s.pid ?? null,
@@ -161,6 +191,6 @@ export function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(
 // "none" placeholder when nothing is bound.
 export function statusEntry(resolved, cycleIdx = null) {
   const i = cycleIdx != null ? cycleIdx : resolved.index;
-  return resolved.list[i] ?? { name: "", state: "none", waitingFor: "", statusAge: 0, cwd: "", sessionId: null, pid: null };
+  return resolved.list[i] ?? { name: "", state: "none", waitingFor: "", statusAge: 0, waitingSince: null, cwd: "", sessionId: null, pid: null, where: "" };
 }
 

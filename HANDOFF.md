@@ -94,10 +94,11 @@ today/burn, it's a property of the log format.
   `node:test` unit tests in `test/osa.test.js`. Run `npm test`.
 - Deploy on macOS with `./deploy.sh` (bash sibling of `deploy.ps1`); target is
   `~/Library/Application Support/com.elgato.StreamDeck/Plugins/`.
+- **Superseded (2026-07-25):** the notes below once said the Foundry gauges read `n/a` **by design** and must not be "fixed", and that the Foundry answer shipped as a separate key. Both are now **out of date**. `Session 5h` / `Weekly` / `Model Usage` fall back to local transcript spend via `gaugeSource()` in `src/usage.js` — a state machine (`pending | subscription | throttled | local | error`), NOT a presence check, because `pollUsage` sets `usageErr` but never clears `state.usage` and `usageAt` only advances on success, so a stale snapshot would otherwise read as live. Optional per-key `budget` (dollars) turns a fallback key into a % ring; `gaugeKey` clamps the drawn bar at 100%, so an overage is carried in the sub-line. Don't "restore" the n/a behaviour.
 - **Credentials differ by OS:** `readToken()` reads `~/.claude/.credentials.json`
   on Windows and the login **Keychain** (`security -s "Claude Code-credentials"`)
   on macOS, file as fallback. On a Foundry/enterprise Mac there is no consumer
-  token, so the gauges read **n/a** by design — do not "fix" that.
+  token, so the gauges fall back to local spend (see the superseded note above).
 - **Permissions:** Quick Chat / Quick Prompt need Accessibility + Automation
   (System Events); the Claude Code Terminal / Project Terminal keys need
   Automation (Terminal). **Focus Session** resolves the session's host app by
@@ -113,8 +114,8 @@ today/burn, it's a property of the log format.
   degrades gracefully instead of doing nothing. Every `osascript` call is
   time-bounded (`OSA_TIMEOUT_MS` + AppleScript `with timeout`) so a pending
   TCC prompt can't hang a key.
-- **Deferred:** a Foundry-friendly local token/cost usage key (from
-  `~/.claude/usage-data/` or transcript aggregation) — its own plan.
+- **Done:** the Foundry-friendly local usage story shipped twice — first as the
+  `usage-meter` ("Usage") key, then as the gauge fallback described above.
 
 ## Git push quirk observed on this box
 

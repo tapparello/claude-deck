@@ -3857,6 +3857,7 @@ function focusStrategyForBundle(bundle) {
 
 // src/usage.js
 function windowStartMs(kind, now) {
+  if (kind === "5h") return now - 5 * 3600 * 1e3;
   if (kind === "7day") return now - 7 * 24 * 3600 * 1e3;
   const d = new Date(now);
   if (kind === "month") d.setDate(1);
@@ -3867,13 +3868,16 @@ var RATES = { opus: [5, 25], sonnet: [3, 15], haiku: [1, 5], fable: [10, 50] };
 function validNum(v) {
   return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : void 0;
 }
-function rateFor(model, overrides) {
+function familyOf(model) {
   const m = String(model ?? "").toLowerCase();
-  let fam = null;
-  if (m.includes("opus")) fam = "opus";
-  else if (m.includes("sonnet")) fam = "sonnet";
-  else if (m.includes("haiku")) fam = "haiku";
-  else if (m.includes("fable") || m.includes("mythos")) fam = "fable";
+  if (m.includes("opus")) return "opus";
+  if (m.includes("sonnet")) return "sonnet";
+  if (m.includes("haiku")) return "haiku";
+  if (m.includes("fable") || m.includes("mythos")) return "fable";
+  return null;
+}
+function rateFor(model, overrides) {
+  const fam = familyOf(model);
   if (!fam) return null;
   const [dIn, dOut] = RATES[fam];
   const o = overrides?.[fam];
@@ -3935,13 +3939,48 @@ function mergeById(lists) {
   return [...byId.values(), ...noId];
 }
 function aggregate(requests, startMs, overrides) {
-  let tokens = 0, cost = 0;
+  let tokens = 0, cost = 0, inTok = 0, outTok = 0;
   for (const r of requests) {
     if (r.t < startMs) continue;
     tokens += totalOf(r.tok);
+    inTok += r.tok?.in ?? 0;
+    outTok += r.tok?.out ?? 0;
     cost += estimateCost(r.model, r.tok, overrides);
   }
-  return { tokens, cost };
+  return { tokens, cost, in: inTok, out: outTok };
+}
+function aggregateByModel(requests, startMs, overrides) {
+  const by = /* @__PURE__ */ new Map();
+  for (const r of requests ?? []) {
+    if (r.t < startMs) continue;
+    const fam = familyOf(r.model) ?? "other";
+    const cur = by.get(fam) ?? { model: fam, tokens: 0, cost: 0 };
+    cur.tokens += (r.tok?.in ?? 0) + (r.tok?.out ?? 0) + (r.tok?.cacheRead ?? 0) + (r.tok?.cacheCreate ?? 0);
+    cur.cost += estimateCost(r.model, r.tok, overrides);
+    by.set(fam, cur);
+  }
+  return [...by.values()].filter((e) => e.tokens > 0 || e.cost > 0).sort((a, b) => b.cost - a.cost || b.tokens - a.tokens);
+}
+function budgetPct(spend, budget) {
+  const b = Number(budget);
+  if (!Number.isFinite(b) || b <= 0) return null;
+  const s = Number(spend);
+  if (!Number.isFinite(s) || s < 0) return null;
+  return s / b * 100;
+}
+var USAGE_FRESH_MS = 30 * 6e4;
+function hasSubscriptionData(usage) {
+  if (!usage) return false;
+  return !!(usage.fiveHour || usage.weekly || usage.weeklyOpus || usage.scopedPct != null || (usage.models ?? []).length);
+}
+function gaugeSource({ usage, usageErr, usageAt, now }, hasLocal = false) {
+  if (usage == null && !usageErr) return "pending";
+  const fresh = hasSubscriptionData(usage) && now - (usageAt ?? 0) < USAGE_FRESH_MS;
+  if (fresh) return "subscription";
+  if (usageErr && String(usageErr).includes("429")) return "throttled";
+  if (usageErr && String(usageErr).includes("no OAuth token")) return "local";
+  if (usageErr) return "error";
+  return hasLocal ? "local" : "pending";
 }
 
 // src/status.js
@@ -3986,6 +4025,26 @@ var rank = (s, now, activity) => URGENCY[sessionState(s, now, actOf(s, activity)
 function blockedSessions(sessions, now = Date.now(), activity = null) {
   return (sessions ?? []).filter((s) => rank(s, now, activity) <= URGENCY["input-needed"]).sort((a, b) => rank(a, now, activity) - rank(b, now, activity) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || (a.pid ?? 0) - (b.pid ?? 0));
 }
+function fmtShort(ms) {
+  if (ms == null || !isFinite(ms)) return "";
+  const t = Math.max(0, ms);
+  if (t < 6e4) return Math.floor(t / 1e3) + "s";
+  const m = Math.floor(t / 6e4);
+  if (m < 60) return m + "m";
+  return Math.floor(m / 60) + "h " + m % 60 + "m";
+}
+var WAIT_SHORT = {
+  "permission prompt": "permission",
+  "sandbox request": "sandbox",
+  "worker request": "worker",
+  "input needed": "input",
+  "dialog open": "dialog"
+};
+function shortWait(reason) {
+  const r = String(reason ?? "").toLowerCase();
+  if (!r) return "";
+  return WAIT_SHORT[r] ?? String(reason);
+}
 function autoSlot(keys, context) {
   const me = (keys ?? []).find((k) => k.context === context);
   const sorted = (keys ?? []).filter((k) => (k.device ?? null) === (me?.device ?? null)).sort((a, b) => {
@@ -4016,6 +4075,9 @@ function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(), acti
     // null when the session reports no timestamp at all (VS Code) — otherwise
     // `now - 0` renders as an absurd age like "495817h idle".
     statusAge: s.statusUpdatedAt ?? s.updatedAt ? Math.max(0, now - (s.statusUpdatedAt ?? s.updatedAt)) : null,
+    // When the wait began. statusUpdatedAt ONLY — never the updatedAt fallback,
+    // so every key measures the same wait from the same anchor.
+    waitingSince: s.status === "waiting" && s.statusUpdatedAt ? s.statusUpdatedAt : null,
     cwd: s.cwd ?? "",
     sessionId: s.sessionId ?? null,
     pid: s.pid ?? null,
@@ -4025,7 +4087,7 @@ function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(), acti
 }
 function statusEntry(resolved, cycleIdx = null) {
   const i = cycleIdx != null ? cycleIdx : resolved.index;
-  return resolved.list[i] ?? { name: "", state: "none", waitingFor: "", statusAge: 0, cwd: "", sessionId: null, pid: null };
+  return resolved.list[i] ?? { name: "", state: "none", waitingFor: "", statusAge: 0, waitingSince: null, cwd: "", sessionId: null, pid: null, where: "" };
 }
 
 // src/plugin.js
@@ -4081,12 +4143,15 @@ var C = {
 };
 var pctColor = (p) => p == null ? C.dim : p >= 85 ? C.bad : p >= 60 ? C.warn : C.ok;
 var esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-function tintFrame(col, strong = false) {
+function tintFrame(col, strong = false, phase = null) {
   if (!col) return "";
-  return `<rect width="144" height="144" rx="18" fill="${col}" opacity="${strong ? 0.22 : 0.1}"/>
-    <rect x="2" y="2" width="140" height="140" rx="17" fill="none" stroke="${col}" stroke-width="2" opacity="${strong ? 0.45 : 0.22}"/>
-    <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="${col}" stroke-width="${strong ? 5 : 3}" opacity="${strong ? 1 : 0.8}"/>
-    <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="${col}" stroke-width="1" opacity="0.18"/>`;
+  const p = phase == null ? 1 : [0.3, 0.65, 1][phase % 3];
+  const washOp = (strong ? 0.22 : 0.1) * (phase == null ? 1 : 0.6 + 0.4 * p);
+  const mainOp = phase == null ? strong ? 1 : 0.8 : 0.25 + 0.75 * p;
+  return `<rect width="144" height="144" rx="18" fill="${col}" opacity="${washOp.toFixed(3)}"/>
+    <rect x="2" y="2" width="140" height="140" rx="17" fill="none" stroke="${col}" stroke-width="2" opacity="${((strong ? 0.45 : 0.22) * p).toFixed(3)}"/>
+    <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="${col}" stroke-width="${strong ? 5 : 3}" opacity="${mainOp.toFixed(3)}"/>
+    <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="${col}" stroke-width="1" opacity="${(0.18 * p).toFixed(3)}"/>`;
 }
 function svgWrap(inner) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="144" height="144" viewBox="0 0 144 144"><rect width="144" height="144" rx="18" fill="${C.bg}"/>${inner}</svg>`;
@@ -4141,6 +4206,16 @@ function usageMeterKey(header, big, sub, isCost) {
     ${isCost && !dim ? `<text x="130" y="58" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" fill="${C.dim}">est</text>` : ""}
     <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub)}</text>`);
 }
+function localGauge(header, agg, budget, view = "cost") {
+  if (!agg) return usageMeterKey(header, "--", "no data yet", true);
+  if (view === "tokens") {
+    return usageMeterKey(header, fmtNum(agg.tokens), `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out`, false);
+  }
+  const pct = budgetPct(agg.cost, budget);
+  if (pct == null) return usageMeterKey(header, "$" + agg.cost.toFixed(2), "est", true);
+  const over = pct > 100 ? " \xB7 " + Math.round(pct) + "%" : "";
+  return gaugeKey(header, pct, `$${Math.round(agg.cost)} / $${Math.round(Number(budget))}${over}`, pct >= 90 ? animPhase : null);
+}
 function labelKey(title, label, sub, accent = C.accent, tint = null, strong = false) {
   const text = String(label ?? "").trim() || "\u2014";
   const words = text.split(/\s+/);
@@ -4175,14 +4250,14 @@ var STATUS_LOOK = {
   // we couldn't stat. Saying "no status" beats inventing "Idle".
   unknown: { label: "no status", col: C.dim }
 };
-function statusKey(name, st, count, detail = "", tag = "") {
+function statusKey(name, st, count, detail = "", tag = "", phase = null) {
   const look = STATUS_LOOK[st] ?? STATUS_LOOK.none;
   const { label, col } = look;
   const strong = !!look.strong;
   const shown = name || "CLAUDE";
   const corner = count > 1 ? `<circle cx="120" cy="26" r="13" fill="${C.panel}" stroke="${col}" stroke-width="1.5"/><text x="120" y="31" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${count}</text>` : tag ? `<text x="132" y="30" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="600" fill="${C.dim}">${esc(tag)}</text>` : "";
   return svgWrap(`
-    ${tintFrame(col, strong)}
+    ${tintFrame(col, strong, phase)}
     ${corner}
     <text x="72" y="72" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${String(shown).length > 9 ? 22 : 26}" font-weight="700" fill="${st === "none" ? C.dim : C.text}">${esc(String(shown).slice(0, 11))}</text>
     <text x="72" y="100" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${label.length > 11 ? 15 : 18}" font-weight="700" fill="${col}">${esc(label)}</text>
@@ -4214,6 +4289,8 @@ var state = {
   usage: null,
   // { fiveHour, weekly, weeklyOpus } each { pct, resetsAt }
   usageErr: null,
+  usageMeterModels: null,
+  // [{model,tokens,cost}] over 7d, for the model key in local mode
   usageAt: 0,
   sessions: [],
   today: null,
@@ -4303,6 +4380,7 @@ async function pollUsage() {
   } catch (e) {
     state.usageErr = String(e.message ?? e);
     log("usage poll failed:", state.usageErr);
+    pollUsageMeter();
   }
   renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate"]);
 }
@@ -4312,6 +4390,27 @@ function scheduleResetPoll() {
   if (!deltas.length) return;
   clearTimeout(resetTimer);
   resetTimer = setTimeout(pollUsage, Math.min(...deltas) + 8e3);
+}
+function modelList(mode) {
+  if (mode === "local") return state.usageMeterModels ?? [];
+  return state.usage?.models ?? [];
+}
+function modelListIndex(context, list, want, mode) {
+  const pressed = modelIdx.get(context);
+  if (pressed != null && list.length) return pressed % list.length;
+  if (!want || !list.length) return 0;
+  const w = String(want).toLowerCase();
+  const byName = list.findIndex((e) => String(e.name ?? e.model).toLowerCase() === w);
+  if (byName >= 0) return byName;
+  const fam = familyOf(w) ?? w;
+  const byFam = list.findIndex((e) => String(e.model ?? e.name).toLowerCase() === fam);
+  return byFam >= 0 ? byFam : 0;
+}
+var GAUGE_WINDOW = { "usage-session": "5h", "usage-weekly": "7day", "usage-model": "7day" };
+function gaugeMode(kind) {
+  const win = GAUGE_WINDOW[kind];
+  const hasLocal = !!(win && state.usageMeter?.[win]);
+  return gaugeSource({ usage: state.usage, usageErr: state.usageErr, usageAt: state.usageAt, now: Date.now() }, hasLocal);
 }
 function pidAlive(pid) {
   try {
@@ -4507,7 +4606,11 @@ var usageFileCache = /* @__PURE__ */ new Map();
 async function pollUsageMeter(forceWins) {
   const wins = /* @__PURE__ */ new Set();
   if (forceWins) for (const w of forceWins) wins.add(w);
-  else for (const v of views.values()) if (v.kind === "usage-meter") wins.add(v.settings?.window ?? "today");
+  else for (const v of views.values()) {
+    if (v.kind === "usage-meter") wins.add(v.settings?.window ?? "today");
+    else if (GAUGE_WINDOW[v.kind] && gaugeMode(v.kind) === "local") wins.add(GAUGE_WINDOW[v.kind]);
+    else if (v.kind === "burn-rate" && gaugeMode("usage-session") === "local") wins.add("5h");
+  }
   if (!wins.size) return;
   const now = Date.now();
   const cutoff = Math.min(...[...wins].map((w) => windowStartMs(w, now)));
@@ -4537,12 +4640,17 @@ async function pollUsageMeter(forceWins) {
     const out = {};
     for (const w of wins) out[w] = aggregate(merged, windowStartMs(w, now), state.rates);
     state.usageMeter = out;
-    renderAll(["usage-meter"]);
+    if (wins.has("7day")) state.usageMeterModels = aggregateByModel(merged, windowStartMs("7day", now), state.rates);
+    renderAll(["usage-meter", "usage-session", "usage-weekly", "usage-model", "burn-rate"]);
   } catch (e) {
     log("usage-meter poll failed:", String(e));
   }
 }
 function sessionEta() {
+  if (gaugeMode("usage-session") !== "subscription") {
+    const b5 = state.usageMeter?.["5h"];
+    return b5 ? "$" + b5.cost.toFixed(2) + " last 5h" : "no cap";
+  }
   const h = state.pctHistory;
   if (h.length < 2) return "measuring\u2026";
   const latest = h[h.length - 1];
@@ -4565,6 +4673,7 @@ var views = /* @__PURE__ */ new Map();
 var cycle = /* @__PURE__ */ new Map();
 var focusIdx = /* @__PURE__ */ new Map();
 var usageView = /* @__PURE__ */ new Map();
+var modelIdx = /* @__PURE__ */ new Map();
 var ws = null;
 var animPhase = 0;
 var lastSessionSig = "";
@@ -4573,29 +4682,42 @@ function send(obj) {
 }
 var setImage = (context, image) => send({ event: "setImage", context, payload: { image, target: 0 } });
 var setTitle = (context) => send({ event: "setTitle", context, payload: { title: "", target: 0 } });
-var showOk = (context) => send({ event: "showOk", context });
 var showAlert = (context) => send({ event: "showAlert", context });
 var kindOf = (action) => action.replace("dev.tapparello.claude-deck.", "");
 function render(context, kind) {
   switch (kind) {
     case "usage-session": {
-      if (state.usageErr && !state.usage) return setImage(context, gaugeKey("SESSION 5H", null, state.usageErr.includes("429") ? "throttled" : IS_MAC && state.usageErr.includes("no OAuth token") ? "n/a" : "sign in?"));
+      const mode = gaugeMode("usage-session");
+      if (mode === "local") return setImage(context, localGauge("LAST 5H", state.usageMeter?.["5h"], views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
+      if (mode !== "subscription") return setImage(context, gaugeKey("SESSION 5H", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
       const b = state.usage?.fiveHour;
       return setImage(context, gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt) : "no data", b?.pct >= 90 ? animPhase : null));
     }
     case "usage-weekly": {
-      if (state.usageErr && !state.usage) return setImage(context, gaugeKey("WEEKLY", null, state.usageErr.includes("429") ? "throttled" : IS_MAC && state.usageErr.includes("no OAuth token") ? "n/a" : "sign in?"));
+      const mode = gaugeMode("usage-weekly");
+      if (mode === "local") return setImage(context, localGauge("LAST 7D", state.usageMeter?.["7day"], views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
+      if (mode !== "subscription") return setImage(context, gaugeKey("WEEKLY", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
       const b = state.usage?.weekly;
       const u = state.usage;
       const sub = u?.scopedPct != null && u.scopedName ? `${u.scopedName} ${Math.round(u.scopedPct)}%` : u?.weeklyOpus?.pct != null ? `opus ${Math.round(u.weeklyOpus.pct)}%` : b ? fmtReset(b.resetsAt) : "no data";
       return setImage(context, gaugeKey("WEEKLY", b?.pct ?? null, sub, b?.pct >= 90 ? animPhase : null));
     }
     case "usage-model": {
-      const models = state.usage?.models ?? [];
+      const mmode = gaugeMode("usage-model");
+      if (mmode !== "subscription" && mmode !== "local") {
+        return setImage(context, gaugeKey("MODEL 7D", null, mmode === "throttled" ? "throttled" : mmode === "error" ? "sign in?" : "no data"));
+      }
+      const list = modelList(mmode);
       const want = views.get(context)?.settings?.model;
-      const m = models.find((x) => x.name === want) ?? models[0];
-      const name = (m?.name ?? want ?? "MODEL").toUpperCase().slice(0, 8);
-      return setImage(context, gaugeKey(`${name} 7D`, m?.pct ?? null, m?.resetsAt ? fmtReset(m.resetsAt) : IS_MAC && state.usageErr?.includes("no OAuth token") ? "n/a" : "no data", m?.pct >= 90 ? animPhase : null));
+      const i = modelListIndex(context, list, want, mmode);
+      const pick = list[i];
+      const head = ((pick?.name ?? pick?.model ?? want ?? "MODEL") + "").toUpperCase().slice(0, 8) + " 7D";
+      const more = list.length > 1 ? ` ${i + 1}/${list.length}` : "";
+      if (!pick) return setImage(context, usageMeterKey(head, "--", mmode === "local" ? "no data yet" : "no data", true));
+      if (mmode === "local") {
+        return setImage(context, localGauge(head + more, pick, views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
+      }
+      return setImage(context, gaugeKey(head + more, pick.pct ?? null, pick.resetsAt ? fmtReset(pick.resetsAt) : "no data", pick.pct >= 90 ? animPhase : null));
     }
     case "burn-rate":
       return setImage(context, burnKey(state.burn?.tokensHour ?? null, sessionEta()));
@@ -4663,7 +4785,7 @@ function render(context, kind) {
       const suffix = s.label ? " \xB7 " + s.label : "";
       if (!agg) return setImage(context, usageMeterKey(header, "--", "no data", view === "cost"));
       if (view === "cost") return setImage(context, usageMeterKey(header, "$" + agg.cost.toFixed(2), "cost" + suffix, true));
-      return setImage(context, usageMeterKey(header, fmtNum(agg.tokens), "tokens" + suffix, false));
+      return setImage(context, usageMeterKey(header, fmtNum(agg.tokens), agg.in != null ? `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out` : "tokens" + suffix, false));
     }
     case "approver-status": {
       const s = views.get(context)?.settings ?? {};
@@ -4678,13 +4800,16 @@ function render(context, kind) {
         const parent = entry.cwd ? path2.basename(path2.dirname(entry.cwd)) : "";
         detail = `${cy.idx + 1}/${resolved.count}${parent ? " \xB7 " + parent : ""}`;
       } else if (entry.waitingFor) {
-        detail = entry.waitingFor;
+        const waited = entry.waitingSince ? fmtShort(Date.now() - entry.waitingSince) : "";
+        detail = shortWait(entry.waitingFor) + (waited ? " \xB7 " + waited : "");
       } else if (entry.state === "finished") {
         detail = "just now";
       } else if (entry.state === "idle" && entry.statusAge != null) {
         detail = fmtAgo(Date.now() - entry.statusAge) + " idle";
       }
-      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where));
+      const blockedNow = entry.state === "needs-approval" || entry.state === "input-needed";
+      const fresh = blockedNow && (!entry.waitingSince || Date.now() - entry.waitingSince < PULSE_MS);
+      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where, fresh ? animPhase : null));
     }
     case "approver-waiting": {
       const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
@@ -4696,7 +4821,11 @@ function render(context, kind) {
       const i = cy && cy.idx >= 0 ? cy.idx % blocked.length : 0;
       const b = blocked[i];
       const st = sessionState(b, Date.now(), state.activity.get(b.sessionId) ?? null);
-      return setImage(context, statusKey(path2.basename(b.cwd ?? "") || "claude", st, blocked.length, String(b.waitingFor ?? "needs you"), sessionWhere(b)));
+      const since = b.status === "waiting" && b.statusUpdatedAt ? b.statusUpdatedAt : null;
+      const waited = since ? fmtShort(Date.now() - since) : "";
+      const why = shortWait(b.waitingFor ?? "") || "needs you";
+      const fresh = !since || Date.now() - since < PULSE_MS;
+      return setImage(context, statusKey(path2.basename(b.cwd ?? "") || "claude", st, blocked.length, why + (waited ? " \xB7 " + waited : ""), sessionWhere(b), fresh ? animPhase : null));
     }
   }
 }
@@ -4711,6 +4840,7 @@ function sessionByPid(pid) {
   return state.sessions.find((s) => s.pid === pid) ?? null;
 }
 var OSA_TIMEOUT_MS = 8e3;
+var PULSE_MS = 12e4;
 function spawnDetached(cmd, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
@@ -4958,20 +5088,22 @@ var macPlatform = {
 };
 var platform = IS_MAC ? macPlatform : winPlatform;
 function act(context, p) {
-  p.then(() => showOk(context)).catch(() => showAlert(context));
-}
-function actQuiet(context, p) {
   p.catch(() => showAlert(context));
 }
 function onKeyDown(context, kind) {
   switch (kind) {
     case "usage-session":
     case "usage-weekly":
+      if (gaugeMode(kind) === "local") {
+        usageView.set(context, (usageView.get(context) ?? "cost") === "cost" ? "tokens" : "cost");
+        pollUsageMeter();
+        return render(context, kind);
+      }
       if (Date.now() - lastUsageAttempt > 3e4) pollUsage();
-      return showOk(context);
+      return;
     case "today":
       pollToday();
-      return showOk(context);
+      return;
     case "sessions": {
       const n = state.sessions.length;
       if (n === 0) return showAlert(context);
@@ -4985,12 +5117,19 @@ function onKeyDown(context, kind) {
       cycle.set(context, cy);
       return render(context, "sessions");
     }
-    case "usage-model":
-      if (Date.now() - lastUsageAttempt > 3e4) pollUsage();
-      return showOk(context);
+    case "usage-model": {
+      const mode = gaugeMode("usage-model");
+      const list = modelList(mode);
+      if (list.length > 1) {
+        const cur = modelListIndex(context, list, views.get(context)?.settings?.model, mode);
+        modelIdx.set(context, (cur + 1) % list.length);
+      } else if (mode === "local") pollUsageMeter();
+      else if (Date.now() - lastUsageAttempt > 3e4) pollUsage();
+      return render(context, "usage-model");
+    }
     case "burn-rate":
       pollBurn();
-      return showOk(context);
+      return;
     case "project": {
       const s = views.get(context)?.settings ?? {};
       if (!s.path) return showAlert(context);
@@ -5005,7 +5144,7 @@ function onKeyDown(context, kind) {
       const prev = focusIdx.get(context);
       const i = prev?.sig === poolSig ? (prev.i + 1) % n : 0;
       focusIdx.set(context, { i, sig: poolSig });
-      actQuiet(context, platform.focusWindow(pool[i]));
+      act(context, platform.focusWindow(pool[i]));
       return render(context, "focus-session");
     }
     case "quick-prompt": {
@@ -5052,7 +5191,7 @@ function onKeyDown(context, kind) {
       }
       const entry = statusEntry(resolved, cycling ? idx : null);
       render(context, "approver-status");
-      return actQuiet(context, platform.focusWindow(sessionByPid(entry.pid)));
+      return act(context, platform.focusWindow(sessionByPid(entry.pid)));
     }
     case "approver-waiting": {
       const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
@@ -5066,7 +5205,7 @@ function onKeyDown(context, kind) {
       }, 4e3);
       cycle.set(context, cy);
       render(context, "approver-waiting");
-      return actQuiet(context, platform.focusWindow(blocked[cy.idx]));
+      return act(context, platform.focusWindow(blocked[cy.idx]));
     }
   }
 }
@@ -5088,10 +5227,12 @@ if (process.argv.includes("--selftest")) {
     }
     await pollToday();
     log("selftest today:", JSON.stringify(state.today));
+    await pollUsageMeter(["5h"]);
     await pollBurn();
     log("selftest burn:", JSON.stringify(state.burn), "eta:", sessionEta());
-    await pollUsageMeter(["today", "month", "7day"]);
+    await pollUsageMeter(["5h", "today", "month", "7day"]);
     log("selftest usage-meter:", JSON.stringify(state.usageMeter));
+    log("selftest per-model 7d:", JSON.stringify(state.usageMeterModels));
     process.exit(0);
   })();
 } else {
@@ -5135,18 +5276,19 @@ if (process.argv.includes("--selftest")) {
       });
       setTitle(context);
       render(context, kindOf(action));
-      if (kindOf(action) === "usage-meter") pollUsageMeter();
+      if (kindOf(action) === "usage-meter" || GAUGE_WINDOW[kindOf(action)]) pollUsageMeter();
     } else if (event === "willDisappear") {
       views.delete(context);
       cycle.delete(context);
       focusIdx.delete(context);
       usageView.delete(context);
+      modelIdx.delete(context);
     } else if (event === "didReceiveSettings" && action) {
       const v = views.get(context);
       if (v) {
         v.settings = msg.payload?.settings ?? {};
         render(context, v.kind);
-        if (v.kind === "usage-meter") pollUsageMeter();
+        if (v.kind === "usage-meter" || GAUGE_WINDOW[v.kind]) pollUsageMeter();
       }
     } else if (event === "didReceiveGlobalSettings") {
       state.rates = msg.payload?.settings?.rates ?? {};
@@ -5177,6 +5319,14 @@ if (process.argv.includes("--selftest")) {
     if (state.usage?.fiveHour?.pct >= 90) kinds.push("usage-session");
     if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
     if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");
+    for (const [k, win] of Object.entries(GAUGE_WINDOW)) {
+      if (gaugeMode(k) !== "local") continue;
+      const agg = k === "usage-model" ? (state.usageMeterModels ?? [])[0] : state.usageMeter?.[win];
+      const bud = [...views.values()].find((v) => v.kind === k)?.settings?.budget;
+      if (agg && (budgetPct(agg.cost, bud) ?? 0) >= 90) kinds.push(k);
+    }
+    const freshBlocked = blockedSessions(state.sessions, Date.now(), state.activity).some((b) => !b.statusUpdatedAt || Date.now() - b.statusUpdatedAt < PULSE_MS);
+    if (freshBlocked) kinds.push("approver-status", "approver-waiting");
     if (kinds.length && [...views.values()].some((v) => kinds.includes(v.kind))) renderAll(kinds);
     const expired = [state.usage?.fiveHour, state.usage?.weekly].some((b) => b?.resetsAt && Date.now() - new Date(b.resetsAt).getTime() > 5e3);
     if (expired && !state.usageErr && Date.now() - lastUsageAttempt > 3e4) pollUsage();

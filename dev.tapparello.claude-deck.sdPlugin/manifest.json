@@ -1,7 +1,7 @@
 {
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
   "Name": "Claude Deck",
-  "Version": "1.5.0.0",
+  "Version": "1.6.0.0",
   "Author": "Cristiano Tapparello",
   "Description": "Live Claude usage limits, running Claude Code sessions, and quick-launch keys for Claude Desktop.",
   "UUID": "dev.tapparello.claude-deck",
@@ -31,8 +31,9 @@
     {
       "UUID": "dev.tapparello.claude-deck.usage-session",
       "Name": "Session Usage (5h)",
-      "Tooltip": "Live 5-hour session limit usage for your Claude subscription. Press to refresh.",
+      "Tooltip": "5-hour usage: the subscription session limit, or local spend over the last 5 hours on accounts without one (Foundry/Bedrock/Vertex). Set a budget to get a ring. Press to refresh.",
       "Icon": "imgs/session",
+      "PropertyInspectorPath": "pi/pi.html",
       "Controllers": ["Keypad"],
       "SupportedInMultiActions": false,
       "UserTitleEnabled": false,
@@ -41,8 +42,9 @@
     {
       "UUID": "dev.tapparello.claude-deck.usage-weekly",
       "Name": "Weekly Usage",
-      "Tooltip": "Live weekly limit usage for your Claude subscription. Press to refresh.",
+      "Tooltip": "Weekly usage: the subscription weekly limit, or local spend over the last 7 days on accounts without one. Set a budget to get a ring. Press to refresh.",
       "Icon": "imgs/weekly",
+      "PropertyInspectorPath": "pi/pi.html",
       "Controllers": ["Keypad"],
       "SupportedInMultiActions": false,
       "UserTitleEnabled": false,
@@ -104,7 +106,7 @@
     {
       "UUID": "dev.tapparello.claude-deck.usage-model",
       "Name": "Model Usage (weekly)",
-      "Tooltip": "Per-model weekly limit usage. Pick which model in the key settings.",
+      "Tooltip": "Per-model usage: the subscription weekly per-model limit, or local 7-day spend per model on accounts without one. Pick the model in settings.",
       "Icon": "imgs/model",
       "PropertyInspectorPath": "pi/pi.html",
       "Controllers": ["Keypad"],

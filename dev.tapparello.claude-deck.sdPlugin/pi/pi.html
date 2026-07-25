@@ -21,9 +21,13 @@
 <script>
 let ws, piUuid, settings = {}, action = "", models = [], gs = {}, gsReady = false;
 const RATE_DEFAULTS = { opus: [5, 25], sonnet: [3, 15], haiku: [1, 5], fable: [10, 50] };
+const BUDGET_FIELD = { key: "budget", type: "number", label: "Budget $ for this window (optional - turns the key into a % ring)" };
 const FIELDS = {
+  "dev.tapparello.claude-deck.usage-session": [BUDGET_FIELD],
+  "dev.tapparello.claude-deck.usage-weekly": [BUDGET_FIELD],
   "dev.tapparello.claude-deck.usage-model": [
     { key: "model", type: "modelselect", label: "Model to display" },
+    BUDGET_FIELD,
   ],
   "dev.tapparello.claude-deck.project": [
     { key: "label", type: "text", label: "Button label" },
@@ -104,6 +108,22 @@ function build() {
       c.onchange = () => { settings[f.key] = c.checked; save(); };
       l.append(c, document.createTextNode(f.label));
       div.append(l);
+    } else if (f.type === "number") {
+      const l = document.createElement("label");
+      l.textContent = f.label;
+      const i = document.createElement("input");
+      i.type = "number"; i.step = "any"; i.min = "0";
+      const cur = settings[f.key];
+      i.value = cur == null || cur === "" ? "" : String(cur);
+      // onchange, not oninput: for input[type=number] the value reads "" for any
+      // intermediate non-numeric state, so typing "12.50" would momentarily
+      // clear the setting and flip the key out of ring mode mid-keystroke.
+      i.onchange = () => {
+        const n = parseFloat(i.value);
+        if (Number.isFinite(n) && n > 0) settings[f.key] = n; else delete settings[f.key];
+        save();
+      };
+      div.append(l, i);
     } else {
       const l = document.createElement("label");
       l.textContent = f.label;
