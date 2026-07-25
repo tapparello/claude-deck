@@ -18,11 +18,22 @@ const boot = async (over = {}) => {
 const post = (url, body, init = {}) =>
   fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), ...init });
 
+// Poll rather than sleep-then-assert: a fixed 50ms guess flakes on a slow CI runner
+// (windows-latest is the slowest we run) whenever the event loop is a bit behind.
+// Wait until the condition actually holds, bounded by a deadline, instead.
+const poll = async (fn, { every = 10, timeout = 2000 } = {}) => {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    if (await fn()) return;
+    if (Date.now() >= deadline) throw new Error("poll: condition never became true within " + timeout + "ms");
+    await new Promise((r) => setTimeout(r, every));
+  }
+};
+
 test("a valid POST is held open until respond() is called", { timeout: 5000 }, async () => {
   const { h, seen, url } = await boot();
   const p = post(url(), { hook_event_name: "PermissionRequest", tool_name: "Bash" });
-  await new Promise((r) => setTimeout(r, 50));
-  assert.equal(seen.length, 1);
+  await poll(() => seen.length === 1);
   assert.equal(seen[0].payload.tool_name, "Bash");
   seen[0].ticket.respond({ ok: true });
   const res = await p;
@@ -34,7 +45,7 @@ test("a valid POST is held open until respond() is called", { timeout: 5000 }, a
 test("respond(null) sends an empty-object pass", { timeout: 5000 }, async () => {
   const { h, seen, url } = await boot();
   const p = post(url(), { tool_name: "Bash" });
-  await new Promise((r) => setTimeout(r, 50));
+  await poll(() => seen.length === 1);
   seen[0].ticket.respond(null);
   assert.deepEqual(await (await p).json(), {});
   await h.close();
@@ -45,7 +56,7 @@ test("a SECOND respond() is a no-op and does not throw", { timeout: 5000 }, asyn
   // onKeyDown runs bare off the websocket handler - it would kill the plugin.
   const { h, seen, url } = await boot();
   const p = post(url(), { tool_name: "Bash" });
-  await new Promise((r) => setTimeout(r, 50));
+  await poll(() => seen.length === 1);
   assert.equal(seen[0].ticket.respond({ first: true }), true);
   assert.doesNotThrow(() => assert.equal(seen[0].ticket.respond({ second: true }), false));
   assert.deepEqual(await (await p).json(), { first: true });
@@ -113,8 +124,7 @@ test("localhost as Host is accepted", { timeout: 5000 }, async () => {
   const p = fetch(`http://localhost:${h.boundPort}/permission/${SECRET}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: "{}",
   });
-  await new Promise((r) => setTimeout(r, 50));
-  assert.equal(seen.length, 1);
+  await poll(() => seen.length === 1);
   seen[0].ticket.respond(null);
   assert.equal((await p).status, 200);
   await h.close();
@@ -125,17 +135,30 @@ test("close() resolves even while a request is held open", { timeout: 5000 }, as
   // and ensureHookServer's `await previous.close()` suspends forever on a port change.
   const { h, seen, url } = await boot();
   post(url(), { tool_name: "Bash" }).catch(() => {});
-  await new Promise((r) => setTimeout(r, 50));
-  assert.equal(seen.length, 1);
+  await poll(() => seen.length === 1);
   await h.close();
 });
 
-test("stats.badPath counts 404s, which drives the auth? key state", { timeout: 5000 }, async () => {
-  const { h, url } = await boot();
-  assert.equal(h.stats.badPath, 0);
+test("badPathHits is windowed, not cumulative, and clears once a correctly-pathed request arrives", { timeout: 5000 }, async () => {
+  const { h, seen, url } = await boot();
+  assert.deepEqual(h.stats.badPathHits, []);
   await post(url(`/permission/${"x".repeat(32)}`), {});
   await post(url("/nope"), {});
-  assert.equal(h.stats.badPath, 2);
+  assert.equal(h.stats.badPathHits.length, 2, "repeated bad-path hits ARE recorded");
+  assert.ok(h.stats.badPathHits.every((t) => typeof t === "number" && t > 0));
+  // A single stray 404 must not latch "auth?" forever - a request to the CORRECT
+  // path (proof the pasted URL is right) clears the signal outright.
+  const p = post(url(), { tool_name: "Bash" });
+  await poll(() => seen.length === 1);
+  assert.deepEqual(h.stats.badPathHits, []);
+  seen[0].ticket.respond(null);
+  await p;
+  await h.close();
+});
+
+test("the resolved handle exposes the secret it bound, so a changed secret can force a rebind", { timeout: 5000 }, async () => {
+  const { h } = await boot();
+  assert.equal(h.secret, SECRET);
   await h.close();
 });
 
@@ -143,11 +166,10 @@ test("a client disconnect before a response fires onDrop", { timeout: 5000 }, as
   const { h, seen, dropped, url } = await boot();
   const ac = new AbortController();
   post(url(), { tool_name: "Bash" }, { signal: ac.signal }).catch(() => {});
-  await new Promise((r) => setTimeout(r, 50));
+  await poll(() => seen.length === 1);
   seen[0].ticket.id = 7;
   ac.abort();
-  await new Promise((r) => setTimeout(r, 80));
-  assert.equal(dropped.length, 1);
+  await poll(() => dropped.length === 1);
   assert.equal(dropped[0].id, 7);
   assert.equal(dropped[0].closed, true);
   await h.close();
@@ -157,9 +179,11 @@ test("a SUCCESSFUL response does not fire onDrop", { timeout: 5000 }, async () =
   // res.on('close') fires on the happy path too - the writableEnded discriminator
   const { h, seen, dropped, url } = await boot();
   const p = post(url(), { tool_name: "Bash" });
-  await new Promise((r) => setTimeout(r, 50));
+  await poll(() => seen.length === 1);
   seen[0].ticket.respond({ ok: 1 });
   await p;
+  // Negative assertion (nothing fires) - there is no condition to poll FOR here,
+  // so a short bounded settle wait is the right tool, not the poll helper above.
   await new Promise((r) => setTimeout(r, 80));
   assert.equal(dropped.length, 0);
   await h.close();

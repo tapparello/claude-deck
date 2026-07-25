@@ -15,9 +15,9 @@ import { randomBytes } from "node:crypto";
 import {
   decisionBody, describeRequest, alwaysRule, pressDecision,
   enqueue, head, resolve, expiredIds, staleIds, seedBaselines, hookFragment,
-  PORT_DEFAULT, HOLD_S_DEFAULT, QUEUE_MAX,
+  PORT_DEFAULT, HOLD_S_DEFAULT, QUEUE_MAX, RULE_MAX,
 } from "./approve.js";
-import { startHookServer } from "./hookserver.js";
+import { startHookServer, BADPATH_WINDOW_MS, BADPATH_MIN_HITS } from "./hookserver.js";
 
 const IS_MAC = process.platform === "darwin";
 
@@ -256,7 +256,6 @@ function approveKey(kind, req, o = {}) {
   const rule = kind === "approve-always" ? alwaysRule(req, !!o.sessionOnly) : null;
   const disabled = kind === "approve-always" && rule === null;
   const col = disabled ? C.dim : look.col;
-  const mid = kind === "approve-always" ? (rule ?? target) : target;
   const word = kind === "approve-always"
     ? (disabled ? "ALWAYS n/a" : `ALWAYS ·${o.sessionOnly ? "session" : "project"}`)
     : look.word;
@@ -269,11 +268,32 @@ function approveKey(kind, req, o = {}) {
     : o.label
     ? `<text x="132" y="30" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="600" fill="${C.dim}">${esc(String(o.label).slice(0, 8))}</text>`
     : "";
+
+  // ALWAYS shows the RULE it would persist, in full (alwaysRule() no longer truncates -
+  // see src/approve.js). A rule over RULE_MAX (18) chars - e.g. any WebFetch domain
+  // grant, since "WebFetch(domain:" alone is 16 - is split at "(" across two lines
+  // (tool name, then the (ruleContent) that actually matters) rather than shrunk into a
+  // shared, illegible prefix. A rule too long even for two lines makes alwaysRule()
+  // return null, which is the existing disabled "ALWAYS n/a" path below: a rule that
+  // cannot be shown honestly must not be pressable. ALLOW/DENY keep the original
+  // single-line target rendering untouched.
+  const splitRule = kind === "approve-always" && rule != null && rule.length > RULE_MAX;
+  let body;
+  if (splitRule) {
+    const splitAt = rule.indexOf("(");
+    const line1 = splitAt >= 0 ? rule.slice(0, splitAt) : rule;
+    const line2 = splitAt >= 0 ? rule.slice(splitAt) : "";
+    body = `${t(42, 12, 600, C.dim, name)}${t(66, 15, 700, C.text, line1)}${t(88, 15, 700, C.text, line2)}`;
+  } else {
+    const shown = kind === "approve-always" ? (rule ?? target) : target;
+    const size = kind === "approve-always" && rule != null ? 18 : (shown.length > 11 ? 18 : 22);
+    body = `${t(52, 13, 600, C.dim, name)}${t(84, size, 700, C.text, shown)}`;
+  }
+
   return svgWrap(`
     ${tintFrame(col, !disabled, disabled ? null : o.phase)}
     ${corner}
-    ${t(52, 13, 600, C.dim, name)}
-    ${t(84, mid.length > 11 ? 18 : 22, 700, C.text, mid)}
+    ${body}
     ${t(112, word.length > 11 ? 14 : 18, 700, col, word)}`);
 }
 
@@ -540,11 +560,29 @@ async function pollSessions() {
 // ---------- approver ----------
 const APPROVE_KINDS = ["approve-allow", "approve-always", "approve-deny"];
 const HOLD_MS = () => (Number(state.globalSettings.hookHoldS) || HOLD_S_DEFAULT) * 1000;
+// The snippet's declared hook `timeout` must be longer than HOLD_MS(), or Claude Code's
+// own client-side timeout races our expiry and always loses: expiredIds() only fires
+// AFTER now - receivedAt > holdMs, checked on a 600ms ticker, so the plugin's answer can
+// land up to holdMs + 600ms after receivedAt. Padding the declared timeout by this much
+// gives the client a real margin instead of a bare (and losing) tie.
+const TIMEOUT_PAD_S = 3;
 let approveSeq = 0;
 let hookServer = null;
 
 const renderApproveAll = () => renderAll(APPROVE_KINDS);
 const hasApproveKey = () => [...views.values()].some((v) => APPROVE_KINDS.includes(v.kind));
+
+// "auth?" is for a REPEATED wrong-path signal, never a single stray 404 - any web page
+// can trigger one of those with a no-cors POST to the port, and hookserver.js already
+// clears its own record the moment a correctly-pathed request arrives. Re-filter by the
+// window here too (rather than trust hookserver's own pruning) so the flag also decays
+// on its own if no further bad requests ever arrive to prune it.
+function authFlagged() {
+  const hits = hookServer?.stats.badPathHits;
+  if (!hits || hits.length < BADPATH_MIN_HITS) return false;
+  const now = Date.now();
+  return hits.filter((t) => now - t < BADPATH_WINDOW_MS).length >= BADPATH_MIN_HITS;
+}
 
 function noteHeadChange(prevId) {
   const now = head(state.approveQueue)?.id ?? null;
@@ -615,12 +653,20 @@ const onHookDrop = (ticket) => {
 };
 
 let ensuring = null;
+let ensureAgain = false;
 // Serialised: this function's own setGlobalSettings makes Stream Deck broadcast
 // didReceiveGlobalSettings straight back, which would re-enter it while the first
 // startHookServer is still pending - both would then bind the same port and the loser
-// would set "port busy" while a healthy server is listening.
+// would set "port busy" while a healthy server is listening. A call that arrives while
+// one is already in flight is not simply dropped, though: it sets a trailing flag so
+// exactly one more pass runs once the in-flight one settles - otherwise a settings
+// write that drops the secret during that window would never trigger the re-assert.
 function ensureHookServer() {
-  if (!ensuring) ensuring = ensureHookServerOnce().finally(() => { ensuring = null; });
+  if (ensuring) { ensureAgain = true; return ensuring; }
+  ensuring = ensureHookServerOnce().finally(() => {
+    ensuring = null;
+    if (ensureAgain) { ensureAgain = false; ensureHookServer(); }
+  });
   return ensuring;
 }
 
@@ -652,9 +698,14 @@ async function ensureHookServerOnce() {
     log("approve: re-asserted the hook secret after a foreign global-settings write");
   }
   state.hookSecret = secret;
-  // Compare against what is actually BOUND, and clear a stale error: gating this on
-  // !state.hookErr would wedge us into permanent "port busy" once it was ever set.
-  if (hookServer && hookServer.boundPort === port) {
+  // Compare against what is actually BOUND - port AND secret, not port alone: if global
+  // settings ever hand back a DIFFERENT valid 32+ char secret, state.hookSecret above is
+  // overwritten, but a port-only check would leave the old server (still listening on
+  // the old path) in place forever, and installSnippet() would hand out a URL that
+  // server can never accept - unrecoverable without a restart. Also clear a stale
+  // error here: gating this on !state.hookErr would wedge us into permanent "port busy"
+  // once it was ever set.
+  if (hookServer && hookServer.boundPort === port && hookServer.secret === secret) {
     if (state.hookErr) { state.hookErr = null; renderApproveAll(); }
     return;
   }
@@ -687,7 +738,8 @@ async function ensureHookServerOnce() {
 // (see pi/pi.html's "install" field), not in this string.
 function installSnippet() {
   const url = `http://127.0.0.1:${state.hookPort}/permission/${state.hookSecret ?? "<secret>"}`;
-  return hookFragment(url, HOLD_MS() / 1000);
+  // Padded (see TIMEOUT_PAD_S above): the hold itself stays HOLD_MS()/1000.
+  return hookFragment(url, HOLD_MS() / 1000 + TIMEOUT_PAD_S);
 }
 
 // Recursively collect .jsonl transcript files (including <uuid>/subagents/)
@@ -1086,10 +1138,10 @@ function render(context, kind) {
       shownReq.set(context, req?.id ?? null);
       shownRule.set(context, kind === "approve-always" && req ? alwaysRule(req, !!s.sessionOnly) : null);
       const fresh = req && Date.now() - req.receivedAt < PULSE_MS;
-      // A mis-pasted or stale URL 404s inside our own handler, so it IS countable.
-      // Without this state the approver looks identical to "idle" forever.
+      // A mis-pasted or stale URL 404s inside our own handler, so it IS countable - but
+      // only REPEATED 404s are evidence of that; see authFlagged().
       const err = state.hookErr
-        ?? (!state.approveQueue.length && (hookServer?.stats.badPath ?? 0) > 0 ? "auth?" : null);
+        ?? (!state.approveQueue.length && authFlagged() ? "auth?" : null);
       return setImage(context, approveKey(kind, req, {
         sessionOnly: !!s.sessionOnly,
         label: s.label,
@@ -1651,6 +1703,7 @@ if (process.argv.includes("--selftest")) {
       render(context, kindOf(action));
       if (kindOf(action) === "usage-meter" || GAUGE_WINDOW[kindOf(action)]) pollUsageMeter();
     } else if (event === "willDisappear") {
+      const wasApproveKey = APPROVE_KINDS.includes(views.get(context)?.kind);
       views.delete(context);
       cycle.delete(context);
       focusIdx.delete(context);
@@ -1658,12 +1711,17 @@ if (process.argv.includes("--selftest")) {
       modelIdx.delete(context);
       // Deferred by a second: Stream Deck emits every willDisappear for the outgoing
       // page BEFORE any willAppear for the incoming one, so an immediate flush would
-      // destroy a live queue when an identical key reappears milliseconds later.
-      setTimeout(() => {
-        if (!hasApproveKey() && state.approveQueue.length) {
-          answerAndDrop(state.approveQueue.map((r) => r.id), "no Approve key visible");
-        }
-      }, 1000);
+      // destroy a live queue when an identical key reappears milliseconds later. Gated
+      // on the DEPARTING key actually being an Approve kind - hasApproveKey()/
+      // approveQueue can only ever be affected by one of those, so a page switch on a
+      // large deck must not queue one of these timers per key on the page.
+      if (wasApproveKey) {
+        setTimeout(() => {
+          if (!hasApproveKey() && state.approveQueue.length) {
+            answerAndDrop(state.approveQueue.map((r) => r.id), "no Approve key visible");
+          }
+        }, 1000);
+      }
     } else if (event === "didReceiveSettings" && action) {
       const v = views.get(context);
       if (v) { v.settings = msg.payload?.settings ?? {}; render(context, v.kind); if (v.kind === "usage-meter" || GAUGE_WINDOW[v.kind]) pollUsageMeter(); }
@@ -1717,8 +1775,11 @@ if (process.argv.includes("--selftest")) {
     // is the right gate. Without this the keys would only repaint at 5s/30s and the
     // breath would be erratic frames instead of a pulse.
     if (state.approveQueue.length) {
-      // Expire here as well as in pollSessions: the pasted `timeout` equals HOLD_S
-      // exactly, so waiting up to 5s for the next poll would leave zero margin.
+      // Expire here as well as in pollSessions: this 600ms ticker, not the 5s poll, is
+      // what actually bounds how late our answer can land - up to HOLD_MS + 600ms after
+      // receivedAt. The snippet's declared timeout is padded past HOLD_MS (see
+      // TIMEOUT_PAD_S/installSnippet) specifically so that stays inside Claude Code's own
+      // deadline instead of losing the race against it.
       const dead = expiredIds(state.approveQueue, Date.now(), HOLD_MS());
       if (dead.length) answerAndDrop(dead, "hold expired");
       if (state.approveQueue.length) kinds.push(...APPROVE_KINDS);

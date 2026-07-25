@@ -4136,6 +4136,7 @@ function decisionBody(kind, req, opts = {}) {
 var NAME_MAX = 11;
 var TARGET_MAX = 14;
 var RULE_MAX = 18;
+var RULE_FIT = 36;
 var clean = (v) => String(v ?? "").replace(/[\s\p{Cc}]+/gu, " ").trim();
 var cut = (s, max) => s.length > max ? s.slice(0, max - 1) + "\u2026" : s;
 var base = (p) => clean(p).split(/[\\/]/).filter(Boolean).pop() ?? "";
@@ -4162,7 +4163,7 @@ function targetOf(req) {
 }
 function describeRequest(req) {
   return {
-    name: cut(base(req?.cwd), NAME_MAX).slice(0, NAME_MAX),
+    name: cut(base(req?.cwd), NAME_MAX),
     target: cut(targetOf(req), TARGET_MAX)
   };
 }
@@ -4170,7 +4171,8 @@ function alwaysRule(req, sessionOnly = false) {
   const entry = oneSafeRule(req, sessionOnly);
   if (!entry) return null;
   const { toolName, ruleContent } = entry.rules[0];
-  return cut(clean(`${toolName}(${ruleContent})`), RULE_MAX);
+  const text = clean(`${toolName}(${ruleContent})`);
+  return text.length > RULE_FIT ? null : text;
 }
 var QUEUE_MAX = 8;
 var HOLD_S_DEFAULT = 20;
@@ -4224,7 +4226,7 @@ function staleIds(queue, sessions, activity, now) {
     if (now - r.receivedAt < YOUNG_MS) continue;
     const matches = (sessions ?? []).filter((s2) => s2.sessionId === r.sessionId);
     if (!matches.length) continue;
-    const s = matches.slice().sort((a, b) => (b.statusUpdatedAt ?? 0) - (a.statusUpdatedAt ?? 0) || Number(b.cwd === r.cwd) - Number(a.cwd === r.cwd))[0];
+    const s = matches.slice().sort((a, b) => (b.statusUpdatedAt ?? 0) - (a.statusUpdatedAt ?? 0))[0];
     if (s.statusUpdatedAt != null && r.statusSnapshot != null && s.statusUpdatedAt > r.statusSnapshot) {
       out.push(r.id);
       continue;
@@ -4247,6 +4249,8 @@ function pressDecision({ queue, shownId, lastHeadChangeAt, now, settleMs = SETTL
 import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 var BODY_MAX = 1024 * 1024;
+var BADPATH_WINDOW_MS = 5 * 6e4;
+var BADPATH_MIN_HITS = 3;
 var sameSecret = (a, b) => {
   const A = Buffer.from(String(a)), B = Buffer.from(String(b));
   return A.length === B.length && timingSafeEqual(A, B);
@@ -4257,16 +4261,19 @@ function startHookServer({ port, secret, onRequest, onDrop, log: log2 = () => {
     return Promise.reject(new Error("hook secret too short"));
   }
   const wantPath = `/permission/${secret}`;
-  const stats = { badPath: 0 };
+  const stats = { badPathHits: [] };
   let boundPort = null;
   const server = createServer((req, res) => {
     const deny = (code) => {
       res.writeHead(code).end();
     };
     if (!sameSecret(req.url ?? "", wantPath)) {
-      stats.badPath++;
+      const now = Date.now();
+      stats.badPathHits.push(now);
+      stats.badPathHits = stats.badPathHits.filter((t) => now - t < BADPATH_WINDOW_MS);
       return deny(404);
     }
+    if (stats.badPathHits.length) stats.badPathHits = [];
     const host = String(req.headers.host ?? "");
     if (host !== `127.0.0.1:${boundPort}` && host !== `localhost:${boundPort}`) return deny(403);
     if (req.method !== "POST") return deny(405);
@@ -4334,6 +4341,10 @@ function startHookServer({ port, secret, onRequest, onDrop, log: log2 = () => {
         log2(`hook server on http://127.0.0.1:${boundPort}/permission/<secret>`);
         resolve2({
           boundPort,
+          // The secret this server actually bound to, so a caller can tell a genuine
+          // secret CHANGE (which needs a rebind) apart from a same-secret re-assert
+          // (which doesn't) instead of comparing boundPort alone.
+          secret,
           stats,
           close: () => new Promise((done) => {
             let settled = false;
@@ -4348,7 +4359,7 @@ function startHookServer({ port, secret, onRequest, onDrop, log: log2 = () => {
             setTimeout(() => {
               server.closeAllConnections?.();
               finish();
-            }, 250);
+            }, 250).unref();
           })
         });
       });
@@ -4548,14 +4559,24 @@ function approveKey(kind, req, o = {}) {
   const rule = kind === "approve-always" ? alwaysRule(req, !!o.sessionOnly) : null;
   const disabled = kind === "approve-always" && rule === null;
   const col = disabled ? C.dim : look.col;
-  const mid = kind === "approve-always" ? rule ?? target : target;
   const word = kind === "approve-always" ? disabled ? "ALWAYS n/a" : `ALWAYS \xB7${o.sessionOnly ? "session" : "project"}` : look.word;
   const corner = o.depth > 1 ? `<circle cx="120" cy="26" r="13" fill="${C.panel}" stroke="${col}" stroke-width="1.5"/><text x="120" y="31" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${o.depth}</text>` : o.label ? `<text x="132" y="30" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="600" fill="${C.dim}">${esc(String(o.label).slice(0, 8))}</text>` : "";
+  const splitRule = kind === "approve-always" && rule != null && rule.length > RULE_MAX;
+  let body;
+  if (splitRule) {
+    const splitAt = rule.indexOf("(");
+    const line1 = splitAt >= 0 ? rule.slice(0, splitAt) : rule;
+    const line2 = splitAt >= 0 ? rule.slice(splitAt) : "";
+    body = `${t(42, 12, 600, C.dim, name)}${t(66, 15, 700, C.text, line1)}${t(88, 15, 700, C.text, line2)}`;
+  } else {
+    const shown = kind === "approve-always" ? rule ?? target : target;
+    const size = kind === "approve-always" && rule != null ? 18 : shown.length > 11 ? 18 : 22;
+    body = `${t(52, 13, 600, C.dim, name)}${t(84, size, 700, C.text, shown)}`;
+  }
   return svgWrap(`
     ${tintFrame(col, !disabled, disabled ? null : o.phase)}
     ${corner}
-    ${t(52, 13, 600, C.dim, name)}
-    ${t(84, mid.length > 11 ? 18 : 22, 700, C.text, mid)}
+    ${body}
     ${t(112, word.length > 11 ? 14 : 18, 700, col, word)}`);
 }
 function fmtReset(iso) {
@@ -4805,10 +4826,17 @@ async function pollSessions() {
 }
 var APPROVE_KINDS = ["approve-allow", "approve-always", "approve-deny"];
 var HOLD_MS = () => (Number(state.globalSettings.hookHoldS) || HOLD_S_DEFAULT) * 1e3;
+var TIMEOUT_PAD_S = 3;
 var approveSeq = 0;
 var hookServer = null;
 var renderApproveAll = () => renderAll(APPROVE_KINDS);
 var hasApproveKey = () => [...views.values()].some((v) => APPROVE_KINDS.includes(v.kind));
+function authFlagged() {
+  const hits = hookServer?.stats.badPathHits;
+  if (!hits || hits.length < BADPATH_MIN_HITS) return false;
+  const now = Date.now();
+  return hits.filter((t) => now - t < BADPATH_WINDOW_MS).length >= BADPATH_MIN_HITS;
+}
 function noteHeadChange(prevId) {
   const now = head(state.approveQueue)?.id ?? null;
   if (now !== prevId) state.lastHeadChangeAt = Date.now();
@@ -4870,9 +4898,18 @@ var onHookDrop = (ticket) => {
   renderApproveAll();
 };
 var ensuring = null;
+var ensureAgain = false;
 function ensureHookServer() {
-  if (!ensuring) ensuring = ensureHookServerOnce().finally(() => {
+  if (ensuring) {
+    ensureAgain = true;
+    return ensuring;
+  }
+  ensuring = ensureHookServerOnce().finally(() => {
     ensuring = null;
+    if (ensureAgain) {
+      ensureAgain = false;
+      ensureHookServer();
+    }
   });
   return ensuring;
 }
@@ -4891,7 +4928,7 @@ async function ensureHookServerOnce() {
     log("approve: re-asserted the hook secret after a foreign global-settings write");
   }
   state.hookSecret = secret;
-  if (hookServer && hookServer.boundPort === port) {
+  if (hookServer && hookServer.boundPort === port && hookServer.secret === secret) {
     if (state.hookErr) {
       state.hookErr = null;
       renderApproveAll();
@@ -4922,7 +4959,7 @@ async function ensureHookServerOnce() {
 }
 function installSnippet() {
   const url = `http://127.0.0.1:${state.hookPort}/permission/${state.hookSecret ?? "<secret>"}`;
-  return hookFragment(url, HOLD_MS() / 1e3);
+  return hookFragment(url, HOLD_MS() / 1e3 + TIMEOUT_PAD_S);
 }
 async function walkTranscripts(dir, cutoffMs) {
   const out = [];
@@ -5307,7 +5344,7 @@ function render(context, kind) {
       shownReq.set(context, req?.id ?? null);
       shownRule.set(context, kind === "approve-always" && req ? alwaysRule(req, !!s.sessionOnly) : null);
       const fresh = req && Date.now() - req.receivedAt < PULSE_MS;
-      const err = state.hookErr ?? (!state.approveQueue.length && (hookServer?.stats.badPath ?? 0) > 0 ? "auth?" : null);
+      const err = state.hookErr ?? (!state.approveQueue.length && authFlagged() ? "auth?" : null);
       return setImage(context, approveKey(kind, req, {
         sessionOnly: !!s.sessionOnly,
         label: s.label,
@@ -5846,16 +5883,19 @@ if (process.argv.includes("--selftest")) {
       render(context, kindOf(action));
       if (kindOf(action) === "usage-meter" || GAUGE_WINDOW[kindOf(action)]) pollUsageMeter();
     } else if (event === "willDisappear") {
+      const wasApproveKey = APPROVE_KINDS.includes(views.get(context)?.kind);
       views.delete(context);
       cycle.delete(context);
       focusIdx.delete(context);
       usageView.delete(context);
       modelIdx.delete(context);
-      setTimeout(() => {
-        if (!hasApproveKey() && state.approveQueue.length) {
-          answerAndDrop(state.approveQueue.map((r) => r.id), "no Approve key visible");
-        }
-      }, 1e3);
+      if (wasApproveKey) {
+        setTimeout(() => {
+          if (!hasApproveKey() && state.approveQueue.length) {
+            answerAndDrop(state.approveQueue.map((r) => r.id), "no Approve key visible");
+          }
+        }, 1e3);
+      }
     } else if (event === "didReceiveSettings" && action) {
       const v = views.get(context);
       if (v) {

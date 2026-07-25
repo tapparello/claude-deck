@@ -59,7 +59,8 @@ export function decisionBody(kind, req, opts = {}) {
 
 export const NAME_MAX = 11;    // matches the existing statusKey name limit
 export const TARGET_MAX = 14;
-export const RULE_MAX = 18;
+export const RULE_MAX = 18;    // single-line/two-line split threshold for the ALWAYS key (src/plugin.js)
+export const RULE_FIT = 36;    // legibility ceiling: past this, alwaysRule() refuses rather than truncates
 
 // Collapse whitespace AND control characters. Applied to every branch, not just
 // Bash: a WebSearch query or an mcp tool name can carry newlines too.
@@ -87,7 +88,7 @@ function targetOf(req) {
 
 export function describeRequest(req) {
   return {
-    name: cut(base(req?.cwd), NAME_MAX).slice(0, NAME_MAX),
+    name: cut(base(req?.cwd), NAME_MAX),
     target: cut(targetOf(req), TARGET_MAX),
   };
 }
@@ -96,11 +97,20 @@ export function describeRequest(req) {
 // `gh pr merge --admin 1234` suggests `Bash(gh pr *)`. Showing the command would
 // misrepresent what the press persists. null => the ALWAYS key renders disabled, and
 // because decisionBody uses the SAME oneSafeRule, it also refuses.
+//
+// Returned WHOLE, never truncated: `WebFetch(` + `domain:` is already 16 characters,
+// so truncating at RULE_MAX (18) made every WebFetch domain grant paint as
+// "WebFetch(domain:e…" — two different domains rendered IDENTICALLY on the one key
+// that produces a durable write. src/plugin.js splits anything over RULE_MAX across
+// two lines instead. Only past RULE_FIT (36, the point past which even two lines
+// can't show it legibly) does this return null — a rule too long to show honestly
+// must not be pressable, rather than silently hiding the part that matters.
 export function alwaysRule(req, sessionOnly = false) {
   const entry = oneSafeRule(req, sessionOnly);
   if (!entry) return null;
   const { toolName, ruleContent } = entry.rules[0];
-  return cut(clean(`${toolName}(${ruleContent})`), RULE_MAX);
+  const text = clean(`${toolName}(${ruleContent})`);
+  return text.length > RULE_FIT ? null : text;
 }
 
 export const QUEUE_MAX = 8;
@@ -179,10 +189,9 @@ export function staleIds(queue, sessions, activity, now) {
     const matches = (sessions ?? []).filter((s) => s.sessionId === r.sessionId);
     if (!matches.length) continue; // invisible !== answered
     // Two live pids can share one sessionId after a resume: prefer the most recently
-    // updated record, then the one whose cwd matches this request.
-    const s = matches.slice().sort((a, b) =>
-      (b.statusUpdatedAt ?? 0) - (a.statusUpdatedAt ?? 0) ||
-      (Number(b.cwd === r.cwd) - Number(a.cwd === r.cwd)))[0];
+    // updated record. Only statusUpdatedAt is read below, so a tie there would compare
+    // equal either way — there is nothing left to break the tie WITH.
+    const s = matches.slice().sort((a, b) => (b.statusUpdatedAt ?? 0) - (a.statusUpdatedAt ?? 0))[0];
     if (s.statusUpdatedAt != null && r.statusSnapshot != null && s.statusUpdatedAt > r.statusSnapshot) {
       out.push(r.id);
       continue;

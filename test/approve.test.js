@@ -172,7 +172,7 @@ test("decisionBody: unknown kind returns null", () => {
   assert.equal(decisionBody("nope", { toolName: "Bash", suggestions: [] }), null);
 });
 
-import { describeRequest, alwaysRule, TARGET_MAX, RULE_MAX } from "../src/approve.js";
+import { describeRequest, alwaysRule, TARGET_MAX, RULE_FIT } from "../src/approve.js";
 
 const req = (over = {}) => ({ cwd: "/Users/x/dev/claude-deck", toolName: "Bash", toolInput: { command: "npm test" }, suggestions: [], ...over });
 
@@ -181,6 +181,11 @@ test("describeRequest names the project from cwd", () => {
   // 11-char cap: basename is truncated, not ellipsised away
   assert.equal(describeRequest(req({ cwd: "/a/fmf_connect_flutter" })).name.length, 11);
   assert.equal(describeRequest(req({ cwd: undefined })).name, "");
+});
+
+test("describeRequest names the project from a Windows-style cwd", () => {
+  // The only Windows-specific line in the new approver code, and CI runs windows-latest.
+  assert.equal(describeRequest(req({ cwd: "C:\\Users\\x\\proj" })).name, "proj");
 });
 
 test("describeRequest maps each tool to a target", () => {
@@ -250,11 +255,34 @@ test("alwaysRule returns null when the surviving set is ambiguous", () => {
   assert.equal(alwaysRule(req({ suggestions: [twoRules] })), null, "two rules");
 });
 
-test("alwaysRule truncates long rule text rather than disabling the key", () => {
-  const r = req({ suggestions: [sugg("some/very/long/path/prefix *")] });
+test("alwaysRule renders two different WebFetch domain rules legibly instead of identically", () => {
+  // Before this fix, RULE_MAX(18)-truncation collapsed BOTH of these to the
+  // identical "WebFetch(domain:e…" — the one key that produces a durable write
+  // could not distinguish a legit domain from an attacker's.
+  const example = alwaysRule(req({ toolName: "WebFetch", suggestions: [sugg("domain:example.com", "WebFetch")] }));
+  const evil = alwaysRule(req({ toolName: "WebFetch", suggestions: [sugg("domain:evil.com", "WebFetch")] }));
+  assert.equal(example, "WebFetch(domain:example.com)");
+  assert.equal(evil, "WebFetch(domain:evil.com)");
+  assert.notEqual(example, evil);
+  assert.ok(!example.endsWith("…") && !evil.endsWith("…"), "must be the full text, not a shared truncated prefix");
+});
+
+test("alwaysRule returns the rule text WHOLE when it lands exactly at RULE_FIT", () => {
+  const toolName = "T";
+  const ruleContent = "x".repeat(RULE_FIT - toolName.length - 2); // -2 for the parens
+  const r = req({ toolName, suggestions: [sugg(ruleContent, toolName)] });
   const out = alwaysRule(r);
-  assert.equal(out.length, RULE_MAX);
-  assert.ok(out.endsWith("…"), out);
+  assert.equal(out, `${toolName}(${ruleContent})`);
+  assert.equal(out.length, RULE_FIT);
+});
+
+test("alwaysRule refuses (returns null) one character past RULE_FIT", () => {
+  // A rule too long to show honestly must not be pressable — the honest failure
+  // mode is the disabled ALWAYS n/a state, not a misleading truncation.
+  const toolName = "T";
+  const ruleContent = "x".repeat(RULE_FIT - toolName.length - 2 + 1);
+  const r = req({ toolName, suggestions: [sugg(ruleContent, toolName)] });
+  assert.equal(alwaysRule(r), null);
 });
 
 import { enqueue, head, resolve, expiredIds, staleIds, seedBaselines, QUEUE_MAX, YOUNG_MS, HOLD_S_DEFAULT } from "../src/approve.js";
