@@ -383,3 +383,36 @@ test("seedBaselines tolerates a session the poller cannot see", () => {
   // an invisible session must never look 'answered'
   assert.deepEqual(staleIds(out, [], new Map(), NOW), []);
 });
+
+import { pressDecision, SETTLE_MS } from "../src/approve.js";
+
+const q1 = () => [entry(1), entry(2, { id: 2 })];
+
+test("pressDecision resolves the painted head", () => {
+  const d = pressDecision({ queue: q1(), shownId: 1, lastHeadChangeAt: 0, now: 10_000 });
+  assert.deepEqual(d, { action: "resolve", id: 1, reason: "ok" });
+});
+
+test("pressDecision does nothing on an empty queue", () => {
+  assert.equal(pressDecision({ queue: [], shownId: null, lastHeadChangeAt: 0, now: 10_000 }).action, "none");
+});
+
+test("pressDecision ALERTS when the head is not what was painted", () => {
+  // key still showed request 1; request 2 became head between paint and press
+  const d = pressDecision({ queue: [entry(2, { id: 2 })], shownId: 1, lastHeadChangeAt: 0, now: 10_000 });
+  assert.equal(d.action, "alert");
+  assert.equal(d.reason, "stale-paint");
+});
+
+test("pressDecision ignores a press inside the settle window", () => {
+  // no showOk means double-tapping is expected human behaviour
+  const d = pressDecision({ queue: q1(), shownId: 1, lastHeadChangeAt: 9_800, now: 10_000 });
+  assert.equal(d.action, "none");
+  assert.equal(d.reason, "settling");
+  const after = pressDecision({ queue: q1(), shownId: 1, lastHeadChangeAt: 10_000 - SETTLE_MS - 1, now: 10_000 });
+  assert.equal(after.action, "resolve");
+});
+
+test("pressDecision alerts when the key painted nothing but a request now exists", () => {
+  assert.equal(pressDecision({ queue: q1(), shownId: null, lastHeadChangeAt: 0, now: 10_000 }).action, "alert");
+});

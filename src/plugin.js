@@ -13,7 +13,7 @@ import { windowStartMs, parseRequests, mergeById, aggregate, aggregateByModel, b
 import { resolveStatusKey, statusEntry, autoSlot, sessionWhere, fmtShort, shortWait, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
 import { randomBytes } from "node:crypto";
 import {
-  decisionBody, describeRequest, alwaysRule,
+  decisionBody, describeRequest, alwaysRule, pressDecision,
   enqueue, head, resolve, expiredIds, staleIds, seedBaselines,
   PORT_DEFAULT, HOLD_S_DEFAULT, QUEUE_MAX,
 } from "./approve.js";
@@ -1513,6 +1513,51 @@ function onKeyDown(context, kind) {
       cycle.set(context, cy);
       render(context, "approver-waiting");
       return act(context, platform.focusWindow(blocked[cy.idx]));
+    }
+    case "approve-allow":
+    case "approve-always":
+    case "approve-deny": {
+      // Wrapped: a double-resolve throws ERR_HTTP_HEADERS_SENT synchronously, and
+      // onKeyDown runs bare off the websocket handler - an escape kills every key.
+      try {
+        if (state.hookErr) return showAlert(context);
+        const s = views.get(context)?.settings ?? {};
+        const d = pressDecision({
+          queue: state.approveQueue,
+          shownId: shownReq.get(context) ?? null,
+          lastHeadChangeAt: state.lastHeadChangeAt,
+          now: Date.now(),
+        });
+        if (d.action === "none") return;
+        if (d.action === "alert") { renderApproveAll(); return showAlert(context); }
+
+        const which = kind.slice("approve-".length); // allow | always | deny
+        // Decide BEFORE resolving: a refusal must not consume the request, or
+        // fat-fingering the greyed ALWAYS key would wipe it off ALLOW and DENY too.
+        const target = head(state.approveQueue);
+        const body = decisionBody(which, target, { sessionOnly: !!s.sessionOnly });
+        // Compare the rule against what this key actually PAINTED (shownRule), not
+        // against a value re-derived from the same object - that would be `x === x`.
+        const ruleOk = kind !== "approve-always"
+          || (shownRule.get(context) != null && alwaysRule(target, !!s.sessionOnly) === shownRule.get(context));
+        if (!body || !ruleOk) {
+          log(`approve: refused ${which} for ${target.toolName} (${!body ? "no single safe rule" : "rule is not what was shown"})`);
+          renderApproveAll();
+          return showAlert(context);
+        }
+
+        const { queue, req } = resolve(state.approveQueue, d.id);
+        if (!req) { renderApproveAll(); return showAlert(context); }
+        state.approveQueue = queue;
+        req.ticket.respond(body);
+        log(`approve: ${which} ${req.toolName}${which === "always" ? ` as ${shownRule.get(context)}` : ""}`);
+        state.lastHeadChangeAt = Date.now();
+        renderApproveAll();
+      } catch (e) {
+        log("approve press failed:", e?.stack ?? String(e));
+        showAlert(context);
+      }
+      return;
     }
   }
 }

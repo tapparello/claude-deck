@@ -172,3 +172,16 @@ export function staleIds(queue, sessions, activity, now) {
   }
   return out;
 }
+
+export const SETTLE_MS = 500;
+
+// A press must answer the request the key was DISPLAYING, never merely whatever sits
+// at head when the keyDown arrives - those differ whenever a drop, eviction or new
+// request lands between paint and press.
+export function pressDecision({ queue, shownId, lastHeadChangeAt, now, settleMs = SETTLE_MS }) {
+  const h = head(queue);
+  if (!h) return { action: "none", reason: "empty" };
+  if (now - lastHeadChangeAt < settleMs) return { action: "none", reason: "settling" };
+  if (h.id !== shownId) return { action: "alert", reason: "stale-paint" };
+  return { action: "resolve", id: h.id, reason: "ok" };
+}

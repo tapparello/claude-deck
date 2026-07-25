@@ -4185,6 +4185,14 @@ function resolve(queue, id) {
   const req = queue.find((r) => r.id === id) ?? null;
   return { queue: req ? queue.filter((r) => r.id !== id) : queue, req };
 }
+var SETTLE_MS = 500;
+function pressDecision({ queue, shownId, lastHeadChangeAt, now, settleMs = SETTLE_MS }) {
+  const h = head(queue);
+  if (!h) return { action: "none", reason: "empty" };
+  if (now - lastHeadChangeAt < settleMs) return { action: "none", reason: "settling" };
+  if (h.id !== shownId) return { action: "alert", reason: "stale-paint" };
+  return { action: "resolve", id: h.id, reason: "ok" };
+}
 
 // src/hookserver.js
 import { createServer } from "node:http";
@@ -5644,6 +5652,48 @@ function onKeyDown(context, kind) {
       cycle.set(context, cy);
       render(context, "approver-waiting");
       return act(context, platform.focusWindow(blocked[cy.idx]));
+    }
+    case "approve-allow":
+    case "approve-always":
+    case "approve-deny": {
+      try {
+        if (state.hookErr) return showAlert(context);
+        const s = views.get(context)?.settings ?? {};
+        const d = pressDecision({
+          queue: state.approveQueue,
+          shownId: shownReq.get(context) ?? null,
+          lastHeadChangeAt: state.lastHeadChangeAt,
+          now: Date.now()
+        });
+        if (d.action === "none") return;
+        if (d.action === "alert") {
+          renderApproveAll();
+          return showAlert(context);
+        }
+        const which = kind.slice("approve-".length);
+        const target = head(state.approveQueue);
+        const body = decisionBody(which, target, { sessionOnly: !!s.sessionOnly });
+        const ruleOk = kind !== "approve-always" || shownRule.get(context) != null && alwaysRule(target, !!s.sessionOnly) === shownRule.get(context);
+        if (!body || !ruleOk) {
+          log(`approve: refused ${which} for ${target.toolName} (${!body ? "no single safe rule" : "rule is not what was shown"})`);
+          renderApproveAll();
+          return showAlert(context);
+        }
+        const { queue, req } = resolve(state.approveQueue, d.id);
+        if (!req) {
+          renderApproveAll();
+          return showAlert(context);
+        }
+        state.approveQueue = queue;
+        req.ticket.respond(body);
+        log(`approve: ${which} ${req.toolName}${which === "always" ? ` as ${shownRule.get(context)}` : ""}`);
+        state.lastHeadChangeAt = Date.now();
+        renderApproveAll();
+      } catch (e) {
+        log("approve press failed:", e?.stack ?? String(e));
+        showAlert(context);
+      }
+      return;
     }
   }
 }
