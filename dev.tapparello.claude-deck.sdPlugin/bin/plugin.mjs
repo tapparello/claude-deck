@@ -2270,9 +2270,9 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes, createHash } = __require("crypto");
+    var { randomBytes: randomBytes2, createHash } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
-    var { URL } = __require("url");
+    var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
     var Receiver2 = require_receiver();
     var Sender2 = require_sender();
@@ -2441,7 +2441,7 @@ var require_websocket = __commonJS({
        *     not to skip UTF-8 validation for text and close messages
        * @private
        */
-      setSocket(socket, head, options) {
+      setSocket(socket, head2, options) {
         const receiver = new Receiver2({
           allowSynchronousEvents: options.allowSynchronousEvents,
           binaryType: this.binaryType,
@@ -2468,7 +2468,7 @@ var require_websocket = __commonJS({
         sender.onerror = senderOnError;
         if (socket.setTimeout) socket.setTimeout(0);
         if (socket.setNoDelay) socket.setNoDelay();
-        if (head.length > 0) socket.unshift(head);
+        if (head2.length > 0) socket.unshift(head2);
         socket.on("close", socketOnClose);
         socket.on("data", socketOnData);
         socket.on("end", socketOnEnd);
@@ -2773,11 +2773,11 @@ var require_websocket = __commonJS({
         );
       }
       let parsedUrl;
-      if (address instanceof URL) {
+      if (address instanceof URL2) {
         parsedUrl = address;
       } else {
         try {
-          parsedUrl = new URL(address);
+          parsedUrl = new URL2(address);
         } catch {
           throw new SyntaxError(`Invalid URL: ${address}`);
         }
@@ -2808,7 +2808,7 @@ var require_websocket = __commonJS({
         }
       }
       const defaultPort = isSecure ? 443 : 80;
-      const key = randomBytes(16).toString("base64");
+      const key = randomBytes2(16).toString("base64");
       const request = isSecure ? https.request : http.request;
       const protocolSet = /* @__PURE__ */ new Set();
       let perMessageDeflate;
@@ -2914,7 +2914,7 @@ var require_websocket = __commonJS({
           req.abort();
           let addr;
           try {
-            addr = new URL(location, address);
+            addr = new URL2(location, address);
           } catch (e) {
             const err = new SyntaxError(`Invalid URL: ${location}`);
             emitErrorAndClose(websocket, err);
@@ -2929,7 +2929,7 @@ var require_websocket = __commonJS({
           );
         }
       });
-      req.on("upgrade", (res, socket, head) => {
+      req.on("upgrade", (res, socket, head2) => {
         websocket.emit("upgrade", res);
         if (websocket.readyState !== WebSocket2.CONNECTING) return;
         req = websocket._req = null;
@@ -2989,7 +2989,7 @@ var require_websocket = __commonJS({
           }
           websocket._extensions[PerMessageDeflate2.extensionName] = perMessageDeflate;
         }
-        websocket.setSocket(socket, head, {
+        websocket.setSocket(socket, head2, {
           allowSynchronousEvents: opts.allowSynchronousEvents,
           generateMask: opts.generateMask,
           maxBufferedChunks: opts.maxBufferedChunks,
@@ -3408,8 +3408,8 @@ var require_websocket_server = __commonJS({
           this._removeListeners = addListeners(this._server, {
             listening: this.emit.bind(this, "listening"),
             error: this.emit.bind(this, "error"),
-            upgrade: (req, socket, head) => {
-              this.handleUpgrade(req, socket, head, emitConnection);
+            upgrade: (req, socket, head2) => {
+              this.handleUpgrade(req, socket, head2, emitConnection);
             }
           });
         }
@@ -3504,7 +3504,7 @@ var require_websocket_server = __commonJS({
        * @param {Function} cb Callback
        * @public
        */
-      handleUpgrade(req, socket, head, cb) {
+      handleUpgrade(req, socket, head2, cb) {
         socket.on("error", socketOnError);
         const key = req.headers["sec-websocket-key"];
         const upgrade = req.headers.upgrade;
@@ -3583,7 +3583,7 @@ var require_websocket_server = __commonJS({
                 protocols,
                 req,
                 socket,
-                head,
+                head2,
                 cb
               );
             });
@@ -3591,7 +3591,7 @@ var require_websocket_server = __commonJS({
           }
           if (!this.options.verifyClient(info)) return abortHandshake(socket, 401);
         }
-        this.completeUpgrade(extensions, key, protocols, req, socket, head, cb);
+        this.completeUpgrade(extensions, key, protocols, req, socket, head2, cb);
       }
       /**
        * Upgrade the connection to WebSocket.
@@ -3606,7 +3606,7 @@ var require_websocket_server = __commonJS({
        * @throws {Error} If called more than once with the same socket
        * @private
        */
-      completeUpgrade(extensions, key, protocols, req, socket, head, cb) {
+      completeUpgrade(extensions, key, protocols, req, socket, head2, cb) {
         if (!socket.readable || !socket.writable) return socket.destroy();
         if (socket[kWebSocket]) {
           throw new Error(
@@ -3640,7 +3640,7 @@ var require_websocket_server = __commonJS({
         this.emit("headers", headers, req);
         socket.write(headers.concat("\r\n").join("\r\n"));
         socket.removeListener("error", socketOnError);
-        ws2.setSocket(socket, head, {
+        ws2.setSocket(socket, head2, {
           allowSynchronousEvents: this.options.allowSynchronousEvents,
           maxBufferedChunks: this.options.maxBufferedChunks,
           maxFragments: this.options.maxFragments,
@@ -4097,6 +4097,171 @@ function statusEntry(resolved, cycleIdx = null) {
 }
 
 // src/plugin.js
+import { randomBytes } from "node:crypto";
+
+// src/approve.js
+var DENY_MESSAGE = "Denied from Stream Deck";
+var PORT_DEFAULT = 45623;
+function sanitizeSuggestions(suggestions, toolName, sessionOnly = false) {
+  if (!Array.isArray(suggestions)) return [];
+  if (String(toolName ?? "").startsWith("mcp__")) return [];
+  const out = [];
+  for (const e of suggestions) {
+    if (!e || typeof e !== "object") continue;
+    if (e.type !== "addRules" || e.behavior !== "allow") continue;
+    if (!Array.isArray(e.rules)) continue;
+    const rules = e.rules.filter(
+      (r) => r && typeof r.toolName === "string" && r.toolName && typeof r.ruleContent === "string" && r.ruleContent
+    ).map((r) => ({ toolName: r.toolName, ruleContent: r.ruleContent }));
+    if (!rules.length) continue;
+    const destination = sessionOnly || e.destination === "session" ? "session" : "localSettings";
+    out.push({ type: "addRules", behavior: "allow", destination, rules });
+  }
+  return out;
+}
+var wrap = (decision) => ({ hookSpecificOutput: { hookEventName: "PermissionRequest", decision } });
+function oneSafeRule(req, sessionOnly = false) {
+  const safe = sanitizeSuggestions(req?.suggestions, req?.toolName, sessionOnly);
+  if (safe.length !== 1 || safe[0].rules.length !== 1) return null;
+  return safe[0];
+}
+function decisionBody(kind, req, opts = {}) {
+  if (kind === "allow") return wrap({ behavior: "allow" });
+  if (kind === "deny") return wrap({ behavior: "deny", message: DENY_MESSAGE });
+  if (kind !== "always") return null;
+  const entry = oneSafeRule(req, !!opts.sessionOnly);
+  if (!entry) return null;
+  return wrap({ behavior: "allow", updatedPermissions: [entry] });
+}
+var QUEUE_MAX = 8;
+var HOLD_S_DEFAULT = 20;
+function enqueue(queue, req) {
+  const next = [...queue, req];
+  if (next.length <= QUEUE_MAX) return { queue: next, evicted: null };
+  const [evicted, ...rest] = next;
+  return { queue: rest, evicted };
+}
+var head = (queue) => queue[0] ?? null;
+function resolve(queue, id) {
+  const req = queue.find((r) => r.id === id) ?? null;
+  return { queue: req ? queue.filter((r) => r.id !== id) : queue, req };
+}
+
+// src/hookserver.js
+import { createServer } from "node:http";
+import { timingSafeEqual } from "node:crypto";
+var BODY_MAX = 1024 * 1024;
+var sameSecret = (a, b) => {
+  const A = Buffer.from(String(a)), B = Buffer.from(String(b));
+  return A.length === B.length && timingSafeEqual(A, B);
+};
+function startHookServer({ port, secret, onRequest, onDrop, log: log2 = () => {
+}, retries = 3, retryMs = 500 }) {
+  if (!secret || String(secret).length < 32) {
+    return Promise.reject(new Error("hook secret too short"));
+  }
+  const wantPath = `/permission/${secret}`;
+  const stats = { badPath: 0 };
+  let boundPort = null;
+  const server = createServer((req, res) => {
+    const deny = (code) => {
+      res.writeHead(code).end();
+    };
+    if (!sameSecret(req.url ?? "", wantPath)) {
+      stats.badPath++;
+      return deny(404);
+    }
+    const host = String(req.headers.host ?? "");
+    if (host !== `127.0.0.1:${boundPort}` && host !== `localhost:${boundPort}`) return deny(403);
+    if (req.method !== "POST") return deny(405);
+    req.setEncoding("utf8");
+    let body = "", over = false;
+    req.on("data", (c) => {
+      if (over) return;
+      body += c;
+      if (body.length > BODY_MAX) {
+        over = true;
+        res.writeHead(413);
+        res.end();
+        res.on("finish", () => req.destroy());
+      }
+    });
+    req.on("end", () => {
+      if (over) return;
+      let payload;
+      try {
+        payload = JSON.parse(body || "{}");
+      } catch {
+        return deny(400);
+      }
+      const ticket = {
+        id: null,
+        closed: false,
+        respond(out) {
+          if (ticket.closed || res.writableEnded) return false;
+          ticket.closed = true;
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(out ?? {}));
+          return true;
+        }
+      };
+      res.on("close", () => {
+        if (res.writableEnded || ticket.closed) return;
+        ticket.closed = true;
+        onDrop?.(ticket);
+      });
+      try {
+        onRequest(payload, ticket);
+      } catch (e) {
+        log2("hook onRequest threw:", String(e));
+        ticket.respond(null);
+      }
+    });
+    req.on("error", () => {
+    });
+  });
+  return new Promise((resolve2, reject) => {
+    let left = retries;
+    const attempt = () => {
+      server.once("error", (e) => {
+        if (e.code === "EADDRINUSE" && left-- > 0) {
+          log2(`hook port ${port} busy, retrying (${left} left)`);
+          setTimeout(attempt, retryMs);
+          return;
+        }
+        reject(e);
+      });
+      server.listen(port, "127.0.0.1", () => {
+        boundPort = server.address().port;
+        server.removeAllListeners("error");
+        server.on("error", (err) => log2("hook server error:", String(err)));
+        log2(`hook server on http://127.0.0.1:${boundPort}/permission/<secret>`);
+        resolve2({
+          boundPort,
+          stats,
+          close: () => new Promise((done) => {
+            let settled = false;
+            const finish = () => {
+              if (!settled) {
+                settled = true;
+                done();
+              }
+            };
+            server.close(finish);
+            server.closeIdleConnections();
+            setTimeout(() => {
+              server.closeAllConnections?.();
+              finish();
+            }, 250);
+          })
+        });
+      });
+    };
+    attempt();
+  });
+}
+
+// src/plugin.js
 var IS_MAC = process.platform === "darwin";
 var PLUGIN_DIR = path2.dirname(path2.dirname(fileURLToPath(import.meta.url)));
 var CLAUDE_DIR = path2.join(os.homedir(), ".claude");
@@ -4303,7 +4468,14 @@ var state = {
   burn: null,
   pctHistory: [],
   loggedRaw: false,
-  rates: {}
+  rates: {},
+  approveQueue: [],
+  hookSecret: null,
+  hookPort: PORT_DEFAULT,
+  hookErr: null,
+  lastHeadChangeAt: 0,
+  globalSettings: {},
+  pluginUUID: null
 };
 function pickBucket(o) {
   if (!o || typeof o !== "object") return null;
@@ -4497,6 +4669,144 @@ async function pollSessions() {
   } catch (e) {
     log("sessions poll failed:", String(e));
   }
+}
+var APPROVE_KINDS = ["approve-allow", "approve-always", "approve-deny"];
+var HOLD_MS = () => (Number(state.globalSettings.hookHoldS) || HOLD_S_DEFAULT) * 1e3;
+var approveSeq = 0;
+var hookServer = null;
+var renderApproveAll = () => renderAll(APPROVE_KINDS);
+var hasApproveKey = () => [...views.values()].some((v) => APPROVE_KINDS.includes(v.kind));
+function noteHeadChange(prevId) {
+  const now = head(state.approveQueue)?.id ?? null;
+  if (now !== prevId) state.lastHeadChangeAt = Date.now();
+}
+function answerAndDrop(ids, why) {
+  if (!ids.length) return;
+  const prev = head(state.approveQueue)?.id ?? null;
+  for (const id of ids) {
+    const { queue, req } = resolve(state.approveQueue, id);
+    state.approveQueue = queue;
+    if (req) {
+      req.ticket.respond(null);
+      log(`approve: dropped ${req.toolName} (${why})`);
+    }
+  }
+  noteHeadChange(prev);
+  renderApproveAll();
+}
+function onHookRequest(payload, ticket) {
+  const toolName = String(payload?.tool_name ?? "");
+  log(`approve: ${toolName} from ${path2.basename(String(payload?.cwd ?? ""))}`);
+  if (payload?.hook_event_name !== "PermissionRequest" || !toolName) return void ticket.respond(null);
+  if (!hasApproveKey()) return void ticket.respond(null);
+  const req = {
+    id: ++approveSeq,
+    receivedAt: Date.now(),
+    sessionId: payload.session_id ?? null,
+    cwd: payload.cwd ?? "",
+    toolName,
+    toolInput: payload.tool_input ?? null,
+    suggestions: payload.permission_suggestions ?? [],
+    // Baselines are seeded by the first pollSessions tick that OBSERVES this request,
+    // never here: state.sessions is up to 5s stale and would predate the status flip
+    // that caused this very prompt, making the request look stale forever.
+    statusSnapshot: null,
+    activitySnapshot: null,
+    baselined: false,
+    ticket
+  };
+  ticket.id = req.id;
+  const prev = head(state.approveQueue)?.id ?? null;
+  const { queue, evicted } = enqueue(state.approveQueue, req);
+  state.approveQueue = queue;
+  if (evicted) {
+    evicted.ticket.respond(null);
+    log(`approve: evicted ${evicted.toolName} (queue full at ${QUEUE_MAX})`);
+  }
+  noteHeadChange(prev);
+  renderApproveAll();
+}
+var onHookDrop = (ticket) => {
+  if (ticket.id == null) return;
+  const prev = head(state.approveQueue)?.id ?? null;
+  const { queue, req } = resolve(state.approveQueue, ticket.id);
+  if (!req) return;
+  state.approveQueue = queue;
+  log(`approve: socket closed for ${req.toolName}`);
+  noteHeadChange(prev);
+  renderApproveAll();
+};
+var ensuring = null;
+function ensureHookServer() {
+  if (!ensuring) ensuring = ensureHookServerOnce().finally(() => {
+    ensuring = null;
+  });
+  return ensuring;
+}
+async function ensureHookServerOnce() {
+  const gs = state.globalSettings;
+  let secret = typeof gs.hookSecret === "string" && gs.hookSecret.length >= 32 ? gs.hookSecret : state.hookSecret;
+  const port = Number(gs.hookPort) > 0 ? Number(gs.hookPort) : PORT_DEFAULT;
+  if (!secret) {
+    secret = randomBytes(24).toString("base64url");
+    state.globalSettings = { ...gs, hookSecret: secret, hookPort: port };
+    send({ event: "setGlobalSettings", context: state.pluginUUID, payload: state.globalSettings });
+    log("approve: generated a new hook secret");
+  }
+  if (secret !== state.hookSecret) {
+    state.hookSecret = secret;
+    if (gs.hookSecret !== secret) {
+      state.globalSettings = { ...state.globalSettings, hookSecret: secret, hookPort: port };
+      send({ event: "setGlobalSettings", context: state.pluginUUID, payload: state.globalSettings });
+    }
+  }
+  if (hookServer && hookServer.boundPort === port) {
+    if (state.hookErr) {
+      state.hookErr = null;
+      renderApproveAll();
+    }
+    return;
+  }
+  const previous = hookServer;
+  try {
+    const next = await startHookServer({
+      port,
+      secret,
+      onRequest: onHookRequest,
+      onDrop: onHookDrop,
+      log
+    });
+    if (previous && state.approveQueue.length) {
+      answerAndDrop(state.approveQueue.map((r) => r.id), "hook server rebinding");
+    }
+    hookServer = next;
+    state.hookPort = next.boundPort;
+    state.hookErr = null;
+    if (previous) await previous.close();
+  } catch (e) {
+    state.hookErr = e.code === "EADDRINUSE" ? "port busy" : String(e.message ?? e);
+    log("approve: hook server failed:", state.hookErr);
+  }
+  renderApproveAll();
+}
+function installSnippet() {
+  const url = `http://127.0.0.1:${state.hookPort}/permission/${state.hookSecret ?? "<secret>"}`;
+  return [
+    '// Add this INSIDE the "hooks" object of ~/.claude/settings.json.',
+    '// If that file has no "hooks" key yet, wrap this in one:  "hooks": { ... }',
+    '"PermissionRequest": [',
+    "  {",
+    '    "matcher": "",',
+    '    "hooks": [',
+    "      {",
+    '        "type": "http",',
+    `        "url": ${JSON.stringify(url)},`,
+    `        "timeout": ${HOLD_MS() / 1e3}`,
+    "      }",
+    "    ]",
+    "  }",
+    "]"
+  ].join("\n");
 }
 async function walkTranscripts(dir, cutoffMs) {
   const out = [];
@@ -4755,13 +5065,13 @@ function render(context, kind) {
       const want = views.get(context)?.settings?.model;
       const i = modelListIndex(context, list, want, mmode);
       const pick = list[i];
-      const head = ((pick?.name ?? pick?.model ?? want ?? "MODEL") + "").toUpperCase().slice(0, 8) + " 7D";
+      const head2 = ((pick?.name ?? pick?.model ?? want ?? "MODEL") + "").toUpperCase().slice(0, 8) + " 7D";
       const more = list.length > 1 ? ` ${i + 1}/${list.length}` : "";
-      if (!pick) return setImage(context, usageMeterKey(head, "--", mmode === "local" ? "no data yet" : "no data", true));
+      if (!pick) return setImage(context, usageMeterKey(head2, "--", mmode === "local" ? "no data yet" : "no data", true));
       if (mmode === "local") {
-        return setImage(context, localGauge(head + more, pick, views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
+        return setImage(context, localGauge(head2 + more, pick, views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
       }
-      return setImage(context, gaugeKey(head + more, pick.pct ?? null, pick.resetsAt ? fmtReset(pick.resetsAt) : "no data", pick.pct >= 90 ? animPhase : null));
+      return setImage(context, gaugeKey(head2 + more, pick.pct ?? null, pick.resetsAt ? fmtReset(pick.resetsAt) : "no data", pick.pct >= 90 ? animPhase : null));
     }
     case "burn-rate":
       return setImage(context, burnKey(state.burn?.tokensHour ?? null, sessionEta()));
@@ -4886,35 +5196,35 @@ function sessionByPid(pid) {
 var OSA_TIMEOUT_MS = 8e3;
 var PULSE_MS = 12e4;
 function spawnDetached(cmd, args) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve2, reject) => {
     const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
     child.once("error", reject);
     child.once("spawn", () => {
       child.unref();
-      resolve();
+      resolve2();
     });
   });
 }
 function openMac(args) {
-  return new Promise((resolve, reject) => {
-    execFile("open", args, (err) => err ? reject(err) : resolve());
+  return new Promise((resolve2, reject) => {
+    execFile("open", args, (err) => err ? reject(err) : resolve2());
   });
 }
 function runOsa(lines) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve2, reject) => {
     const args = [];
     for (const l of lines) {
       args.push("-e", l);
     }
-    execFile("osascript", args, { timeout: OSA_TIMEOUT_MS }, (err) => err ? reject(err) : resolve());
+    execFile("osascript", args, { timeout: OSA_TIMEOUT_MS }, (err) => err ? reject(err) : resolve2());
   });
 }
 function pbcopy(text) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve2, reject) => {
     const child = spawn("pbcopy");
     child.once("error", reject);
     child.stdin.once("error", reject);
-    child.once("close", (code) => code === 0 ? resolve() : reject(new Error("pbcopy exit " + code)));
+    child.once("close", (code) => code === 0 ? resolve2() : reject(new Error("pbcopy exit " + code)));
     child.stdin.end(String(text ?? ""));
   });
 }
@@ -4967,26 +5277,26 @@ $found = [IntPtr]::Zero;
 [void][W]::EnumWindows({ param($h, $l) $sb = New-Object System.Text.StringBuilder 512; [void][W]::GetWindowText($h, $sb, 512); if ([W]::IsWindowVisible($h) -and $sb.ToString().ToLower().Contains($target)) { $script:found = $h; return $false }; return $true }, [IntPtr]::Zero);
 if ($found -eq [IntPtr]::Zero) { exit 1 };
 [void][W]::ShowWindow($found, 9); [void][W]::SetForegroundWindow($found); exit 0`;
-    return new Promise((resolve, reject) => {
-      execFile("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], (err) => err ? reject(err) : resolve());
+    return new Promise((resolve2, reject) => {
+      execFile("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], (err) => err ? reject(err) : resolve2());
     });
   },
   // Windows Terminal (new foreground window) with a PowerShell fallback. The
   // whole fallback chain stays internal and settles the Promise once (spec §5.8).
   openTerminal(dir) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       const psFallback = () => {
         const fb = spawn("cmd.exe", ["/c", "start", "", "powershell", "-NoExit", "-Command", `cd '${dir}'; claude`], { detached: true, stdio: "ignore" });
         fb.once("error", reject);
         fb.once("spawn", () => {
           fb.unref();
-          resolve();
+          resolve2();
         });
       };
       const wt = spawn("cmd.exe", ["/c", "start", "", "wt", "-w", "new", "-d", dir, "powershell", "-NoExit", "-Command", "claude"], { detached: true, stdio: "ignore" });
       wt.once("error", psFallback);
       wt.once("exit", (code) => {
-        if (code === 0) resolve();
+        if (code === 0) resolve2();
         else psFallback();
       });
       wt.unref();
@@ -5061,7 +5371,7 @@ var macPlatform = {
   focusWindow(s) {
     const pid = s?.pid;
     if (!pid) return Promise.reject(new Error("no pid for session"));
-    const ps = (args) => new Promise((resolve, reject) => execFile("ps", args, { timeout: OSA_TIMEOUT_MS }, (e, out) => e ? reject(e) : resolve(String(out))));
+    const ps = (args) => new Promise((resolve2, reject) => execFile("ps", args, { timeout: OSA_TIMEOUT_MS }, (e, out) => e ? reject(e) : resolve2(String(out))));
     return ps(["-axo", "pid=,ppid=,comm="]).then((out) => {
       const bundle = hostAppForPid(parsePsTree(out), pid);
       if (!bundle) throw new Error("no host app for pid " + pid);
@@ -5111,19 +5421,19 @@ var macPlatform = {
   // OAuth token from the login Keychain (service "Claude Code-credentials"),
   // falling back to the credentials file if a user exported it.
   readToken() {
-    return new Promise((resolve) => {
+    return new Promise((resolve2) => {
       execFile(
         "security",
         ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
         { timeout: OSA_TIMEOUT_MS },
         async (err, out) => {
           const tok = err ? null : parseKeychainToken(out);
-          if (tok) return resolve(tok);
+          if (tok) return resolve2(tok);
           try {
             const raw = await fsp.readFile(CREDS_FILE, "utf8");
-            resolve(parseKeychainToken(raw));
+            resolve2(parseKeychainToken(raw));
           } catch {
-            resolve(null);
+            resolve2(null);
           }
         }
       );
@@ -5277,6 +5587,37 @@ if (process.argv.includes("--selftest")) {
     await pollUsageMeter(["5h", "today", "month", "7day"]);
     log("selftest usage-meter:", JSON.stringify(state.usageMeter));
     log("selftest per-model 7d:", JSON.stringify(state.usageMeterModels));
+    const secret = randomBytes(24).toString("base64url");
+    let got = null;
+    const srv = await startHookServer({
+      port: 0,
+      secret,
+      log,
+      onRequest: (payload, ticket) => {
+        got = payload;
+        ticket.respond(decisionBody("allow", {}));
+      }
+    });
+    const res = await fetch(`http://127.0.0.1:${srv.boundPort}/permission/${secret}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hook_event_name: "PermissionRequest", tool_name: "Bash", tool_input: { command: "npm test" } })
+    });
+    const body = await res.json();
+    log(
+      "selftest hook:",
+      res.status,
+      "payload tool:",
+      got?.tool_name,
+      "decision:",
+      body?.hookSpecificOutput?.decision?.behavior
+    );
+    log("selftest approver config: holdS=", HOLD_S_DEFAULT, "portDefault=", PORT_DEFAULT, "queueMax=", QUEUE_MAX);
+    await srv.close();
+    if (res.status !== 200 || got?.tool_name !== "Bash" || body?.hookSpecificOutput?.decision?.behavior !== "allow") {
+      log("selftest hook FAILED");
+      process.exit(1);
+    }
     process.exit(0);
   })();
 } else {
@@ -5286,6 +5627,7 @@ if (process.argv.includes("--selftest")) {
   log(`starting: port=${port} uuid=${pluginUUID}`);
   ws = new import_websocket.default(`ws://127.0.0.1:${port}`);
   ws.on("open", () => {
+    state.pluginUUID = pluginUUID;
     send({ event: registerEvent, uuid: pluginUUID });
     log("registered with Stream Deck");
     send({ event: "getGlobalSettings", context: pluginUUID });
@@ -5335,11 +5677,18 @@ if (process.argv.includes("--selftest")) {
         if (v.kind === "usage-meter" || GAUGE_WINDOW[v.kind]) pollUsageMeter();
       }
     } else if (event === "didReceiveGlobalSettings") {
-      state.rates = msg.payload?.settings?.rates ?? {};
+      state.globalSettings = msg.payload?.settings ?? {};
+      state.rates = state.globalSettings.rates ?? {};
       pollUsageMeter();
+      ensureHookServer();
     } else if (event === "sendToPlugin" && action) {
       if (msg.payload?.cmd === "getModels") {
         send({ event: "sendToPropertyInspector", context, payload: { models: (state.usage?.models ?? []).map((m) => m.name) } });
+      }
+      if (msg.payload?.cmd === "getInstall") {
+        send({ event: "sendToPropertyInspector", context, payload: {
+          install: { port: state.hookPort, holdS: HOLD_MS() / 1e3, snippet: installSnippet(), error: state.hookErr }
+        } });
       }
     } else if (event === "keyDown" && action) {
       onKeyDown(context, kindOf(action));

@@ -11,6 +11,13 @@ import { fileURLToPath } from "node:url";
 import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript } from "./osa.js";
 import { windowStartMs, parseRequests, mergeById, aggregate, aggregateByModel, budgetPct, gaugeSource, familyOf } from "./usage.js";
 import { resolveStatusKey, statusEntry, autoSlot, sessionWhere, fmtShort, shortWait, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
+import { randomBytes } from "node:crypto";
+import {
+  decisionBody, describeRequest, alwaysRule,
+  enqueue, head, resolve, expiredIds, staleIds, seedBaselines,
+  PORT_DEFAULT, HOLD_S_DEFAULT, QUEUE_MAX,
+} from "./approve.js";
+import { startHookServer } from "./hookserver.js";
 
 const IS_MAC = process.platform === "darwin";
 
@@ -260,6 +267,13 @@ const state = {
   pctHistory: [],
   loggedRaw: false,
   rates: {},
+  approveQueue: [],
+  hookSecret: null,
+  hookPort: PORT_DEFAULT,
+  hookErr: null,
+  lastHeadChangeAt: 0,
+  globalSettings: {},
+  pluginUUID: null,
 };
 
 function pickBucket(o) {
@@ -461,6 +475,172 @@ async function pollSessions() {
   } catch (e) {
     log("sessions poll failed:", String(e));
   }
+}
+
+// ---------- approver ----------
+const APPROVE_KINDS = ["approve-allow", "approve-always", "approve-deny"];
+const HOLD_MS = () => (Number(state.globalSettings.hookHoldS) || HOLD_S_DEFAULT) * 1000;
+let approveSeq = 0;
+let hookServer = null;
+
+const renderApproveAll = () => renderAll(APPROVE_KINDS);
+const hasApproveKey = () => [...views.values()].some((v) => APPROVE_KINDS.includes(v.kind));
+
+function noteHeadChange(prevId) {
+  const now = head(state.approveQueue)?.id ?? null;
+  if (now !== prevId) state.lastHeadChangeAt = Date.now();
+}
+
+// Answering {} frees the socket at once. Safety does not depend on it (the terminal
+// prompt is live and answerable throughout) but the queue's honesty does.
+function answerAndDrop(ids, why) {
+  if (!ids.length) return;
+  const prev = head(state.approveQueue)?.id ?? null;
+  for (const id of ids) {
+    const { queue, req } = resolve(state.approveQueue, id);
+    state.approveQueue = queue;
+    if (req) {
+      req.ticket.respond(null);
+      log(`approve: dropped ${req.toolName} (${why})`);
+    }
+  }
+  noteHeadChange(prev);
+  renderApproveAll();
+}
+
+function onHookRequest(payload, ticket) {
+  // Metadata only. tool_input for a Write is an entire file, and claude-deck.log
+  // lives in the plugin folder that README tells users to open and share.
+  const toolName = String(payload?.tool_name ?? "");
+  log(`approve: ${toolName} from ${path.basename(String(payload?.cwd ?? ""))}`);
+  if (payload?.hook_event_name !== "PermissionRequest" || !toolName) return void ticket.respond(null);
+  if (!hasApproveKey()) return void ticket.respond(null); // zero added latency when unused
+
+  const req = {
+    id: ++approveSeq,
+    receivedAt: Date.now(),
+    sessionId: payload.session_id ?? null,
+    cwd: payload.cwd ?? "",
+    toolName,
+    toolInput: payload.tool_input ?? null,
+    suggestions: payload.permission_suggestions ?? [],
+    // Baselines are seeded by the first pollSessions tick that OBSERVES this request,
+    // never here: state.sessions is up to 5s stale and would predate the status flip
+    // that caused this very prompt, making the request look stale forever.
+    statusSnapshot: null,
+    activitySnapshot: null,
+    baselined: false,
+    ticket,
+  };
+  ticket.id = req.id;
+  const prev = head(state.approveQueue)?.id ?? null;
+  const { queue, evicted } = enqueue(state.approveQueue, req);
+  state.approveQueue = queue;
+  if (evicted) { evicted.ticket.respond(null); log(`approve: evicted ${evicted.toolName} (queue full at ${QUEUE_MAX})`); }
+  noteHeadChange(prev);
+  renderApproveAll();
+}
+
+const onHookDrop = (ticket) => {
+  if (ticket.id == null) return;
+  const prev = head(state.approveQueue)?.id ?? null;
+  const { queue, req } = resolve(state.approveQueue, ticket.id);
+  if (!req) return;
+  state.approveQueue = queue;
+  log(`approve: socket closed for ${req.toolName}`);
+  // Must arm the settle window like answerAndDrop does, or a drop that promotes a new
+  // head lets a double-tap answer a request the user never read.
+  noteHeadChange(prev);
+  renderApproveAll();
+};
+
+let ensuring = null;
+// Serialised: this function's own setGlobalSettings makes Stream Deck broadcast
+// didReceiveGlobalSettings straight back, which would re-enter it while the first
+// startHookServer is still pending - both would then bind the same port and the loser
+// would set "port busy" while a healthy server is listening.
+function ensureHookServer() {
+  if (!ensuring) ensuring = ensureHookServerOnce().finally(() => { ensuring = null; });
+  return ensuring;
+}
+
+async function ensureHookServerOnce() {
+  const gs = state.globalSettings;
+  // Never regenerate over a secret we already hold: any global-settings write that
+  // arrives without hookSecret would otherwise silently invalidate the URL the user
+  // already pasted into ~/.claude/settings.json.
+  let secret = typeof gs.hookSecret === "string" && gs.hookSecret.length >= 32 ? gs.hookSecret
+             : state.hookSecret;
+  const port = Number(gs.hookPort) > 0 ? Number(gs.hookPort) : PORT_DEFAULT;
+  if (!secret) {
+    // 24 random bytes -> 32 base64url chars. Stored in Stream Deck GLOBAL SETTINGS,
+    // never in PLUGIN_DIR: deploy.sh does `rm -rf "$DST"`, which would wipe it and
+    // silently break the hook. Merge, never clobber - `rates` lives here too.
+    secret = randomBytes(24).toString("base64url");
+    state.globalSettings = { ...gs, hookSecret: secret, hookPort: port };
+    send({ event: "setGlobalSettings", context: state.pluginUUID, payload: state.globalSettings });
+    log("approve: generated a new hook secret");
+  }
+  if (secret !== state.hookSecret) {
+    state.hookSecret = secret;
+    // Re-assert it if a foreign write dropped it, so the pasted URL keeps working.
+    if (gs.hookSecret !== secret) {
+      state.globalSettings = { ...state.globalSettings, hookSecret: secret, hookPort: port };
+      send({ event: "setGlobalSettings", context: state.pluginUUID, payload: state.globalSettings });
+    }
+  }
+  // Compare against what is actually BOUND, and clear a stale error: gating this on
+  // !state.hookErr would wedge us into permanent "port busy" once it was ever set.
+  if (hookServer && hookServer.boundPort === port) {
+    if (state.hookErr) { state.hookErr = null; renderApproveAll(); }
+    return;
+  }
+  const previous = hookServer;
+  try {
+    const next = await startHookServer({
+      port, secret, onRequest: onHookRequest, onDrop: onHookDrop, log,
+    });
+    // Requests held by the old server belong to a socket we are about to drop.
+    if (previous && state.approveQueue.length) {
+      answerAndDrop(state.approveQueue.map((r) => r.id), "hook server rebinding");
+    }
+    hookServer = next;
+    state.hookPort = next.boundPort;
+    state.hookErr = null;
+    if (previous) await previous.close();
+  } catch (e) {
+    state.hookErr = e.code === "EADDRINUSE" ? "port busy" : String(e.message ?? e);
+    log("approve: hook server failed:", state.hookErr);
+  }
+  renderApproveAll();
+}
+
+// A FRAGMENT, not a whole document. `~/.claude/settings.json` already exists on any
+// real install - and on this machine it holds an Azure DevOps PAT - so telling the user
+// to paste `{"hooks":{...}}` over it would produce invalid JSON at best and destroy
+// their settings at worst.
+function installSnippet() {
+  const url = `http://127.0.0.1:${state.hookPort}/permission/${state.hookSecret ?? "<secret>"}`;
+  // A FRAGMENT, not a whole document. ~/.claude/settings.json already exists on any
+  // real install - and on this machine it holds an Azure DevOps PAT - so telling the
+  // user to paste {"hooks":{...}} over it would produce invalid JSON at best and
+  // destroy their settings at worst.
+  return [
+    '// Add this INSIDE the "hooks" object of ~/.claude/settings.json.',
+    '// If that file has no "hooks" key yet, wrap this in one:  "hooks": { ... }',
+    '"PermissionRequest": [',
+    '  {',
+    '    "matcher": "",',
+    '    "hooks": [',
+    '      {',
+    '        "type": "http",',
+    `        "url": ${JSON.stringify(url)},`,
+    `        "timeout": ${HOLD_MS() / 1000}`,
+    "      }",
+    "    ]",
+    "  }",
+    "]",
+  ].join("\n");
 }
 
 // Recursively collect .jsonl transcript files (including <uuid>/subagents/)
@@ -1290,6 +1470,26 @@ if (process.argv.includes("--selftest")) {
     await pollUsageMeter(["5h", "today", "month", "7day"]);
     log("selftest usage-meter:", JSON.stringify(state.usageMeter));
     log("selftest per-model 7d:", JSON.stringify(state.usageMeterModels));
+    // End-to-end hook check on an ephemeral port: this is the only automated
+    // coverage of the intake path, since plugin.js has no unit-test harness.
+    const secret = randomBytes(24).toString("base64url");
+    let got = null;
+    const srv = await startHookServer({
+      port: 0, secret, log, onRequest: (payload, ticket) => { got = payload; ticket.respond(decisionBody("allow", {})); },
+    });
+    const res = await fetch(`http://127.0.0.1:${srv.boundPort}/permission/${secret}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hook_event_name: "PermissionRequest", tool_name: "Bash", tool_input: { command: "npm test" } }),
+    });
+    const body = await res.json();
+    log("selftest hook:", res.status, "payload tool:", got?.tool_name,
+        "decision:", body?.hookSpecificOutput?.decision?.behavior);
+    log("selftest approver config: holdS=", HOLD_S_DEFAULT, "portDefault=", PORT_DEFAULT, "queueMax=", QUEUE_MAX);
+    await srv.close();
+    if (res.status !== 200 || got?.tool_name !== "Bash" || body?.hookSpecificOutput?.decision?.behavior !== "allow") {
+      log("selftest hook FAILED");
+      process.exit(1);
+    }
     process.exit(0);
   })();
 } else {
@@ -1300,6 +1500,7 @@ if (process.argv.includes("--selftest")) {
 
   ws = new WebSocket(`ws://127.0.0.1:${port}`);
   ws.on("open", () => {
+    state.pluginUUID = pluginUUID;
     send({ event: registerEvent, uuid: pluginUUID });
     log("registered with Stream Deck");
     send({ event: "getGlobalSettings", context: pluginUUID });
@@ -1336,11 +1537,18 @@ if (process.argv.includes("--selftest")) {
       const v = views.get(context);
       if (v) { v.settings = msg.payload?.settings ?? {}; render(context, v.kind); if (v.kind === "usage-meter" || GAUGE_WINDOW[v.kind]) pollUsageMeter(); }
     } else if (event === "didReceiveGlobalSettings") {
-      state.rates = msg.payload?.settings?.rates ?? {};
+      state.globalSettings = msg.payload?.settings ?? {};
+      state.rates = state.globalSettings.rates ?? {};
       pollUsageMeter();
+      ensureHookServer();
     } else if (event === "sendToPlugin" && action) {
       if (msg.payload?.cmd === "getModels") {
         send({ event: "sendToPropertyInspector", context, payload: { models: (state.usage?.models ?? []).map((m) => m.name) } });
+      }
+      if (msg.payload?.cmd === "getInstall") {
+        send({ event: "sendToPropertyInspector", context, payload: {
+          install: { port: state.hookPort, holdS: HOLD_MS() / 1000, snippet: installSnippet(), error: state.hookErr },
+        } });
       }
     } else if (event === "keyDown" && action) {
       onKeyDown(context, kindOf(action));
