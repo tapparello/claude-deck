@@ -102,3 +102,73 @@ export function alwaysRule(req, sessionOnly = false) {
   const { toolName, ruleContent } = entry.rules[0];
   return cut(clean(`${toolName}(${ruleContent})`), RULE_MAX);
 }
+
+export const QUEUE_MAX = 8;
+export const HOLD_S_DEFAULT = 20;
+export const YOUNG_MS = 10_000;
+
+export function enqueue(queue, req) {
+  const next = [...queue, req];
+  // Evict the OLDEST rather than refusing the newest: otherwise eight requests
+  // already answered in the terminal would disable the approver for a whole hold
+  // window, with a full depth badge that looks identical to "busy".
+  if (next.length <= QUEUE_MAX) return { queue: next, evicted: null };
+  const [evicted, ...rest] = next;
+  return { queue: rest, evicted };
+}
+
+export const head = (queue) => queue[0] ?? null;
+
+export function resolve(queue, id) {
+  const req = queue.find((r) => r.id === id) ?? null;
+  return { queue: req ? queue.filter((r) => r.id !== id) : queue, req };
+}
+
+export const expiredIds = (queue, now, holdMs) =>
+  queue.filter((r) => now - r.receivedAt > holdMs).map((r) => r.id);
+
+// Record each new request's baseline from the first poll that OBSERVES it. Snapshotting
+// at enqueue would capture a <=5s-stale cache that predates the status flip which
+// caused the prompt, and every request would then look stale forever.
+export function seedBaselines(queue, sessions, activity) {
+  if (!queue.some((r) => !r.baselined)) return queue;
+  return queue.map((r) => {
+    if (r.baselined) return r;
+    const matches = (sessions ?? []).filter((s) => s.sessionId === r.sessionId);
+    const s = matches.slice().sort((a, b) => (b.statusUpdatedAt ?? 0) - (a.statusUpdatedAt ?? 0))[0] ?? null;
+    return {
+      ...r,
+      statusSnapshot: s?.statusUpdatedAt ?? null,
+      activitySnapshot: activity?.get?.(r.sessionId) ?? null,
+      baselined: true,
+    };
+  });
+}
+
+// Request-scoped staleness. "The session left status:waiting" is NOT usable here:
+// VS Code sessions write no status at all, two live pids can share one sessionId
+// after a resume, and a waiting->busy->waiting flip inside one turn is often
+// shorter than the 5s poll. So compare per-request snapshots instead, and bias
+// towards keeping when we cannot tell — a false keep costs a stale key, while a
+// false drop would silently remove a live request from the deck.
+export function staleIds(queue, sessions, activity, now) {
+  const out = [];
+  for (const r of queue) {
+    if (!r.baselined) continue; // no observed baseline yet -> nothing to compare against
+    if (now - r.receivedAt < YOUNG_MS) continue;
+    const matches = (sessions ?? []).filter((s) => s.sessionId === r.sessionId);
+    if (!matches.length) continue; // invisible !== answered
+    // Two live pids can share one sessionId after a resume: prefer the most recently
+    // updated record, then the one whose cwd matches this request.
+    const s = matches.slice().sort((a, b) =>
+      (b.statusUpdatedAt ?? 0) - (a.statusUpdatedAt ?? 0) ||
+      (Number(b.cwd === r.cwd) - Number(a.cwd === r.cwd)))[0];
+    if (s.statusUpdatedAt != null && r.statusSnapshot != null && s.statusUpdatedAt > r.statusSnapshot) {
+      out.push(r.id);
+      continue;
+    }
+    const mt = activity?.get?.(r.sessionId) ?? null;
+    if (mt != null && r.activitySnapshot != null && mt > r.activitySnapshot) out.push(r.id);
+  }
+  return out;
+}

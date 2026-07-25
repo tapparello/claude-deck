@@ -256,3 +256,130 @@ test("alwaysRule truncates long rule text rather than disabling the key", () => 
   assert.equal(out.length, RULE_MAX);
   assert.ok(out.endsWith("…"), out);
 });
+
+import { enqueue, head, resolve, expiredIds, staleIds, seedBaselines, QUEUE_MAX, YOUNG_MS, HOLD_S_DEFAULT } from "../src/approve.js";
+
+const entry = (id, over = {}) => ({
+  id, receivedAt: 1000, sessionId: "s1",
+  cwd: "/a/proj", toolName: "Bash", toolInput: { command: "x" }, suggestions: [],
+  statusSnapshot: 500, activitySnapshot: null, baselined: true, ...over,
+});
+const fill = (n) => { let q = []; for (let i = 1; i <= n; i++) q = enqueue(q, entry(i)).queue; return q; };
+
+test("queue is FIFO and head is the oldest", () => {
+  const q = fill(3);
+  assert.deepEqual(q.map((r) => r.id), [1, 2, 3]);
+  assert.equal(head(q).id, 1);
+  assert.equal(head([]), null);
+});
+
+test("enqueue at QUEUE_MAX evicts the oldest and reports it", () => {
+  const full = fill(QUEUE_MAX);
+  const { queue, evicted } = enqueue(full, entry(99));
+  assert.equal(queue.length, QUEUE_MAX);
+  assert.equal(evicted.id, 1, "oldest is evicted, not the newest refused");
+  assert.equal(head(queue).id, 2);
+  assert.equal(queue.at(-1).id, 99);
+});
+
+test("enqueue below the cap evicts nothing", () => {
+  assert.equal(enqueue(fill(2), entry(3)).evicted, null);
+});
+
+test("resolve returns the entry once and only once", () => {
+  const q = fill(2);
+  const first = resolve(q, 1);
+  assert.equal(first.req.id, 1);
+  assert.deepEqual(first.queue.map((r) => r.id), [2]);
+  const second = resolve(first.queue, 1);
+  assert.equal(second.req, null, "resolved-guard: a second press sends nothing");
+  assert.deepEqual(second.queue.map((r) => r.id), [2]);
+});
+
+test("resolve of an unknown id is a no-op", () => {
+  const q = fill(1);
+  const r = resolve(q, 42);
+  assert.equal(r.req, null);
+  assert.equal(r.queue.length, 1);
+});
+
+test("expiredIds respects the hold window from both sides", () => {
+  const holdMs = HOLD_S_DEFAULT * 1000;
+  const q = [entry(1, { receivedAt: 0 })];
+  assert.deepEqual(expiredIds(q, holdMs - 1, holdMs), []);
+  assert.deepEqual(expiredIds(q, holdMs + 1, holdMs), [1]);
+});
+
+const sess = (over = {}) => ({ sessionId: "s1", pid: 1, status: "waiting", statusUpdatedAt: 500, cwd: "/a/proj", ...over });
+const NOW = 1000 + YOUNG_MS + 1;
+
+test("staleIds drops when statusUpdatedAt advanced past the snapshot", () => {
+  assert.deepEqual(staleIds(fill(1), [sess({ statusUpdatedAt: 900 })], new Map(), NOW), [1]);
+});
+
+test("staleIds keeps a request whose session has not moved on", () => {
+  assert.deepEqual(staleIds(fill(1), [sess({ statusUpdatedAt: 500 })], new Map(), NOW), []);
+});
+
+test("staleIds NEVER drops a request younger than YOUNG_MS", () => {
+  const q = [entry(1, { receivedAt: 1000 })];
+  const moved = [sess({ statusUpdatedAt: 999_999 })];
+  assert.deepEqual(staleIds(q, moved, new Map(), 1000 + YOUNG_MS - 1), [], "inside the young window");
+  assert.deepEqual(staleIds(q, moved, new Map(), 1000 + YOUNG_MS + 1), [1], "outside it");
+});
+
+test("staleIds does not drop when the session is invisible to the poller", () => {
+  // VS Code sessions and id mismatches must not look like 'answered'
+  assert.deepEqual(staleIds(fill(1), [], new Map(), NOW), []);
+});
+
+test("staleIds uses transcript activity for sessions that report no status", () => {
+  const q = [entry(1, { statusSnapshot: null, activitySnapshot: 700 })];
+  const noStatus = [sess({ status: undefined, statusUpdatedAt: undefined })];
+  assert.deepEqual(staleIds(q, noStatus, new Map([["s1", 700]]), NOW), [], "mtime unchanged");
+  assert.deepEqual(staleIds(q, noStatus, new Map([["s1", 800]]), NOW), [1], "mtime advanced");
+});
+
+test("staleIds resolves a duplicate sessionId by newest statusUpdatedAt", () => {
+  // Two live pids share one sessionId after a resume: the stale twin sits at
+  // `waiting` forever, so reading it would pin a dead request in the queue.
+  const twins = [sess({ pid: 1, statusUpdatedAt: 500 }), sess({ pid: 2, statusUpdatedAt: 900 })];
+  assert.deepEqual(staleIds(fill(1), twins, new Map(), NOW), [1]);
+  assert.deepEqual(staleIds(fill(1), twins.slice().reverse(), new Map(), NOW), [1], "order independent");
+});
+
+test("staleIds drops when waitingFor changed but status stayed waiting", () => {
+  const moved = [sess({ waitingFor: "dialog open", statusUpdatedAt: 900 })];
+  assert.deepEqual(staleIds(fill(1), moved, new Map(), NOW), [1]);
+});
+
+test("staleIds ignores a request with no observed baseline yet", () => {
+  const fresh = [entry(1, { baselined: false, statusSnapshot: null })];
+  assert.deepEqual(staleIds(fresh, [sess({ statusUpdatedAt: 999_999 })], new Map(), NOW), []);
+});
+
+test("seedBaselines records the CURRENT status/mtime and marks the entry baselined", () => {
+  const fresh = [entry(1, { baselined: false, statusSnapshot: null, activitySnapshot: null })];
+  const out = seedBaselines(fresh, [sess({ statusUpdatedAt: 900 })], new Map([["s1", 800]]));
+  assert.equal(out[0].baselined, true);
+  assert.equal(out[0].statusSnapshot, 900);
+  assert.equal(out[0].activitySnapshot, 800);
+  // and now it is NOT stale against the same session it was seeded from
+  assert.deepEqual(staleIds(out, [sess({ statusUpdatedAt: 900 })], new Map([["s1", 800]]), NOW), []);
+  // but it IS once that session moves on again
+  assert.deepEqual(staleIds(out, [sess({ statusUpdatedAt: 901 })], new Map([["s1", 800]]), NOW), [1]);
+});
+
+test("seedBaselines leaves already-baselined entries untouched and is a no-op when none are new", () => {
+  const done = fill(2);
+  assert.equal(seedBaselines(done, [sess()], new Map()), done, "same reference, no churn");
+});
+
+test("seedBaselines tolerates a session the poller cannot see", () => {
+  const fresh = [entry(1, { baselined: false, statusSnapshot: null })];
+  const out = seedBaselines(fresh, [], new Map());
+  assert.equal(out[0].baselined, true);
+  assert.equal(out[0].statusSnapshot, null);
+  // an invisible session must never look 'answered'
+  assert.deepEqual(staleIds(out, [], new Map(), NOW), []);
+});
