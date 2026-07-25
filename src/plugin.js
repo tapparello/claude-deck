@@ -988,6 +988,13 @@ function act(context, p) {
   p.then(() => showOk(context)).catch(() => showAlert(context));
 }
 
+// Same, but silent on success: for "take me to that window" presses, the window
+// coming forward IS the feedback, and the checkmark overlay just hides the key's
+// state (which is the thing you pressed it to act on). Failures still alert.
+function actQuiet(context, p) {
+  p.catch(() => showAlert(context));
+}
+
 // ---------- key actions ----------
 function onKeyDown(context, kind) {
   switch (kind) {
@@ -1032,7 +1039,7 @@ function onKeyDown(context, kind) {
       const prev = focusIdx.get(context);
       const i = prev?.sig === poolSig ? (prev.i + 1) % n : 0;
       focusIdx.set(context, { i, sig: poolSig });
-      act(context, platform.focusWindow(pool[i]));
+      actQuiet(context, platform.focusWindow(pool[i]));
       return render(context, "focus-session");
     }
     case "quick-prompt": {
@@ -1075,7 +1082,7 @@ function onKeyDown(context, kind) {
       }
       const entry = statusEntry(resolved, resolved.count > 1 ? idx : null);
       render(context, "approver-status");
-      return act(context, platform.focusWindow(sessionByPid(entry.pid)));
+      return actQuiet(context, platform.focusWindow(sessionByPid(entry.pid)));
     }
     case "approver-waiting": {
       // Dedicated "who needs me" key: press focuses the front blocked session,
@@ -1088,7 +1095,7 @@ function onKeyDown(context, kind) {
       cy.timer = setTimeout(() => { cycle.set(context, { idx: -1, timer: null }); render(context, "approver-waiting"); }, 4000);
       cycle.set(context, cy);
       render(context, "approver-waiting");
-      return act(context, platform.focusWindow(blocked[cy.idx]));
+      return actQuiet(context, platform.focusWindow(blocked[cy.idx]));
     }
   }
 }

@@ -4906,6 +4906,9 @@ var platform = IS_MAC ? macPlatform : winPlatform;
 function act(context, p) {
   p.then(() => showOk(context)).catch(() => showAlert(context));
 }
+function actQuiet(context, p) {
+  p.catch(() => showAlert(context));
+}
 function onKeyDown(context, kind) {
   switch (kind) {
     case "usage-session":
@@ -4948,7 +4951,7 @@ function onKeyDown(context, kind) {
       const prev = focusIdx.get(context);
       const i = prev?.sig === poolSig ? (prev.i + 1) % n : 0;
       focusIdx.set(context, { i, sig: poolSig });
-      act(context, platform.focusWindow(pool[i]));
+      actQuiet(context, platform.focusWindow(pool[i]));
       return render(context, "focus-session");
     }
     case "quick-prompt": {
@@ -4994,7 +4997,7 @@ function onKeyDown(context, kind) {
       }
       const entry = statusEntry(resolved, resolved.count > 1 ? idx : null);
       render(context, "approver-status");
-      return act(context, platform.focusWindow(sessionByPid(entry.pid)));
+      return actQuiet(context, platform.focusWindow(sessionByPid(entry.pid)));
     }
     case "approver-waiting": {
       const blocked = blockedSessions(state.sessions);
@@ -5008,7 +5011,7 @@ function onKeyDown(context, kind) {
       }, 4e3);
       cycle.set(context, cy);
       render(context, "approver-waiting");
-      return act(context, platform.focusWindow(blocked[cy.idx]));
+      return actQuiet(context, platform.focusWindow(blocked[cy.idx]));
     }
   }
 }
