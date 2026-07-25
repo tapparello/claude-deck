@@ -3996,7 +3996,13 @@ function sessionWhere(s) {
 }
 function transcriptPathFor(projectsDir, s) {
   if (!s?.cwd || !s?.sessionId) return null;
-  return `${projectsDir}/${String(s.cwd).replace(/[/_]/g, "-")}/${s.sessionId}.jsonl`;
+  return joinPath(projectsDir, slugifyCwd(s.cwd), `${s.sessionId}.jsonl`);
+}
+function slugifyCwd(cwd) {
+  return String(cwd).replace(/[/\\_:]/g, "-");
+}
+function joinPath(...parts) {
+  return parts.filter(Boolean).join("/");
 }
 function sessionState(s, now = Date.now(), activityAt = null) {
   const st = s?.status;
@@ -4412,6 +4418,48 @@ function gaugeMode(kind) {
   const hasLocal = !!(win && state.usageMeter?.[win]);
   return gaugeSource({ usage: state.usage, usageErr: state.usageErr, usageAt: state.usageAt, now: Date.now() }, hasLocal);
 }
+var transcriptDirFor = /* @__PURE__ */ new Map();
+async function transcriptMtime(s) {
+  if (!s?.sessionId) return null;
+  const file = `${s.sessionId}.jsonl`;
+  const known = transcriptDirFor.get(s.sessionId);
+  const tryPath = async (p) => {
+    try {
+      return (await fsp.stat(p)).mtimeMs;
+    } catch {
+      return null;
+    }
+  };
+  if (known) {
+    const mt = await tryPath(path2.join(known, file));
+    if (mt != null) return mt;
+    transcriptDirFor.delete(s.sessionId);
+  }
+  const hint = transcriptPathFor(PROJECTS_DIR, s);
+  if (hint) {
+    const mt = await tryPath(hint);
+    if (mt != null) {
+      transcriptDirFor.set(s.sessionId, path2.dirname(hint));
+      return mt;
+    }
+  }
+  let dirs;
+  try {
+    dirs = await fsp.readdir(PROJECTS_DIR, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const d of dirs) {
+    if (!d.isDirectory()) continue;
+    const dir = path2.join(PROJECTS_DIR, d.name);
+    const mt = await tryPath(path2.join(dir, file));
+    if (mt != null) {
+      transcriptDirFor.set(s.sessionId, dir);
+      return mt;
+    }
+  }
+  return null;
+}
 function pidAlive(pid) {
   try {
     process.kill(pid, 0);
@@ -4435,12 +4483,8 @@ async function pollSessions() {
     out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
     for (const s of out) {
       if (s.status) continue;
-      const tp = transcriptPathFor(PROJECTS_DIR, s);
-      if (!tp) continue;
-      try {
-        state.activity.set(s.sessionId, (await fsp.stat(tp)).mtimeMs);
-      } catch {
-      }
+      const mt = await transcriptMtime(s);
+      if (mt != null) state.activity.set(s.sessionId, mt);
     }
     for (const id of [...state.activity.keys()]) {
       if (!out.some((s) => s.sessionId === id)) state.activity.delete(id);

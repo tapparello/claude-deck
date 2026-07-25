@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveStatusKey, statusEntry, sessionProject, autoSlot, sessionWhere, fmtShort, shortWait, sessionState, blockedSessions, sessionSig, FINISHED_MS, transcriptPathFor } from "../src/status.js";
+import { resolveStatusKey, statusEntry, sessionProject, autoSlot, sessionWhere, fmtShort, shortWait, slugifyCwd, sessionState, blockedSessions, sessionSig, FINISHED_MS, transcriptPathFor } from "../src/status.js";
 
 const S = (over) => ({ sessionId: "x", cwd: "/Users/me/web-app", status: "idle", updatedAt: 1, pid: 100, ...over });
 
@@ -94,6 +94,15 @@ test("a real status always wins over transcript activity", () => {
   // Never let the heuristic override what Claude Code actually reported.
   assert.equal(sessionState({ status: "waiting", waitingFor: "permission prompt" }, NOW, NOW), "needs-approval");
   assert.equal(sessionState({ status: "idle", statusUpdatedAt: NOW - 600_000 }, NOW, NOW), "idle");
+});
+
+test("slugifyCwd handles Windows paths too (backslashes and the drive colon)", () => {
+  assert.equal(slugifyCwd("/Users/me/Developer/fmf_connect_flutter"), "-Users-me-Developer-fmf-connect-flutter");
+  // A Windows cwd used to pass through untouched, so the transcript was never
+  // found there and every VS Code session read "no status".
+  assert.equal(slugifyCwd("C:\\Users\\me\\my_proj"), "C--Users-me-my-proj");
+  assert.ok(!slugifyCwd("C:\\Users\\me").includes("\\"), "no backslashes survive");
+  assert.ok(!slugifyCwd("C:\\Users\\me").includes(":"), "no drive colon survives");
 });
 
 test("transcriptPathFor builds the slugified project path", () => {

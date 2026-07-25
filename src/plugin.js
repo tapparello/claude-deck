@@ -390,6 +390,38 @@ function gaugeMode(kind) {
   return gaugeSource({ usage: state.usage, usageErr: state.usageErr, usageAt: state.usageAt, now: Date.now() }, hasLocal);
 }
 
+// mtime of a session's transcript. The slugified path is only a hint (the
+// Windows rule is unverified), so on a miss we locate <sessionId>.jsonl by name
+// and remember which directory it was in — correct on any platform, and one
+// scan per session rather than per tick.
+const transcriptDirFor = new Map(); // sessionId -> project dir that holds it
+async function transcriptMtime(s) {
+  if (!s?.sessionId) return null;
+  const file = `${s.sessionId}.jsonl`;
+  const known = transcriptDirFor.get(s.sessionId);
+  const tryPath = async (p) => { try { return (await fsp.stat(p)).mtimeMs; } catch { return null; } };
+  if (known) {
+    const mt = await tryPath(path.join(known, file));
+    if (mt != null) return mt;
+    transcriptDirFor.delete(s.sessionId);
+  }
+  const hint = transcriptPathFor(PROJECTS_DIR, s);
+  if (hint) {
+    const mt = await tryPath(hint);
+    if (mt != null) { transcriptDirFor.set(s.sessionId, path.dirname(hint)); return mt; }
+  }
+  // Fall back to finding it by name (covers a slug rule we guessed wrong).
+  let dirs;
+  try { dirs = await fsp.readdir(PROJECTS_DIR, { withFileTypes: true }); } catch { return null; }
+  for (const d of dirs) {
+    if (!d.isDirectory()) continue;
+    const dir = path.join(PROJECTS_DIR, d.name);
+    const mt = await tryPath(path.join(dir, file));
+    if (mt != null) { transcriptDirFor.set(s.sessionId, dir); return mt; }
+  }
+  return null;
+}
+
 // ---------- data: running sessions ----------
 function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
@@ -412,9 +444,8 @@ async function pollSessions() {
     // session per 5s tick; CLI sessions (which report status) cost nothing.
     for (const s of out) {
       if (s.status) continue;
-      const tp = transcriptPathFor(PROJECTS_DIR, s);
-      if (!tp) continue;
-      try { state.activity.set(s.sessionId, (await fsp.stat(tp)).mtimeMs); } catch {}
+      const mt = await transcriptMtime(s);
+      if (mt != null) state.activity.set(s.sessionId, mt);
     }
     for (const id of [...state.activity.keys()]) {
       if (!out.some((s) => s.sessionId === id)) state.activity.delete(id);

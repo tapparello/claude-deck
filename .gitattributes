@@ -1,0 +1,7 @@
+# Normalise line endings so a Windows checkout doesn't rewrite files and make the
+# "committed bundle is in sync" CI check fail spuriously.
+* text=auto eol=lf
+
+# Binary assets: never touch these.
+*.png binary
+*.streamDeckProfile binary
