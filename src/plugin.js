@@ -232,6 +232,51 @@ function statusKey(name, st, count, detail = "", tag = "", phase = null) {
     ${detail ? `<text x="72" y="124" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" fill="${C.dim}">${esc(detail)}</text>` : ""}`);
 }
 
+const APPROVE_LOOK = {
+  "approve-allow": { word: "ALLOW", col: C.ok },
+  "approve-always": { word: "ALWAYS", col: C.info },
+  "approve-deny": { word: "DENY", col: C.bad },
+};
+// Nothing pending -> the same calm dim look the Waiting key uses. A pending request
+// tints the frame and (while fresh) breathes. ALLOW/DENY show the command; ALWAYS
+// shows the RULE it would persist, because Claude Code's suggestions are wildcards.
+function approveKey(kind, req, o = {}) {
+  const look = APPROVE_LOOK[kind];
+  const t = (y, size, weight, fill, s) =>
+    `<text x="72" y="${y}" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${size}" font-weight="${weight}" fill="${fill}">${esc(s)}</text>`;
+
+  if (o.err) {
+    return svgWrap(`${tintFrame(C.bad, true)}${t(66, 20, 700, C.text, look.word)}${t(96, 15, 600, C.bad, o.err)}`);
+  }
+  if (!req) {
+    return svgWrap(`${tintFrame(C.track, false)}${t(66, 20, 700, C.dim, look.word)}${t(96, 14, 600, C.dim, "all clear")}`);
+  }
+
+  const { name, target } = describeRequest(req);
+  const rule = kind === "approve-always" ? alwaysRule(req, !!o.sessionOnly) : null;
+  const disabled = kind === "approve-always" && rule === null;
+  const col = disabled ? C.dim : look.col;
+  const mid = kind === "approve-always" ? (rule ?? target) : target;
+  const word = kind === "approve-always"
+    ? (disabled ? "ALWAYS n/a" : `ALWAYS ·${o.sessionOnly ? "session" : "project"}`)
+    : look.word;
+  // Depth badge wins the corner, else an optional user label. The project name keeps
+  // line 1 unconditionally: it is a wrong-request mitigation, so a cosmetic label must
+  // not be able to hide it.
+  const corner = o.depth > 1
+    ? `<circle cx="120" cy="26" r="13" fill="${C.panel}" stroke="${col}" stroke-width="1.5"/>` +
+      `<text x="120" y="31" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${o.depth}</text>`
+    : o.label
+    ? `<text x="132" y="30" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="600" fill="${C.dim}">${esc(String(o.label).slice(0, 8))}</text>`
+    : "";
+  return svgWrap(`
+    ${tintFrame(col, !disabled, disabled ? null : o.phase)}
+    ${corner}
+    ${t(52, 13, 600, C.dim, name)}
+    ${t(84, mid.length > 11 ? 18 : 22, 700, C.text, mid)}
+    ${t(112, word.length > 11 ? 14 : 18, 700, col, word)}`);
+}
+
 // ---------- formatting ----------
 function fmtReset(iso) {
   if (!iso) return "";
@@ -859,6 +904,8 @@ const cycle = new Map(); // context -> { idx, timer }
 const focusIdx = new Map(); // context -> { i, sig } (sig = the pool it indexes)
 const usageView = new Map(); // context -> "cost" | "tokens" (Usage key toggle)
 const modelIdx = new Map(); // context -> index into the model list (Model key: press to rotate)
+const shownReq = new Map();  // context -> the approve request id this key last PAINTED
+const shownRule = new Map(); // context -> the ALWAYS rule text this key last PAINTED
 let ws = null;
 let animPhase = 0;
 let lastSessionSig = ""; // previous tick's session signature (see pollSessions)
@@ -1029,6 +1076,28 @@ function render(context, kind) {
       const why = shortWait(b.waitingFor ?? "") || "needs you";
       const fresh = !since || Date.now() - since < PULSE_MS;
       return setImage(context, statusKey(path.basename(b.cwd ?? "") || "claude", st, blocked.length, why + (waited ? " · " + waited : ""), sessionWhere(b), fresh ? animPhase : null));
+    }
+    case "approve-allow":
+    case "approve-always":
+    case "approve-deny": {
+      const s = views.get(context)?.settings ?? {};
+      const req = head(state.approveQueue);
+      // Record what this key is PAINTING. Task 7's press guard compares against it,
+      // so a press can never answer a request the user did not see.
+      shownReq.set(context, req?.id ?? null);
+      shownRule.set(context, kind === "approve-always" && req ? alwaysRule(req, !!s.sessionOnly) : null);
+      const fresh = req && Date.now() - req.receivedAt < PULSE_MS;
+      // A mis-pasted or stale URL 404s inside our own handler, so it IS countable.
+      // Without this state the approver looks identical to "idle" forever.
+      const err = state.hookErr
+        ?? (!state.approveQueue.length && (hookServer?.stats.badPath ?? 0) > 0 ? "auth?" : null);
+      return setImage(context, approveKey(kind, req, {
+        sessionOnly: !!s.sessionOnly,
+        label: s.label,
+        err,
+        depth: state.approveQueue.length,
+        phase: fresh ? animPhase : null,
+      }));
     }
   }
 }

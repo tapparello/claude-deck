@@ -3849,9 +3849,9 @@ function terminalFocusScript(tty) {
 }
 function focusStrategyForBundle(bundle) {
   if (!bundle) return null;
-  const base = String(bundle).replace(/\/+$/, "").split("/").pop();
-  if (base === "Terminal.app") return "terminal";
-  if (base === "Visual Studio Code.app") return "vscode";
+  const base2 = String(bundle).replace(/\/+$/, "").split("/").pop();
+  if (base2 === "Terminal.app") return "terminal";
+  if (base2 === "Visual Studio Code.app") return "vscode";
   return "app";
 }
 
@@ -4132,6 +4132,45 @@ function decisionBody(kind, req, opts = {}) {
   const entry = oneSafeRule(req, !!opts.sessionOnly);
   if (!entry) return null;
   return wrap({ behavior: "allow", updatedPermissions: [entry] });
+}
+var NAME_MAX = 11;
+var TARGET_MAX = 14;
+var RULE_MAX = 18;
+var clean = (v) => String(v ?? "").replace(/[\s\p{Cc}]+/gu, " ").trim();
+var cut = (s, max) => s.length > max ? s.slice(0, max - 1) + "\u2026" : s;
+var base = (p) => clean(p).split(/[\\/]/).filter(Boolean).pop() ?? "";
+function targetOf(req) {
+  const t = req?.toolName ?? "";
+  const i = req?.toolInput;
+  const has = i && typeof i === "object";
+  if (t === "Bash" && has && i.command) return clean(i.command);
+  if (["Edit", "Write", "NotebookEdit", "Read"].includes(t) && has && i.file_path) return base(i.file_path);
+  if (t === "WebFetch" && has && i.url) {
+    try {
+      return clean(new URL(String(i.url)).hostname);
+    } catch {
+      return clean(t);
+    }
+  }
+  if (t === "WebSearch" && has && i.query) return clean(i.query);
+  if (t === "Task" && has && i.subagent_type) return clean(i.subagent_type);
+  if (t.startsWith("mcp__")) {
+    const [, server, ...rest] = t.split("__");
+    if (server && rest.length) return clean(`${server}\xB7${rest.join("__")}`);
+  }
+  return clean(t);
+}
+function describeRequest(req) {
+  return {
+    name: cut(base(req?.cwd), NAME_MAX).slice(0, NAME_MAX),
+    target: cut(targetOf(req), TARGET_MAX)
+  };
+}
+function alwaysRule(req, sessionOnly = false) {
+  const entry = oneSafeRule(req, sessionOnly);
+  if (!entry) return null;
+  const { toolName, ruleContent } = entry.rules[0];
+  return cut(clean(`${toolName}(${ruleContent})`), RULE_MAX);
 }
 var QUEUE_MAX = 8;
 var HOLD_S_DEFAULT = 20;
@@ -4433,6 +4472,34 @@ function statusKey(name, st, count, detail = "", tag = "", phase = null) {
     <text x="72" y="72" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${String(shown).length > 9 ? 22 : 26}" font-weight="700" fill="${st === "none" ? C.dim : C.text}">${esc(String(shown).slice(0, 11))}</text>
     <text x="72" y="100" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${label.length > 11 ? 15 : 18}" font-weight="700" fill="${col}">${esc(label)}</text>
     ${detail ? `<text x="72" y="124" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" fill="${C.dim}">${esc(detail)}</text>` : ""}`);
+}
+var APPROVE_LOOK = {
+  "approve-allow": { word: "ALLOW", col: C.ok },
+  "approve-always": { word: "ALWAYS", col: C.info },
+  "approve-deny": { word: "DENY", col: C.bad }
+};
+function approveKey(kind, req, o = {}) {
+  const look = APPROVE_LOOK[kind];
+  const t = (y, size, weight, fill, s) => `<text x="72" y="${y}" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${size}" font-weight="${weight}" fill="${fill}">${esc(s)}</text>`;
+  if (o.err) {
+    return svgWrap(`${tintFrame(C.bad, true)}${t(66, 20, 700, C.text, look.word)}${t(96, 15, 600, C.bad, o.err)}`);
+  }
+  if (!req) {
+    return svgWrap(`${tintFrame(C.track, false)}${t(66, 20, 700, C.dim, look.word)}${t(96, 14, 600, C.dim, "all clear")}`);
+  }
+  const { name, target } = describeRequest(req);
+  const rule = kind === "approve-always" ? alwaysRule(req, !!o.sessionOnly) : null;
+  const disabled = kind === "approve-always" && rule === null;
+  const col = disabled ? C.dim : look.col;
+  const mid = kind === "approve-always" ? rule ?? target : target;
+  const word = kind === "approve-always" ? disabled ? "ALWAYS n/a" : `ALWAYS \xB7${o.sessionOnly ? "session" : "project"}` : look.word;
+  const corner = o.depth > 1 ? `<circle cx="120" cy="26" r="13" fill="${C.panel}" stroke="${col}" stroke-width="1.5"/><text x="120" y="31" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${o.depth}</text>` : o.label ? `<text x="132" y="30" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="600" fill="${C.dim}">${esc(String(o.label).slice(0, 8))}</text>` : "";
+  return svgWrap(`
+    ${tintFrame(col, !disabled, disabled ? null : o.phase)}
+    ${corner}
+    ${t(52, 13, 600, C.dim, name)}
+    ${t(84, mid.length > 11 ? 18 : 22, 700, C.text, mid)}
+    ${t(112, word.length > 11 ? 14 : 18, 700, col, word)}`);
 }
 function fmtReset(iso) {
   if (!iso) return "";
@@ -5026,6 +5093,8 @@ var cycle = /* @__PURE__ */ new Map();
 var focusIdx = /* @__PURE__ */ new Map();
 var usageView = /* @__PURE__ */ new Map();
 var modelIdx = /* @__PURE__ */ new Map();
+var shownReq = /* @__PURE__ */ new Map();
+var shownRule = /* @__PURE__ */ new Map();
 var ws = null;
 var animPhase = 0;
 var lastSessionSig = "";
@@ -5178,6 +5247,23 @@ function render(context, kind) {
       const why = shortWait(b.waitingFor ?? "") || "needs you";
       const fresh = !since || Date.now() - since < PULSE_MS;
       return setImage(context, statusKey(path2.basename(b.cwd ?? "") || "claude", st, blocked.length, why + (waited ? " \xB7 " + waited : ""), sessionWhere(b), fresh ? animPhase : null));
+    }
+    case "approve-allow":
+    case "approve-always":
+    case "approve-deny": {
+      const s = views.get(context)?.settings ?? {};
+      const req = head(state.approveQueue);
+      shownReq.set(context, req?.id ?? null);
+      shownRule.set(context, kind === "approve-always" && req ? alwaysRule(req, !!s.sessionOnly) : null);
+      const fresh = req && Date.now() - req.receivedAt < PULSE_MS;
+      const err = state.hookErr ?? (!state.approveQueue.length && (hookServer?.stats.badPath ?? 0) > 0 ? "auth?" : null);
+      return setImage(context, approveKey(kind, req, {
+        sessionOnly: !!s.sessionOnly,
+        label: s.label,
+        err,
+        depth: state.approveQueue.length,
+        phase: fresh ? animPhase : null
+      }));
     }
   }
 }
@@ -5391,9 +5477,9 @@ var macPlatform = {
         }).catch(fallback("tty lookup failed"));
       }
       if (strat === "vscode") {
-        const base = path2.basename(s.cwd ?? "");
-        if (!base) return activateApp();
-        const esc2 = escapeAppleScript(base);
+        const base2 = path2.basename(s.cwd ?? "");
+        if (!base2) return activateApp();
+        const esc2 = escapeAppleScript(base2);
         return runOsa([
           "with timeout of 7 seconds",
           'tell application "System Events"',
