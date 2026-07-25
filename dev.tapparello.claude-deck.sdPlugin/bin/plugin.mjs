@@ -3948,13 +3948,22 @@ function aggregate(requests, startMs, overrides) {
 import path from "node:path";
 var QUESTION_WAITS = /* @__PURE__ */ new Set(["input needed", "dialog open"]);
 var FINISHED_MS = 6e4;
-function sessionState(s, now = Date.now()) {
+var ACTIVITY_MS = 6e4;
+function transcriptPathFor(projectsDir, s) {
+  if (!s?.cwd || !s?.sessionId) return null;
+  return `${projectsDir}/${String(s.cwd).replace(/[/_]/g, "-")}/${s.sessionId}.jsonl`;
+}
+function sessionState(s, now = Date.now(), activityAt = null) {
   const st = s?.status;
   if (st === "waiting") {
     const w = String(s.waitingFor ?? "").toLowerCase();
     return QUESTION_WAITS.has(w) ? "input-needed" : "needs-approval";
   }
   if (st === "busy" || st === "shell") return "working";
+  if (!st) {
+    if (!activityAt) return "unknown";
+    return Math.max(0, now - activityAt) < ACTIVITY_MS ? "working" : "idle";
+  }
   if (st === "idle") {
     const at = s.statusUpdatedAt;
     if (!at) return "idle";
@@ -3962,29 +3971,30 @@ function sessionState(s, now = Date.now()) {
   }
   return "idle";
 }
-function sessionSig(sessions, now = Date.now()) {
-  return JSON.stringify((sessions ?? []).map((s) => [s.pid, s.status, s.waitingFor ?? "", sessionState(s, now)]));
+function sessionSig(sessions, now = Date.now(), activity = null) {
+  return JSON.stringify((sessions ?? []).map((s) => [s.pid, s.status ?? "", s.waitingFor ?? "", sessionState(s, now, actOf(s, activity))]));
 }
-var URGENCY = { "needs-approval": 0, "input-needed": 1, working: 2, finished: 3, idle: 4 };
-var rank = (s, now) => URGENCY[sessionState(s, now)] ?? 4;
-function blockedSessions(sessions, now = Date.now()) {
-  return (sessions ?? []).filter((s) => rank(s, now) <= URGENCY["input-needed"]).sort((a, b) => rank(a, now) - rank(b, now) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || (a.pid ?? 0) - (b.pid ?? 0));
+var URGENCY = { "needs-approval": 0, "input-needed": 1, working: 2, finished: 3, idle: 4, unknown: 5 };
+var actOf = (s, activity) => activity && s?.sessionId ? activity.get(s.sessionId) ?? null : null;
+var rank = (s, now, activity) => URGENCY[sessionState(s, now, actOf(s, activity))] ?? 5;
+function blockedSessions(sessions, now = Date.now(), activity = null) {
+  return (sessions ?? []).filter((s) => rank(s, now, activity) <= URGENCY["input-needed"]).sort((a, b) => rank(a, now, activity) - rank(b, now, activity) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || (a.pid ?? 0) - (b.pid ?? 0));
 }
 function sessionProject(s) {
   return path.basename(s.cwd ?? "").toLowerCase();
 }
-function byDisplayOrder(a, b, now) {
-  const ra = rank(a, now), rb = rank(b, now);
+function byDisplayOrder(a, b, now, activity) {
+  const ra = rank(a, now, activity), rb = rank(b, now, activity);
   if (ra !== rb) return ra - rb;
   if ((b.updatedAt ?? 0) !== (a.updatedAt ?? 0)) return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
   return (a.pid ?? 0) - (b.pid ?? 0);
 }
-function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now()) {
+function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(), activity = null) {
   const explicit = !!(project && String(project).trim());
   const want = explicit ? String(project).trim().toLowerCase() : null;
-  const list = (sessions ?? []).filter((s) => explicit ? sessionProject(s) === want : true).sort((a, b) => byDisplayOrder(a, b, now)).map((s) => ({
+  const list = (sessions ?? []).filter((s) => explicit ? sessionProject(s) === want : true).sort((a, b) => byDisplayOrder(a, b, now, activity)).map((s) => ({
     name: path.basename(s.cwd ?? "") || "claude",
-    state: sessionState(s, now),
+    state: sessionState(s, now, actOf(s, activity)),
     waitingFor: s.status === "waiting" ? String(s.waitingFor ?? "permission prompt") : "",
     statusAge: Math.max(0, now - (s.statusUpdatedAt ?? s.updatedAt ?? 0)),
     cwd: s.cwd ?? "",
@@ -4142,8 +4152,11 @@ var STATUS_LOOK = {
   finished: { label: "Finished", col: C.ok, band: false },
   idle: { label: "Idle", col: C.dim, band: false },
   none: { label: "no session", col: C.dim, band: false },
-  quiet: { label: "all clear", col: C.dim, band: false }
+  quiet: { label: "all clear", col: C.dim, band: false },
   // Waiting key, nothing pending
+  // A session that reports no status (VS Code extension) and whose transcript
+  // we couldn't stat. Saying "no status" beats inventing "Idle".
+  unknown: { label: "no status", col: C.dim, band: false }
 };
 function statusKey(name, st, count, detail = "") {
   const look = STATUS_LOOK[st] ?? STATUS_LOOK.none;
@@ -4182,6 +4195,8 @@ function fmtAgo(ts) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 var state = {
+  activity: /* @__PURE__ */ new Map(),
+  // sessionId -> transcript mtimeMs (status-less sessions only)
   usage: null,
   // { fiveHour, weekly, weeklyOpus } each { pct, resetsAt }
   usageErr: null,
@@ -4305,7 +4320,19 @@ async function pollSessions() {
       }
     }
     out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-    const nextSig = sessionSig(out);
+    for (const s of out) {
+      if (s.status) continue;
+      const tp = transcriptPathFor(PROJECTS_DIR, s);
+      if (!tp) continue;
+      try {
+        state.activity.set(s.sessionId, (await fsp.stat(tp)).mtimeMs);
+      } catch {
+      }
+    }
+    for (const id of [...state.activity.keys()]) {
+      if (!out.some((s) => s.sessionId === id)) state.activity.delete(id);
+    }
+    const nextSig = sessionSig(out, Date.now(), state.activity);
     const changed = nextSig !== lastSessionSig;
     lastSessionSig = nextSig;
     state.sessions = out;
@@ -4564,7 +4591,7 @@ function render(context, kind) {
       return setImage(context, labelKey("PROJECT", label || "configure", s.path ? "" : "set folder in settings"));
     }
     case "focus-session": {
-      const blocked = blockedSessions(state.sessions);
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
       const pool = blocked.length ? blocked : state.sessions;
       const fi = focusIdx.get(context);
       const poolSig = pool.map((x) => x.pid).join(",");
@@ -4588,7 +4615,7 @@ function render(context, kind) {
       const n = state.sessions.length;
       if (cy && cy.idx >= 0 && state.sessions[cy.idx]) {
         const s = state.sessions[cy.idx];
-        const st = sessionState(s);
+        const st = sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null);
         const stLabel = { "needs-approval": "needs you", "input-needed": "input needed", working: "working", finished: "done", idle: "idle" }[st] ?? st;
         const stColor = st === "needs-approval" ? C.warn : st === "input-needed" ? C.ask : st === "working" ? C.ok : C.dim;
         return setImage(context, linesKey(`${cy.idx + 1}/${n}`, [
@@ -4597,8 +4624,8 @@ function render(context, kind) {
           { text: fmtAgo(s.startedAt ?? Date.now()) + " old", color: C.dim }
         ]));
       }
-      const blocked = blockedSessions(state.sessions).length;
-      const busy = state.sessions.filter((s) => sessionState(s) === "working").length;
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity).length;
+      const busy = state.sessions.filter((s) => sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) === "working").length;
       const sub = blocked > 0 ? `${blocked} needs you` : busy > 0 ? `${busy} working` : n > 0 ? "all idle" : "none running";
       const subCol = blocked > 0 ? C.warn : busy > 0 ? C.ok : C.dim;
       return setImage(context, bigCountKey("CLAUDE CODE", n, sub, subCol, busy > 0 ? animPhase : null));
@@ -4624,7 +4651,7 @@ function render(context, kind) {
     }
     case "approver-status": {
       const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context));
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context), Date.now(), state.activity);
       const cy = cycle.get(context);
       const cycling = !!(cy && cy.idx >= 0);
       const entry = statusEntry(resolved, cycling ? cy.idx : null);
@@ -4644,7 +4671,7 @@ function render(context, kind) {
       return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail));
     }
     case "approver-waiting": {
-      const blocked = blockedSessions(state.sessions);
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
       if (!blocked.length) {
         const n = state.sessions.length;
         return setImage(context, statusKey("WAITING", "quiet", 1, n ? `${n} session${n > 1 ? "s" : ""} ok` : "no sessions"));
@@ -4652,7 +4679,7 @@ function render(context, kind) {
       const cy = cycle.get(context);
       const i = cy && cy.idx >= 0 ? cy.idx % blocked.length : 0;
       const b = blocked[i];
-      const st = sessionState(b);
+      const st = sessionState(b, Date.now(), state.activity.get(b.sessionId) ?? null);
       return setImage(context, statusKey(b.name ?? "claude", st, blocked.length, String(b.waitingFor ?? "needs you")));
     }
   }
@@ -4954,7 +4981,7 @@ function onKeyDown(context, kind) {
       return act(context, platform.openTerminal(s.path));
     }
     case "focus-session": {
-      const blocked = blockedSessions(state.sessions);
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
       const pool = blocked.length ? blocked : state.sessions;
       const n = pool.length;
       if (!n) return showAlert(context);
@@ -4992,7 +5019,7 @@ function onKeyDown(context, kind) {
     }
     case "approver-status": {
       const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context));
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context), Date.now(), state.activity);
       if (!resolved.count) return showAlert(context);
       let idx = resolved.index;
       if (resolved.count > 1) {
@@ -5011,7 +5038,7 @@ function onKeyDown(context, kind) {
       return actQuiet(context, platform.focusWindow(sessionByPid(entry.pid)));
     }
     case "approver-waiting": {
-      const blocked = blockedSessions(state.sessions);
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
       if (!blocked.length) return showAlert(context);
       const cy = cycle.get(context) ?? { idx: -1, timer: null };
       cy.idx = (cy.idx + 1) % blocked.length;
@@ -5033,13 +5060,13 @@ if (process.argv.includes("--selftest")) {
     log("selftest usage:", state.usage ? JSON.stringify(state.usage) : `ERROR: ${state.usageErr}`);
     await pollSessions();
     log("selftest sessions:", state.sessions.map((s) => `${s.name}[${s.status}]`).join(", ") || "(none)");
-    log("selftest states:", state.sessions.map((s) => `${s.name}=${sessionState(s)}${s.waitingFor ? "(" + s.waitingFor + ")" : ""}`).join(", ") || "(none)");
-    log("selftest blocked:", blockedSessions(state.sessions).map((s) => s.name).join(", ") || "(none)");
-    log("selftest status (auto k0):", JSON.stringify(statusEntry(resolveStatusKey(state.sessions, "", 0))));
+    log("selftest states:", state.sessions.map((s) => `${s.name}=${sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null)}${s.waitingFor ? "(" + s.waitingFor + ")" : ""}`).join(", ") || "(none)");
+    log("selftest blocked:", blockedSessions(state.sessions, Date.now(), state.activity).map((s) => s.name).join(", ") || "(none)");
+    log("selftest status (auto k0):", JSON.stringify(statusEntry(resolveStatusKey(state.sessions, "", 0, Date.now(), state.activity))));
     const demo0 = state.sessions[0];
     if (demo0) {
       const proj = path2.basename(demo0.cwd ?? "");
-      const r = resolveStatusKey(state.sessions, proj, 0);
+      const r = resolveStatusKey(state.sessions, proj, 0, Date.now(), state.activity);
       log(`selftest status (explicit ${proj}) count=${r.count}:`, JSON.stringify(statusEntry(r)));
     }
     await pollToday();
@@ -5121,7 +5148,7 @@ if (process.argv.includes("--selftest")) {
   setInterval(() => {
     animPhase = (animPhase + 1) % 3;
     const kinds = [];
-    if (state.sessions.some((s) => sessionState(s) === "working")) kinds.push("sessions");
+    if (state.sessions.some((s) => sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) === "working")) kinds.push("sessions");
     if (state.usage?.fiveHour?.pct >= 90) kinds.push("usage-session");
     if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
     if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");

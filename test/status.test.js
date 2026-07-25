@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveStatusKey, statusEntry, sessionProject, autoOrdinal, sessionState, blockedSessions, sessionSig, FINISHED_MS } from "../src/status.js";
+import { resolveStatusKey, statusEntry, sessionProject, autoOrdinal, sessionState, blockedSessions, sessionSig, FINISHED_MS, transcriptPathFor } from "../src/status.js";
 
 const S = (over) => ({ sessionId: "x", cwd: "/Users/me/web-app", status: "idle", updatedAt: 1, pid: 100, ...over });
 
@@ -69,10 +69,40 @@ test("clock skew (future timestamp) does not produce a bogus state", () => {
   assert.equal(sessionState({ status: "idle", statusUpdatedAt: NOW + 60_000 }, NOW), "finished");
 });
 
-test("unknown/missing status is idle, and waitingFor without waiting is ignored", () => {
-  assert.equal(sessionState({}, NOW), "idle");
+test("an unrecognized status is idle; waitingFor without waiting is ignored", () => {
   assert.equal(sessionState({ status: "something-new" }, NOW), "idle");
   assert.equal(sessionState({ status: "busy", waitingFor: "permission prompt" }, NOW), "working");
+});
+
+// The VS Code extension (entrypoint "claude-vscode") writes a session file with
+// NO status/waitingFor/statusUpdatedAt at all. Calling that "Idle" is a lie when
+// the session is mid-turn, so a status-less session is "unknown" unless the
+// caller supplies transcript activity to infer from.
+test("status-less session is 'unknown', not a fake Idle", () => {
+  assert.equal(sessionState({}, NOW), "unknown");
+  assert.equal(sessionState({ pid: 1, cwd: "/x/y" }, NOW), "unknown");
+});
+
+test("status-less session uses injected transcript activity when available", () => {
+  const s = { pid: 1, cwd: "/x/y" };
+  assert.equal(sessionState(s, NOW, NOW - 5_000), "working"); // written 5s ago
+  assert.equal(sessionState(s, NOW, NOW - 600_000), "idle"); // stale
+  assert.equal(sessionState(s, NOW, null), "unknown"); // no info
+});
+
+test("a real status always wins over transcript activity", () => {
+  // Never let the heuristic override what Claude Code actually reported.
+  assert.equal(sessionState({ status: "waiting", waitingFor: "permission prompt" }, NOW, NOW), "needs-approval");
+  assert.equal(sessionState({ status: "idle", statusUpdatedAt: NOW - 600_000 }, NOW, NOW), "idle");
+});
+
+test("transcriptPathFor builds the slugified project path", () => {
+  assert.equal(
+    transcriptPathFor("/root", { cwd: "/Users/me/Developer/fmf_connect_flutter", sessionId: "abc" }),
+    "/root/-Users-me-Developer-fmf-connect-flutter/abc.jsonl",
+  );
+  assert.equal(transcriptPathFor("/root", { cwd: "/x", sessionId: null }), null);
+  assert.equal(transcriptPathFor("/root", { sessionId: "abc" }), null);
 });
 
 // ---------- urgency ordering + blockedSessions ----------
@@ -165,7 +195,9 @@ test("auto ordinal beyond candidates => none", () => {
 
 test("missing cwd/status handled gracefully", () => {
   const r = resolveStatusKey([{ sessionId: "z", pid: 1 }], "");
-  assert.equal(statusEntry(r).state, "idle"); // absent status => idle
+  // A session that reports no status is "unknown", not a fabricated "idle"
+  // (see the VS Code / claude-vscode case above).
+  assert.equal(statusEntry(r).state, "unknown");
   assert.equal(sessionProject({}), "");
   assert.equal(statusEntry(resolveStatusKey([{ sessionId: "z", pid: 1 }], "")).name, "claude");
 });

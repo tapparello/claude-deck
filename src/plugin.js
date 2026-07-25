@@ -10,7 +10,7 @@ import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript } from "./osa.js";
 import { windowStartMs, parseRequests, mergeById, aggregate } from "./usage.js";
-import { resolveStatusKey, statusEntry, autoOrdinal, sessionState, blockedSessions, sessionSig } from "./status.js";
+import { resolveStatusKey, statusEntry, autoOrdinal, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
 
 const IS_MAC = process.platform === "darwin";
 
@@ -173,6 +173,9 @@ const STATUS_LOOK = {
   idle: { label: "Idle", col: C.dim, band: false },
   none: { label: "no session", col: C.dim, band: false },
   quiet: { label: "all clear", col: C.dim, band: false }, // Waiting key, nothing pending
+  // A session that reports no status (VS Code extension) and whose transcript
+  // we couldn't stat. Saying "no status" beats inventing "Idle".
+  unknown: { label: "no status", col: C.dim, band: false },
 };
 function statusKey(name, st, count, detail = "") {
   const look = STATUS_LOOK[st] ?? STATUS_LOOK.none;
@@ -224,6 +227,7 @@ function fmtAgo(ts) {
 
 // ---------- data: usage (OAuth endpoint — same source as /usage & Claude Desktop) ----------
 const state = {
+  activity: new Map(), // sessionId -> transcript mtimeMs (status-less sessions only)
   usage: null,        // { fiveHour, weekly, weeklyOpus } each { pct, resetsAt }
   usageErr: null,
   usageAt: 0,
@@ -346,10 +350,22 @@ async function pollSessions() {
       } catch {}
     }
     out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    // The VS Code extension writes no status at all, so for those sessions only,
+    // stat the transcript to tell "mid-turn" from "idle". One stat per such
+    // session per 5s tick; CLI sessions (which report status) cost nothing.
+    for (const s of out) {
+      if (s.status) continue;
+      const tp = transcriptPathFor(PROJECTS_DIR, s);
+      if (!tp) continue;
+      try { state.activity.set(s.sessionId, (await fsp.stat(tp)).mtimeMs); } catch {}
+    }
+    for (const id of [...state.activity.keys()]) {
+      if (!out.some((s) => s.sessionId === id)) state.activity.delete(id);
+    }
     // Compare against the signature cached on the PREVIOUS tick. Recomputing
     // both sides with the same `now` would cancel the derived state out, so a
     // time-only transition (finished → idle at 60s) would never repaint.
-    const nextSig = sessionSig(out);
+    const nextSig = sessionSig(out, Date.now(), state.activity);
     const changed = nextSig !== lastSessionSig;
     lastSessionSig = nextSig;
     state.sessions = out;
@@ -603,7 +619,7 @@ function render(context, kind) {
     case "focus-session": {
       // Blocked sessions take priority: pressing goes straight to the one that
       // needs you, and the key advertises that with the reason + a warm accent.
-      const blocked = blockedSessions(state.sessions);
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
       const pool = blocked.length ? blocked : state.sessions;
       const fi = focusIdx.get(context);
       const poolSig = pool.map((x) => x.pid).join(",");
@@ -631,7 +647,7 @@ function render(context, kind) {
         const s = state.sessions[cy.idx];
         // Use the derived state, not the raw status: "waiting" is blocked-on-you,
         // and rendering it in success-green was the very bug phase 2 fixes.
-        const st = sessionState(s);
+        const st = sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null);
         const stLabel = { "needs-approval": "needs you", "input-needed": "input needed", working: "working", finished: "done", idle: "idle" }[st] ?? st;
         const stColor = st === "needs-approval" ? C.warn : st === "input-needed" ? C.ask : st === "working" ? C.ok : C.dim;
         return setImage(context, linesKey(`${cy.idx + 1}/${n}`, [
@@ -641,8 +657,8 @@ function render(context, kind) {
         ]));
       }
       // "waiting" means blocked on the human — never count that as working.
-      const blocked = blockedSessions(state.sessions).length;
-      const busy = state.sessions.filter((s) => sessionState(s) === "working").length;
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity).length;
+      const busy = state.sessions.filter((s) => sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) === "working").length;
       const sub = blocked > 0 ? `${blocked} needs you` : busy > 0 ? `${busy} working` : n > 0 ? "all idle" : "none running";
       const subCol = blocked > 0 ? C.warn : busy > 0 ? C.ok : C.dim;
       return setImage(context, bigCountKey("CLAUDE CODE", n, sub, subCol, busy > 0 ? animPhase : null));
@@ -668,7 +684,7 @@ function render(context, kind) {
     }
     case "approver-status": {
       const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context));
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context), Date.now(), state.activity);
       const cy = cycle.get(context);
       const cycling = !!(cy && cy.idx >= 0);
       const entry = statusEntry(resolved, cycling ? cy.idx : null);
@@ -689,7 +705,7 @@ function render(context, kind) {
     }
     case "approver-waiting": {
       // Dark and quiet until a session is actually blocked on you.
-      const blocked = blockedSessions(state.sessions);
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
       if (!blocked.length) {
         const n = state.sessions.length;
         return setImage(context, statusKey("WAITING", "quiet", 1, n ? `${n} session${n > 1 ? "s" : ""} ok` : "no sessions"));
@@ -697,7 +713,7 @@ function render(context, kind) {
       const cy = cycle.get(context);
       const i = cy && cy.idx >= 0 ? cy.idx % blocked.length : 0;
       const b = blocked[i];
-      const st = sessionState(b);
+      const st = sessionState(b, Date.now(), state.activity.get(b.sessionId) ?? null);
       return setImage(context, statusKey(b.name ?? "claude", st, blocked.length, String(b.waitingFor ?? "needs you")));
     }
   }
@@ -1023,7 +1039,7 @@ function onKeyDown(context, kind) {
     }
     case "focus-session": {
       // Cycle within the blocked set when any session needs you, else all sessions.
-      const blocked = blockedSessions(state.sessions);
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
       const pool = blocked.length ? blocked : state.sessions;
       const n = pool.length;
       if (!n) return showAlert(context);
@@ -1064,7 +1080,7 @@ function onKeyDown(context, kind) {
       // approval" is to go answer it. With several candidates, each press
       // advances to the next one and focuses that.
       const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context));
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context), Date.now(), state.activity);
       if (!resolved.count) return showAlert(context);
       let idx = resolved.index;
       if (resolved.count > 1) {
@@ -1082,7 +1098,7 @@ function onKeyDown(context, kind) {
     case "approver-waiting": {
       // Dedicated "who needs me" key: press focuses the front blocked session,
       // repeated presses walk the rest.
-      const blocked = blockedSessions(state.sessions);
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
       if (!blocked.length) return showAlert(context);
       const cy = cycle.get(context) ?? { idx: -1, timer: null };
       cy.idx = (cy.idx + 1) % blocked.length;
@@ -1103,13 +1119,13 @@ if (process.argv.includes("--selftest")) {
     log("selftest usage:", state.usage ? JSON.stringify(state.usage) : `ERROR: ${state.usageErr}`);
     await pollSessions();
     log("selftest sessions:", state.sessions.map((s) => `${s.name}[${s.status}]`).join(", ") || "(none)");
-    log("selftest states:", state.sessions.map((s) => `${s.name}=${sessionState(s)}${s.waitingFor ? "(" + s.waitingFor + ")" : ""}`).join(", ") || "(none)");
-    log("selftest blocked:", blockedSessions(state.sessions).map((s) => s.name).join(", ") || "(none)");
-    log("selftest status (auto k0):", JSON.stringify(statusEntry(resolveStatusKey(state.sessions, "", 0))));
+    log("selftest states:", state.sessions.map((s) => `${s.name}=${sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null)}${s.waitingFor ? "(" + s.waitingFor + ")" : ""}`).join(", ") || "(none)");
+    log("selftest blocked:", blockedSessions(state.sessions, Date.now(), state.activity).map((s) => s.name).join(", ") || "(none)");
+    log("selftest status (auto k0):", JSON.stringify(statusEntry(resolveStatusKey(state.sessions, "", 0, Date.now(), state.activity))));
     const demo0 = state.sessions[0];
     if (demo0) {
       const proj = path.basename(demo0.cwd ?? "");
-      const r = resolveStatusKey(state.sessions, proj, 0);
+      const r = resolveStatusKey(state.sessions, proj, 0, Date.now(), state.activity);
       log(`selftest status (explicit ${proj}) count=${r.count}:`, JSON.stringify(statusEntry(r)));
     }
     await pollToday();
@@ -1176,7 +1192,7 @@ if (process.argv.includes("--selftest")) {
   setInterval(() => {
     animPhase = (animPhase + 1) % 3;
     const kinds = [];
-    if (state.sessions.some((s) => sessionState(s) === "working")) kinds.push("sessions");
+    if (state.sessions.some((s) => sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) === "working")) kinds.push("sessions");
     if (state.usage?.fiveHour?.pct >= 90) kinds.push("usage-session");
     if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
     if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");
