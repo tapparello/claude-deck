@@ -30,11 +30,26 @@ export function sessionWhere(s) {
   return "";
 }
 
-// Path of a session's transcript, or null if it can't be derived. Claude Code
-// stores them as <projects>/<cwd with / and _ replaced by ->/<sessionId>.jsonl.
+// Best-guess path of a session's transcript. Claude Code stores them as
+// <projects>/<slugified cwd>/<sessionId>.jsonl, where the slug replaces path
+// separators and underscores with "-". On Windows a cwd is "C:\\Users\\me\\proj",
+// so backslashes and the drive colon have to go too — and since the exact
+// Windows rule is unverified, callers must treat this as a HINT and fall back to
+// finding <sessionId>.jsonl by name (see transcriptDirCandidates).
 export function transcriptPathFor(projectsDir, s) {
   if (!s?.cwd || !s?.sessionId) return null;
-  return `${projectsDir}/${String(s.cwd).replace(/[/_]/g, "-")}/${s.sessionId}.jsonl`;
+  return joinPath(projectsDir, slugifyCwd(s.cwd), `${s.sessionId}.jsonl`);
+}
+
+// The slug Claude Code uses for a project directory name.
+export function slugifyCwd(cwd) {
+  return String(cwd).replace(/[/\\_:]/g, "-");
+}
+
+// Join without importing platform specifics into a pure module: Node accepts "/"
+// on Windows too, so a forward-slash join is safe for reads.
+function joinPath(...parts) {
+  return parts.filter(Boolean).join("/");
 }
 
 // Derived display state for one session. `now` is injected for testability.
