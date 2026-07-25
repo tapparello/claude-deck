@@ -3827,6 +3827,26 @@ function hostAppForPid(tree, pid, maxDepth = 16) {
   }
   return null;
 }
+function terminalFocusScript(tty) {
+  const esc2 = escapeAppleScript(String(tty));
+  return [
+    "with timeout of 7 seconds",
+    'tell application "Terminal"',
+    "  activate",
+    "  repeat with w in windows",
+    "    repeat with t in tabs of w",
+    `      if (tty of t) ends with "${esc2}" then`,
+    "        set selected of t to true",
+    "        set frontmost of w to true",
+    "        return",
+    "      end if",
+    "    end repeat",
+    "  end repeat",
+    "end tell",
+    'error "not found"',
+    "end timeout"
+  ];
+}
 function focusStrategyForBundle(bundle) {
   if (!bundle) return null;
   const base = String(bundle).replace(/\/+$/, "").split("/").pop();
@@ -4842,24 +4862,7 @@ var macPlatform = {
             return activateApp();
           }
           log(`focusWindow: terminal strategy, pid ${pid}, tty ${tty}`);
-          const esc2 = escapeAppleScript(tty);
-          return runOsa([
-            "with timeout of 7 seconds",
-            'tell application "Terminal"',
-            "  repeat with w in windows",
-            "    repeat with t in tabs of w",
-            `      if (tty of t) ends with "${esc2}" then`,
-            "        set selected of t to true",
-            "        set index of w to 1",
-            "        activate",
-            "        return",
-            "      end if",
-            "    end repeat",
-            "  end repeat",
-            "end tell",
-            'error "not found"',
-            "end timeout"
-          ]).catch(fallback("terminal tty match failed"));
+          return runOsa(terminalFocusScript(tty)).catch(fallback("terminal tty match failed"));
         }).catch(fallback("tty lookup failed"));
       }
       if (strat === "vscode") {

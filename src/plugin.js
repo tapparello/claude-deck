@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle } from "./osa.js";
+import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript } from "./osa.js";
 import { windowStartMs, parseRequests, mergeById, aggregate } from "./usage.js";
 import { resolveStatusKey, statusEntry, autoOrdinal, sessionState, blockedSessions, sessionSig } from "./status.js";
 
@@ -923,24 +923,7 @@ const macPlatform = {
             return activateApp();
           }
           log(`focusWindow: terminal strategy, pid ${pid}, tty ${tty}`);
-          const esc = escapeAppleScript(tty);
-          return runOsa([
-            "with timeout of 7 seconds",
-            'tell application "Terminal"',
-            "  repeat with w in windows",
-            "    repeat with t in tabs of w",
-            `      if (tty of t) ends with "${esc}" then`,
-            "        set selected of t to true",
-            "        set index of w to 1",
-            "        activate",
-            "        return",
-            "      end if",
-            "    end repeat",
-            "  end repeat",
-            "end tell",
-            'error "not found"',
-            "end timeout",
-          ]).catch(fallback("terminal tty match failed"));
+          return runOsa(terminalFocusScript(tty)).catch(fallback("terminal tty match failed"));
         }).catch(fallback("tty lookup failed"));
       }
       if (strat === "vscode") {
