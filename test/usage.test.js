@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { windowStartMs, rateFor, estimateCost, parseRequests, mergeById, aggregate } from "../src/usage.js";
+import { windowStartMs, rateFor, estimateCost, parseRequests, mergeById, aggregate, familyOf, aggregateByModel, budgetPct, gaugeSource, hasSubscriptionData, USAGE_FRESH_MS } from "../src/usage.js";
 
 test("windowStartMs 7day is exactly now - 7 days", () => {
   const now = 1_800_000_000_000;
@@ -151,4 +151,97 @@ test("aggregate applies overrides to cost; tokens unchanged; default when omitte
   const reqs = [{ t: 200, model: "claude-opus-4-8", tok: { in: M, out: 0, cacheRead: 0, cacheCreate: 0 } }];
   assert.deepEqual(aggregate(reqs, 100, { opus: { in: 4 } }), { tokens: M, cost: 4 });
   assert.deepEqual(aggregate(reqs, 100), { tokens: M, cost: 5 });
+});
+
+// ---------- 5h rolling window ----------
+test("windowStartMs 5h is exactly now-5h and ignores local midnight", () => {
+  const now = new Date("2026-07-25T00:20:00Z").getTime(); // just after midnight UTC
+  assert.equal(windowStartMs("5h", now), now - 5 * 3600 * 1000);
+  // a rolling window must not be pinned to a day boundary like "today" is
+  assert.notEqual(windowStartMs("5h", now), windowStartMs("today", now));
+});
+
+// ---------- familyOf ----------
+test("familyOf shares one prefix chain with rateFor (incl. mythos->fable)", () => {
+  assert.equal(familyOf("claude-opus-4-8"), "opus");
+  assert.equal(familyOf("claude-sonnet-5"), "sonnet");
+  assert.equal(familyOf("claude-haiku-4-5-20251001"), "haiku");
+  assert.equal(familyOf("claude-mythos-1"), "fable");
+  assert.equal(familyOf("<synthetic>"), null);
+  assert.equal(familyOf(null), null);
+  // rateFor must agree, or the two chains have drifted
+  assert.ok(rateFor("claude-mythos-1"));
+  assert.equal(rateFor("<synthetic>"), null);
+});
+
+// ---------- aggregateByModel ----------
+const R = (model, t, inTok, outTok) => ({ model, t, tok: { in: inTok, out: outTok, cacheRead: 0, cacheCreate: 0 } });
+test("aggregateByModel groups by family, sorts by cost, drops empty groups", () => {
+  const now = 1_000_000_000;
+  const reqs = [
+    R("claude-sonnet-5", now, 1_000_000, 1_000_000),
+    R("claude-opus-5", now, 1_000_000, 1_000_000),
+    R("claude-opus-4-8", now, 1_000_000, 0),
+    R("<synthetic>", now, 0, 0),              // zero usage, unpriceable -> dropped
+    R("claude-haiku-4-5", now - 99_999, 5_000_000, 5_000_000), // before window
+  ];
+  const out = aggregateByModel(reqs, now - 1000);
+  assert.deepEqual(out.map((e) => e.model), ["opus", "sonnet"]); // opus costs more
+  assert.equal(out.find((e) => e.model === "opus").tokens, 3_000_000); // both opus reqs
+  assert.ok(!out.some((e) => e.model === "haiku"), "pre-window request excluded");
+  assert.ok(!out.some((e) => e.model === "other"), "zero-usage synthetic dropped");
+  assert.deepEqual(aggregateByModel([], now), []);
+});
+
+// ---------- budgetPct ----------
+test("budgetPct coerces strings and rejects unusable budgets", () => {
+  assert.equal(budgetPct(2.5, 5), 50);
+  assert.equal(budgetPct(2.5, "5"), 50);      // the PI stores strings
+  assert.equal(budgetPct(10, 5), 200);        // over budget is reported truthfully
+  assert.equal(budgetPct(1, 0), null);
+  assert.equal(budgetPct(1, -5), null);
+  assert.equal(budgetPct(1, ""), null);
+  assert.equal(budgetPct(1, "abc"), null);
+  assert.equal(budgetPct(1, undefined), null);
+  assert.equal(budgetPct(undefined, 5), null);
+});
+
+// ---------- gaugeSource state machine ----------
+test("gaugeSource: cold start is pending, never local", () => {
+  // Both null for up to ~2min on a warm cache — must not flash local numbers
+  // at a subscription user on every Stream Deck restart.
+  assert.equal(gaugeSource({ usage: null, usageErr: null, usageAt: 0, now: 1000 }), "pending");
+  assert.equal(gaugeSource({ usage: null, usageErr: null, usageAt: 0, now: 1000 }, true), "pending");
+});
+
+test("gaugeSource: fresh account-level data wins", () => {
+  const now = 10_000_000;
+  const fresh = { usage: { fiveHour: { pct: 42 } }, usageErr: null, usageAt: now - 1000, now };
+  assert.equal(gaugeSource(fresh), "subscription");
+  // scoped-only accounts have no `weekly` bucket but DO have a real limit
+  assert.equal(gaugeSource({ ...fresh, usage: { scopedPct: 42, scopedName: "Opus" } }), "subscription");
+  assert.equal(gaugeSource({ ...fresh, usage: { models: [{ name: "Opus", pct: 5 }] } }), "subscription");
+});
+
+test("gaugeSource: a frozen snapshot goes stale instead of reading as live", () => {
+  const now = 10_000_000;
+  // Token expired an hour ago: usageErr set, usage NOT cleared by pollUsage.
+  const stale = { usage: { fiveHour: { pct: 62 } }, usageErr: "usage endpoint HTTP 401", usageAt: now - USAGE_FRESH_MS - 1, now };
+  assert.equal(gaugeSource(stale, true), "error", "401 must prompt re-auth, not silently serve local");
+  assert.equal(gaugeSource({ ...stale, usageErr: "no OAuth token in credentials file" }, true), "local");
+  assert.equal(gaugeSource({ ...stale, usageErr: null }, true), "local", "stale + local data available");
+  assert.equal(gaugeSource({ ...stale, usageErr: null }, false), "pending", "stale + nothing local yet");
+});
+
+test("gaugeSource: 429 keeps the throttled message", () => {
+  const now = 10_000_000;
+  assert.equal(gaugeSource({ usage: null, usageErr: "usage endpoint HTTP 429 (backing off to 60s)", usageAt: 0, now }, true), "throttled");
+});
+
+test("hasSubscriptionData is account-level, not per-bucket", () => {
+  assert.equal(hasSubscriptionData(null), false);
+  assert.equal(hasSubscriptionData({}), false);
+  assert.equal(hasSubscriptionData({ models: [] }), false);
+  assert.equal(hasSubscriptionData({ weeklyOpus: { pct: 1 } }), true);
+  assert.equal(hasSubscriptionData({ scopedPct: 0 }), true); // 0 is real data
 });
