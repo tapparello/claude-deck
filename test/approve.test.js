@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { sanitizeSuggestions, decisionBody, DENY_MESSAGE } from "../src/approve.js";
+import { sanitizeSuggestions, decisionBody, DENY_MESSAGE, hookFragment } from "../src/approve.js";
 
 const addRules = (over = {}) => ({
   type: "addRules",
@@ -415,4 +415,34 @@ test("pressDecision ignores a press inside the settle window", () => {
 
 test("pressDecision alerts when the key painted nothing but a request now exists", () => {
   assert.equal(pressDecision({ queue: q1(), shownId: null, lastHeadChangeAt: 0, now: 10_000 }).action, "alert");
+});
+
+// Regression guard for the Task 9 review finding: installSnippet()/hookFragment() must
+// return pure JSON with no `//` comments, because the Property Inspector's Copy button
+// puts this string verbatim into ~/.claude/settings.json, which has a live Azure DevOps
+// PAT on this machine and no tolerance for comment syntax.
+test("hookFragment contains no comment lines", () => {
+  // Check for a `//` comment TOKEN (line starting with it, once trimmed), not merely
+  // the substring "//" — the URL itself legitimately contains "//" (http://...).
+  const frag = hookFragment("http://127.0.0.1:45623/permission/abc123", 20);
+  const commentLines = frag.split("\n").filter((l) => l.trim().startsWith("//"));
+  assert.deepEqual(commentLines, []);
+});
+
+test("hookFragment merged into a hooks object round-trips through JSON.parse", () => {
+  const url = "http://127.0.0.1:45623/permission/abc123";
+  const frag = hookFragment(url, 20);
+  const doc = `{"hooks": {${frag}}}`;
+  const parsed = JSON.parse(doc);
+  assert.equal(parsed.hooks.PermissionRequest[0].hooks[0].url, url);
+  assert.equal(parsed.hooks.PermissionRequest[0].hooks[0].timeout, 20);
+});
+
+test("hookFragment escapes a URL that needs it and still round-trips", () => {
+  // A secret containing a character JSON must escape (a literal quote), to prove the
+  // builder truly relies on JSON.stringify rather than string interpolation.
+  const url = 'http://127.0.0.1:45623/permission/ab"cd';
+  const frag = hookFragment(url, 20);
+  const parsed = JSON.parse(`{"hooks": {${frag}}}`);
+  assert.equal(parsed.hooks.PermissionRequest[0].hooks[0].url, url);
 });

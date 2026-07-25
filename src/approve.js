@@ -117,6 +117,26 @@ export function enqueue(queue, req) {
   return { queue: rest, evicted };
 }
 
+// The copyable install fragment. Pure JSON text: NO comments, because the user pastes
+// this straight into ~/.claude/settings.json, and JSON has no comment syntax. The
+// human-readable merge instructions live in the Property Inspector note instead.
+export function hookFragment(url, timeoutS) {
+  return [
+    '"PermissionRequest": [',
+    '  {',
+    '    "matcher": "",',
+    '    "hooks": [',
+    '      {',
+    '        "type": "http",',
+    `        "url": ${JSON.stringify(url)},`,
+    `        "timeout": ${Number(timeoutS)}`,
+    "      }",
+    "    ]",
+    "  }",
+    "]",
+  ].join("\n");
+}
+
 export const head = (queue) => queue[0] ?? null;
 
 export function resolve(queue, id) {

@@ -4181,6 +4181,22 @@ function enqueue(queue, req) {
   const [evicted, ...rest] = next;
   return { queue: rest, evicted };
 }
+function hookFragment(url, timeoutS) {
+  return [
+    '"PermissionRequest": [',
+    "  {",
+    '    "matcher": "",',
+    '    "hooks": [',
+    "      {",
+    '        "type": "http",',
+    `        "url": ${JSON.stringify(url)},`,
+    `        "timeout": ${Number(timeoutS)}`,
+    "      }",
+    "    ]",
+    "  }",
+    "]"
+  ].join("\n");
+}
 var head = (queue) => queue[0] ?? null;
 function resolve(queue, id) {
   const req = queue.find((r) => r.id === id) ?? null;
@@ -4906,22 +4922,7 @@ async function ensureHookServerOnce() {
 }
 function installSnippet() {
   const url = `http://127.0.0.1:${state.hookPort}/permission/${state.hookSecret ?? "<secret>"}`;
-  return [
-    '// Add this INSIDE the "hooks" object of ~/.claude/settings.json.',
-    '// If that file has no "hooks" key yet, wrap this in one:  "hooks": { ... }',
-    '"PermissionRequest": [',
-    "  {",
-    '    "matcher": "",',
-    '    "hooks": [',
-    "      {",
-    '        "type": "http",',
-    `        "url": ${JSON.stringify(url)},`,
-    `        "timeout": ${HOLD_MS() / 1e3}`,
-    "      }",
-    "    ]",
-    "  }",
-    "]"
-  ].join("\n");
+  return hookFragment(url, HOLD_MS() / 1e3);
 }
 async function walkTranscripts(dir, cutoffMs) {
   const out = [];

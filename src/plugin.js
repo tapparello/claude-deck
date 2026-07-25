@@ -14,7 +14,7 @@ import { resolveStatusKey, statusEntry, autoSlot, sessionWhere, fmtShort, shortW
 import { randomBytes } from "node:crypto";
 import {
   decisionBody, describeRequest, alwaysRule, pressDecision,
-  enqueue, head, resolve, expiredIds, staleIds, seedBaselines,
+  enqueue, head, resolve, expiredIds, staleIds, seedBaselines, hookFragment,
   PORT_DEFAULT, HOLD_S_DEFAULT, QUEUE_MAX,
 } from "./approve.js";
 import { startHookServer } from "./hookserver.js";
@@ -681,29 +681,13 @@ async function ensureHookServerOnce() {
 // A FRAGMENT, not a whole document. `~/.claude/settings.json` already exists on any
 // real install - and on this machine it holds an Azure DevOps PAT - so telling the user
 // to paste `{"hooks":{...}}` over it would produce invalid JSON at best and destroy
-// their settings at worst.
+// their settings at worst. The returned text is pure JSON with NO comments: it goes
+// straight into a copy-button textarea and then straight into that file, and JSON has
+// no comment syntax. The merge instructions live in the Property Inspector note instead
+// (see pi/pi.html's "install" field), not in this string.
 function installSnippet() {
   const url = `http://127.0.0.1:${state.hookPort}/permission/${state.hookSecret ?? "<secret>"}`;
-  // A FRAGMENT, not a whole document. ~/.claude/settings.json already exists on any
-  // real install - and on this machine it holds an Azure DevOps PAT - so telling the
-  // user to paste {"hooks":{...}} over it would produce invalid JSON at best and
-  // destroy their settings at worst.
-  return [
-    '// Add this INSIDE the "hooks" object of ~/.claude/settings.json.',
-    '// If that file has no "hooks" key yet, wrap this in one:  "hooks": { ... }',
-    '"PermissionRequest": [',
-    '  {',
-    '    "matcher": "",',
-    '    "hooks": [',
-    '      {',
-    '        "type": "http",',
-    `        "url": ${JSON.stringify(url)},`,
-    `        "timeout": ${HOLD_MS() / 1000}`,
-    "      }",
-    "    ]",
-    "  }",
-    "]",
-  ].join("\n");
+  return hookFragment(url, HOLD_MS() / 1000);
 }
 
 // Recursively collect .jsonl transcript files (including <uuid>/subagents/)
