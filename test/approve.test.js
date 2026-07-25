@@ -171,3 +171,83 @@ test("decisionBody: always emits EXACTLY one update entry, with no extra keys", 
 test("decisionBody: unknown kind returns null", () => {
   assert.equal(decisionBody("nope", { toolName: "Bash", suggestions: [] }), null);
 });
+
+import { describeRequest, alwaysRule, TARGET_MAX, RULE_MAX } from "../src/approve.js";
+
+const req = (over = {}) => ({ cwd: "/Users/x/dev/claude-deck", toolName: "Bash", toolInput: { command: "npm test" }, suggestions: [], ...over });
+
+test("describeRequest names the project from cwd", () => {
+  assert.equal(describeRequest(req()).name, "claude-deck");
+  // 11-char cap: basename is truncated, not ellipsised away
+  assert.equal(describeRequest(req({ cwd: "/a/fmf_connect_flutter" })).name.length, 11);
+  assert.equal(describeRequest(req({ cwd: undefined })).name, "");
+});
+
+test("describeRequest maps each tool to a target", () => {
+  const cases = [
+    [{ toolName: "Bash", toolInput: { command: "npm test" } }, "npm test"],
+    [{ toolName: "Edit", toolInput: { file_path: "/a/b/plugin.js" } }, "plugin.js"],
+    [{ toolName: "Write", toolInput: { file_path: "/a/b/notes.md" } }, "notes.md"],
+    [{ toolName: "NotebookEdit", toolInput: { file_path: "/a/n.ipynb" } }, "n.ipynb"],
+    [{ toolName: "Read", toolInput: { file_path: "/a/b/x.txt" } }, "x.txt"],
+    [{ toolName: "WebFetch", toolInput: { url: "https://example.com/a/b" } }, "example.com"],
+    [{ toolName: "WebSearch", toolInput: { query: "node http" } }, "node http"],
+    [{ toolName: "Task", toolInput: { subagent_type: "Explore" } }, "Explore"],
+    [{ toolName: "mcp__azdo__wit_get", toolInput: {} }, "azdo·wit_get"],
+    [{ toolName: "SomethingNew", toolInput: {} }, "SomethingNew"],
+  ];
+  for (const [over, want] of cases) assert.equal(describeRequest(req(over)).target, want, over.toolName);
+});
+
+test("describeRequest collapses whitespace and control chars in EVERY branch", () => {
+  assert.equal(describeRequest(req({ toolName: "Bash", toolInput: { command: "npm\n  test\t-v" } })).target, "npm test -v");
+  assert.equal(describeRequest(req({ toolName: "WebSearch", toolInput: { query: "a\nb" } })).target, "a b");
+  // hyphens must SURVIVE - `claude-deck` and `--admin` are not whitespace
+  assert.equal(describeRequest(req({ cwd: "/a/claude-deck" })).name, "claude-deck");
+  assert.equal(describeRequest(req({ toolName: "Task", toolInput: { subagent_type: "ab" } })).target, "a b");
+});
+
+test("describeRequest truncates the target with an ellipsis", () => {
+  const t = describeRequest(req({ toolInput: { command: "gh pr merge --admin 1234" } })).target;
+  assert.equal(t.length, TARGET_MAX);
+  assert.ok(t.endsWith("…"), t);
+});
+
+test("describeRequest falls back to the tool name on malformed input", () => {
+  for (const bad of [undefined, null, "str", 42, {}]) {
+    assert.equal(describeRequest(req({ toolInput: bad })).target, "Bash", JSON.stringify(bad) ?? "undefined");
+  }
+  assert.equal(describeRequest(req({ toolName: "WebFetch", toolInput: { url: "not a url" } })).target, "WebFetch");
+  assert.equal(describeRequest({}).target, "");
+  assert.doesNotThrow(() => describeRequest(undefined));
+});
+
+const sugg = (ruleContent, toolName = "Bash", over = {}) => ({
+  type: "addRules", behavior: "allow", destination: "localSettings",
+  rules: [{ toolName, ruleContent }], ...over,
+});
+
+test("alwaysRule renders the rule that would be persisted, not the command", () => {
+  const r = req({ toolName: "Bash", toolInput: { command: "gh pr merge --admin 1234" }, suggestions: [sugg("gh pr *")] });
+  assert.equal(alwaysRule(r), "Bash(gh pr *)");
+});
+
+test("alwaysRule returns null when nothing survives sanitising", () => {
+  assert.equal(alwaysRule(req({ suggestions: [] })), null);
+  assert.equal(alwaysRule(req({ suggestions: [sugg("x", "Bash", { type: "setMode" })] })), null);
+  assert.equal(alwaysRule(req({ toolName: "mcp__a__b", suggestions: [sugg("x")] })), null);
+});
+
+test("alwaysRule returns null when the surviving set is ambiguous", () => {
+  assert.equal(alwaysRule(req({ suggestions: [sugg("a"), sugg("b")] })), null, "two entries");
+  const twoRules = { type: "addRules", behavior: "allow", destination: "localSettings",
+    rules: [{ toolName: "Bash", ruleContent: "a" }, { toolName: "Bash", ruleContent: "b" }] };
+  assert.equal(alwaysRule(req({ suggestions: [twoRules] })), null, "two rules");
+});
+
+test("alwaysRule truncates long rule text rather than disabling the key", () => {
+  const r = req({ suggestions: [sugg("some/very/long/path/prefix *")] });
+  const out = alwaysRule(r);
+  assert.equal(out.length, RULE_MAX);
+  assert.ok(out.endsWith("…"), out);
+});
