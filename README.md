@@ -30,7 +30,7 @@ The usage gauges show the **same session/weekly percentages Claude Desktop and C
 | **Claude Waiting** | Dark ("all clear") until a Claude Code session is waiting on you, then shows that session's name, why (permission prompt / input needed) and a count if several are waiting. Press to jump straight to that session's window; press again to cycle the rest. |
 | **Claude Status** | Live state of one Claude Code session: **Needs approval** (blocked on a permission prompt) · **Input needed** · **Working** · **Finished** · **Idle**, with the reason or age underneath. Press to jump to that session's window. Two ways to use it: **bind it to a project** (folder name, in the key's settings) so it always tracks that project, or **leave it blank (auto)** — then a row of auto keys covers your busiest sessions, most-urgent first, ordered by key position (top-left = most urgent). Extra auto keys beyond the session count read "no session". Optional **"Press cycles through sessions"** makes a press walk the list instead of keeping the key's own slot — off by default, since Focus Session already cycles. |
 | **Claude Allow** | Dark ("all clear") until a session hits a permission prompt (up to 8 queued, oldest shown first), then lights up with the command. Press to **allow** it for that one turn — the same as answering "Yes" in the terminal. See **Approving from the deck** below for setup. |
-| **Claude Always Allow** | Same request, but presses "always allow" — shows the **rule** it would save (e.g. `Bash(gh pr *)`), not the command, since Claude Code's own suggestion is usually a wildcard. Reads **`ALWAYS n/a`** and does nothing when no single safe rule is on offer (including every MCP tool, which this key always refuses). See **Approving from the deck** below. |
+| **Claude Always Allow** | Same request, but presses "always allow" — shows the **rule** it would save (e.g. `Bash(gh pr *)`), not the command, since Claude Code's own suggestion is usually a wildcard. Reads **`ALWAYS n/a`** and refuses to press when no single safe rule is on offer (including every MCP tool, which this key always refuses) — the request is left untouched for Allow or Deny to answer instead. See **Approving from the deck** below. |
 | **Claude Deny** | Same request, presses **deny** — the same as answering "No" in the terminal. See **Approving from the deck** below for setup. |
 
 Bar colors: green < 60%, amber 60–85%, red ≥ 85%. At 90%+ the gauge pulses red.
@@ -56,14 +56,16 @@ The sessions key shows an animated dot cycle while any session is actively worki
    - **Windows:** `%APPDATA%\Elgato\StreamDeck\Plugins\`
    - **macOS:** `~/Library/Application Support/com.elgato.StreamDeck/Plugins/` (or run `./deploy.sh`)
 4. Start the Stream Deck app — the actions appear under the **Claude Deck** category.
-5. Optional: double-click `Claude.streamDeckProfile` to import a ready-made profile with all keys pre-arranged.
+5. Optional: double-click `Claude.streamDeckProfile` to import a starter profile with some of the keys already arranged.
 
 ### Approving from the deck (Allow / Always Allow / Deny)
 
 Three keys mirror the three options Claude Code shows in the terminal. When a session
-asks for permission, all three light up with the command; press one and the terminal
-prompt is answered for you. The terminal keeps working exactly as before — whichever
-you answer first wins, and if you ignore the deck nothing changes.
+asks for permission, all three light up with what pressing them would do about it (Allow
+and Deny show the command, Always Allow shows the rule — see **What the keys show**
+below); press one and the terminal prompt is answered for you. The terminal keeps working
+exactly as before — whichever you answer first wins, and if you ignore the deck nothing
+changes.
 
 **One-time setup.** Open any of the three keys' settings and copy the snippet. It is a
 **fragment**: add it *inside* the `"hooks"` object of `~/.claude/settings.json` (if you
@@ -84,10 +86,10 @@ Always Allow writes to the project's `.claude/settings.local.json` (the git root
 exactly like the terminal's option 2. Tick *"Remember for this session only"* to keep it
 in memory instead. Nothing is ever written to `~/.claude/settings.json`.
 
-**Notes.** A request stays on the deck for up to 20 seconds. Requests you answered in the
-terminal instead clear within about 10-15 seconds (the deck waits ~10 s before trusting
-that a session has moved on, then checks on its 5 s poll). Sessions started with
-`claude -p` never prompt, so they never appear.
+**Notes.** A request stays on the deck for up to 20 seconds. Requests you answer in the
+terminal instead usually clear within 10-15 seconds — but at most the full 20-second hold
+if you answer quickly and the session doesn't change state again right away. Sessions
+started with `claude -p` never prompt, so they never appear.
 
 If something else already holds the port, the keys read `port busy` and the plugin keeps
 retrying every 30 seconds — free the port and they recover on their own. If the keys read
