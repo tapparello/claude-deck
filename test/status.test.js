@@ -1,8 +1,94 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveStatusKey, statusEntry, sessionProject, autoOrdinal } from "../src/status.js";
+import { resolveStatusKey, statusEntry, sessionProject, autoOrdinal, sessionState, blockedSessions, FINISHED_MS } from "../src/status.js";
 
 const S = (over) => ({ sessionId: "x", cwd: "/Users/me/web-app", status: "idle", updatedAt: 1, pid: 100, ...over });
+
+// ---------- sessionState: the real Claude Code enum (2.1.219) ----------
+// status ∈ busy|shell|idle|waiting; waitingFor ∈ permission prompt|input needed|
+// dialog open|sandbox request|worker request
+const NOW = 1_000_000_000;
+
+test("waiting + approval-ish waitingFor => needs-approval", () => {
+  for (const w of ["permission prompt", "sandbox request", "worker request"]) {
+    assert.equal(sessionState({ status: "waiting", waitingFor: w }, NOW), "needs-approval", w);
+  }
+  // case-insensitive, and missing waitingFor falls back to a permission prompt
+  assert.equal(sessionState({ status: "waiting", waitingFor: "Permission Prompt" }, NOW), "needs-approval");
+  assert.equal(sessionState({ status: "waiting" }, NOW), "needs-approval");
+});
+
+test("waiting + question-ish waitingFor => input-needed", () => {
+  for (const w of ["input needed", "dialog open"]) {
+    assert.equal(sessionState({ status: "waiting", waitingFor: w }, NOW), "input-needed", w);
+  }
+  // an unknown future waitingFor is treated as input-needed, not approval
+  assert.equal(sessionState({ status: "waiting", waitingFor: "something new" }, NOW), "input-needed");
+});
+
+test("busy and shell are both working", () => {
+  assert.equal(sessionState({ status: "busy" }, NOW), "working");
+  assert.equal(sessionState({ status: "shell" }, NOW), "working");
+});
+
+test("idle splits into finished/idle at the FINISHED_MS boundary", () => {
+  assert.equal(sessionState({ status: "idle", statusUpdatedAt: NOW - 1000 }, NOW), "finished");
+  assert.equal(sessionState({ status: "idle", statusUpdatedAt: NOW - (FINISHED_MS - 1) }, NOW), "finished");
+  assert.equal(sessionState({ status: "idle", statusUpdatedAt: NOW - FINISHED_MS }, NOW), "idle");
+  assert.equal(sessionState({ status: "idle", statusUpdatedAt: NOW - 600_000 }, NOW), "idle");
+});
+
+test("idle falls back to updatedAt when statusUpdatedAt is absent (older Claude Code)", () => {
+  assert.equal(sessionState({ status: "idle", updatedAt: NOW - 1000 }, NOW), "finished");
+  assert.equal(sessionState({ status: "idle", updatedAt: NOW - 600_000 }, NOW), "idle");
+  assert.equal(sessionState({ status: "idle" }, NOW), "idle"); // no timestamps at all
+});
+
+test("clock skew (future timestamp) does not produce a bogus state", () => {
+  assert.equal(sessionState({ status: "idle", statusUpdatedAt: NOW + 60_000 }, NOW), "finished");
+});
+
+test("unknown/missing status is idle, and waitingFor without waiting is ignored", () => {
+  assert.equal(sessionState({}, NOW), "idle");
+  assert.equal(sessionState({ status: "something-new" }, NOW), "idle");
+  assert.equal(sessionState({ status: "busy", waitingFor: "permission prompt" }, NOW), "working");
+});
+
+// ---------- urgency ordering + blockedSessions ----------
+test("a waiting session outranks a busy one even when older", () => {
+  const sessions = [
+    S({ cwd: "/a/app", status: "busy", updatedAt: 99, pid: 1 }),
+    S({ cwd: "/b/app", status: "waiting", waitingFor: "permission prompt", updatedAt: 1, pid: 2 }),
+  ];
+  const e = statusEntry(resolveStatusKey(sessions, "app", 0, NOW));
+  assert.equal(e.state, "needs-approval");
+  assert.equal(e.cwd, "/b/app");
+  assert.equal(e.waitingFor, "permission prompt");
+});
+
+test("needs-approval outranks input-needed", () => {
+  const sessions = [
+    S({ cwd: "/a/app", status: "waiting", waitingFor: "input needed", updatedAt: 99, pid: 1 }),
+    S({ cwd: "/b/app", status: "waiting", waitingFor: "permission prompt", updatedAt: 1, pid: 2 }),
+  ];
+  assert.equal(statusEntry(resolveStatusKey(sessions, "app", 0, NOW)).cwd, "/b/app");
+});
+
+test("entries carry pid (focusWindow needs it) and statusAge", () => {
+  const e = statusEntry(resolveStatusKey([S({ pid: 4242, statusUpdatedAt: NOW - 5000 })], "", 0, NOW));
+  assert.equal(e.pid, 4242);
+  assert.equal(e.statusAge, 5000);
+});
+
+test("blockedSessions returns full poller records, urgency-ordered", () => {
+  const busy = S({ cwd: "/a/one", status: "busy", pid: 1 });
+  const input = S({ cwd: "/b/two", status: "waiting", waitingFor: "input needed", pid: 2 });
+  const perm = S({ cwd: "/c/three", status: "waiting", waitingFor: "permission prompt", pid: 3 });
+  const out = blockedSessions([busy, input, perm], NOW);
+  assert.deepEqual(out.map((s) => s.pid), [3, 2]);
+  assert.equal(out[0].cwd, "/c/three"); // full record, not a projection
+  assert.equal(blockedSessions([busy], NOW).length, 0);
+});
 
 test("explicit binding matches by basename(cwd), case-insensitive", () => {
   const sessions = [S({ cwd: "/a/web-app", pid: 1 }), S({ cwd: "/b/api", pid: 2 })];
