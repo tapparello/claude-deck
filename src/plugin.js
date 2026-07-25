@@ -10,7 +10,7 @@ import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle } from "./osa.js";
 import { windowStartMs, parseRequests, mergeById, aggregate } from "./usage.js";
-import { resolveStatusKey, statusEntry, autoOrdinal } from "./status.js";
+import { resolveStatusKey, statusEntry, autoOrdinal, sessionState, blockedSessions } from "./status.js";
 
 const IS_MAC = process.platform === "darwin";
 
@@ -53,6 +53,7 @@ const C = {
   bad: "#f87171",
   track: "#3a3745",
   info: "#60a5fa", // status: working (blue)
+  ask: "#a855f7", // status: input needed (purple)
 };
 const pctColor = (p) => (p == null ? C.dim : p >= 85 ? C.bad : p >= 60 ? C.warn : C.ok);
 const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -160,13 +161,28 @@ function labelKey(title, label, sub, accent = C.accent) {
 // Per-session status key: project name + state word, tinted by state.
 // st ∈ "working" | "idle" | "none". count>1 shows a collision badge;
 // detail (optional) is a small third line used while cycling collisions.
+// st ∈ needs-approval | input-needed | working | finished | idle | none.
+// The two "blocked on you" states get a filled band behind the label, not just a
+// hairline border: a thin colored outline is unreliable at arm's length on a
+// physical key and yellow-vs-green outlines are a red/green-blind trap.
+const STATUS_LOOK = {
+  "needs-approval": { label: "Needs approval", col: C.warn, band: true },
+  "input-needed": { label: "Input needed", col: C.ask, band: true },
+  working: { label: "Working", col: C.info, band: false },
+  finished: { label: "Finished", col: C.ok, band: false },
+  idle: { label: "Idle", col: C.dim, band: false },
+  none: { label: "no session", col: C.dim, band: false },
+};
 function statusKey(name, st, count, detail = "") {
-  const label = { working: "Working", idle: "Idle", none: "no session" }[st] ?? "";
-  const col = st === "working" ? C.info : C.dim;
+  const look = STATUS_LOOK[st] ?? STATUS_LOOK.none;
+  const { label, col, band } = look;
   const shown = name || "CLAUDE";
-  const border = st === "working"
+  const border = band
+    ? `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${col}" stroke-width="6"/>`
+    : st === "working"
     ? `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.info}" stroke-width="4" opacity="0.9"/>`
     : `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.track}" stroke-width="3"/>`;
+  const bandSvg = band ? `<rect x="10" y="84" width="124" height="26" rx="7" fill="${col}"/>` : "";
   const badge = count > 1
     ? `<circle cx="120" cy="24" r="13" fill="${C.panel}" stroke="${C.track}" stroke-width="1"/><text x="120" y="29" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${count}</text>`
     : "";
@@ -176,8 +192,9 @@ function statusKey(name, st, count, detail = "") {
   return svgWrap(`
     ${border}
     ${badge}
+    ${bandSvg}
     <text x="72" y="70" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="26" font-weight="700" fill="${st === "none" ? C.dim : C.text}">${esc(String(shown).slice(0, 11))}</text>
-    <text x="72" y="100" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="18" font-weight="600" fill="${col}">${esc(label)}</text>
+    <text x="72" y="${band ? 103 : 100}" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${label.length > 9 ? 16 : 18}" font-weight="700" fill="${band ? C.bg : col}">${esc(label)}</text>
     ${detailSvg}`);
 }
 
@@ -327,7 +344,10 @@ async function pollSessions() {
       } catch {}
     }
     out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-    const changed = JSON.stringify(out.map((s) => [s.pid, s.status])) !== JSON.stringify(state.sessions.map((s) => [s.pid, s.status]));
+    // Include the derived state so time-relative transitions (Finished → Idle at
+    // 60s) repaint on the next tick; [pid,status] alone never changes for those.
+    const sig = (list) => JSON.stringify(list.map((s) => [s.pid, s.status, s.waitingFor ?? "", sessionState(s)]));
+    const changed = sig(out) !== sig(state.sessions);
     state.sessions = out;
     if (changed) renderAll(["sessions", "focus-session", "approver-status"]);
   } catch (e) {
@@ -576,8 +596,16 @@ function render(context, kind) {
       return setImage(context, labelKey("PROJECT", label || "configure", s.path ? "" : "set folder in settings"));
     }
     case "focus-session": {
+      // Blocked sessions take priority: pressing goes straight to the one that
+      // needs you, and the key advertises that with the reason + a warm accent.
+      const blocked = blockedSessions(state.sessions);
+      const pool = blocked.length ? blocked : state.sessions;
       const i = focusIdx.get(context);
-      const s = i != null && state.sessions.length ? state.sessions[i % state.sessions.length] : null;
+      const s = i != null && pool.length ? pool[i % pool.length] : null;
+      if (blocked.length) {
+        const b = s ?? blocked[0];
+        return setImage(context, labelKey("FOCUS", b.name ?? "session", String(b.waitingFor ?? "needs you"), C.warn));
+      }
       return setImage(context, labelKey("FOCUS", s ? s.name : `${state.sessions.length} sessions`, s ? s.status : "press to cycle", C.ok));
     }
     case "quick-prompt": {
@@ -600,8 +628,12 @@ function render(context, kind) {
           { text: fmtAgo(s.startedAt ?? Date.now()) + " old", color: C.dim },
         ]));
       }
-      const busy = state.sessions.filter((s) => s.status && s.status !== "idle").length;
-      return setImage(context, bigCountKey("CLAUDE CODE", n, busy > 0 ? `${busy} working` : n > 0 ? "all idle" : "none running", busy > 0 ? C.ok : C.dim, busy > 0 ? animPhase : null));
+      // "waiting" means blocked on the human — never count that as working.
+      const blocked = blockedSessions(state.sessions).length;
+      const busy = state.sessions.filter((s) => sessionState(s) === "working").length;
+      const sub = blocked > 0 ? `${blocked} needs you` : busy > 0 ? `${busy} working` : n > 0 ? "all idle" : "none running";
+      const subCol = blocked > 0 ? C.warn : busy > 0 ? C.ok : C.dim;
+      return setImage(context, bigCountKey("CLAUDE CODE", n, sub, subCol, busy > 0 ? animPhase : null));
     }
     case "today": {
       const t = state.today;
@@ -634,6 +666,10 @@ function render(context, kind) {
       if (cycling && resolved.count > 1) {
         const parent = entry.cwd ? path.basename(path.dirname(entry.cwd)) : "";
         detail = `${cy.idx + 1}/${resolved.count}${parent ? " · " + parent : ""}`;
+      } else if (entry.waitingFor) {
+        detail = entry.waitingFor; // why it's blocked: "permission prompt", "input needed", …
+      } else if (entry.state === "finished" || entry.state === "idle") {
+        detail = fmtAgo(Date.now() - entry.statusAge);
       }
       return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail));
     }
@@ -951,11 +987,14 @@ function onKeyDown(context, kind) {
       return act(context, platform.openTerminal(s.path));
     }
     case "focus-session": {
-      const n = state.sessions.length;
+      // Cycle within the blocked set when any session needs you, else all sessions.
+      const blocked = blockedSessions(state.sessions);
+      const pool = blocked.length ? blocked : state.sessions;
+      const n = pool.length;
       if (!n) return showAlert(context);
       const i = ((focusIdx.get(context) ?? -1) + 1) % n;
       focusIdx.set(context, i);
-      act(context, platform.focusWindow(state.sessions[i]));
+      act(context, platform.focusWindow(pool[i]));
       return render(context, "focus-session");
     }
     case "quick-prompt": {
@@ -1073,7 +1112,7 @@ if (process.argv.includes("--selftest")) {
   setInterval(() => {
     animPhase = (animPhase + 1) % 3;
     const kinds = [];
-    if (state.sessions.some((s) => s.status && s.status !== "idle")) kinds.push("sessions");
+    if (state.sessions.some((s) => sessionState(s) === "working")) kinds.push("sessions");
     if (state.usage?.fiveHour?.pct >= 90) kinds.push("usage-session");
     if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
     if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");
