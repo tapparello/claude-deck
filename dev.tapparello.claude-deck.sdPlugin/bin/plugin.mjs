@@ -4830,10 +4830,18 @@ var macPlatform = {
       if (!bundle) throw new Error("no host app for pid " + pid);
       const activateApp = () => openMac([bundle]);
       const strat = focusStrategyForBundle(bundle);
+      const fallback = (why) => (e) => {
+        log(`focusWindow: ${why} for pid ${pid} (${bundle}) -> activating app instead:`, String(e?.message ?? e));
+        return activateApp();
+      };
       if (strat === "terminal") {
         return ps(["-o", "tty=", "-p", String(pid)]).then((t) => {
           const tty = t.trim();
-          if (!tty || tty === "??") return activateApp();
+          if (!tty || tty === "??") {
+            log(`focusWindow: no tty for pid ${pid} -> activating app instead`);
+            return activateApp();
+          }
+          log(`focusWindow: terminal strategy, pid ${pid}, tty ${tty}`);
           const esc2 = escapeAppleScript(tty);
           return runOsa([
             "with timeout of 7 seconds",
@@ -4851,8 +4859,8 @@ var macPlatform = {
             "end tell",
             'error "not found"',
             "end timeout"
-          ]).catch(activateApp);
-        }).catch(activateApp);
+          ]).catch(fallback("terminal tty match failed"));
+        }).catch(fallback("tty lookup failed"));
       }
       if (strat === "vscode") {
         const base = path2.basename(s.cwd ?? "");
@@ -4875,7 +4883,7 @@ var macPlatform = {
           "  end tell",
           "end tell",
           "end timeout"
-        ]).catch(activateApp);
+        ]).catch(fallback("vscode window match failed"));
       }
       return activateApp();
     });
