@@ -4752,14 +4752,12 @@ async function ensureHookServerOnce() {
     state.globalSettings = { ...gs, hookSecret: secret, hookPort: port };
     send({ event: "setGlobalSettings", context: state.pluginUUID, payload: state.globalSettings });
     log("approve: generated a new hook secret");
+  } else if (gs.hookSecret !== secret) {
+    state.globalSettings = { ...gs, hookSecret: secret, hookPort: port };
+    send({ event: "setGlobalSettings", context: state.pluginUUID, payload: state.globalSettings });
+    log("approve: re-asserted the hook secret after a foreign global-settings write");
   }
-  if (secret !== state.hookSecret) {
-    state.hookSecret = secret;
-    if (gs.hookSecret !== secret) {
-      state.globalSettings = { ...state.globalSettings, hookSecret: secret, hookPort: port };
-      send({ event: "setGlobalSettings", context: state.pluginUUID, payload: state.globalSettings });
-    }
-  }
+  state.hookSecret = secret;
   if (hookServer && hookServer.boundPort === port) {
     if (state.hookErr) {
       state.hookErr = null;

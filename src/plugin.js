@@ -580,15 +580,18 @@ async function ensureHookServerOnce() {
     state.globalSettings = { ...gs, hookSecret: secret, hookPort: port };
     send({ event: "setGlobalSettings", context: state.pluginUUID, payload: state.globalSettings });
     log("approve: generated a new hook secret");
+  } else if (gs.hookSecret !== secret) {
+    // A foreign write - e.g. the Property Inspector resending its own stale snapshot -
+    // dropped the secret from the persisted store. Put it back, or the next restart sees
+    // no secret anywhere, mints a fresh one, and the URL the user already pasted into
+    // ~/.claude/settings.json silently stops working.
+    // This must NOT be nested under a `secret !== state.hookSecret` guard: in exactly
+    // this case those two ARE equal, which is what made an earlier version dead code.
+    state.globalSettings = { ...gs, hookSecret: secret, hookPort: port };
+    send({ event: "setGlobalSettings", context: state.pluginUUID, payload: state.globalSettings });
+    log("approve: re-asserted the hook secret after a foreign global-settings write");
   }
-  if (secret !== state.hookSecret) {
-    state.hookSecret = secret;
-    // Re-assert it if a foreign write dropped it, so the pasted URL keeps working.
-    if (gs.hookSecret !== secret) {
-      state.globalSettings = { ...state.globalSettings, hookSecret: secret, hookPort: port };
-      send({ event: "setGlobalSettings", context: state.pluginUUID, payload: state.globalSettings });
-    }
-  }
+  state.hookSecret = secret;
   // Compare against what is actually BOUND, and clear a stale error: gating this on
   // !state.hookErr would wedge us into permanent "port busy" once it was ever set.
   if (hookServer && hookServer.boundPort === port) {
