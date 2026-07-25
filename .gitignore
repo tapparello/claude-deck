@@ -5,3 +5,4 @@ usage-cache.json
 product/
 .superpowers/
 docs/superpowers/
+.playwright-mcp/
