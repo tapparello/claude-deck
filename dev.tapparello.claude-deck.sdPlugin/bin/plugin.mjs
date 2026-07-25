@@ -3986,6 +3986,14 @@ var rank = (s, now, activity) => URGENCY[sessionState(s, now, actOf(s, activity)
 function blockedSessions(sessions, now = Date.now(), activity = null) {
   return (sessions ?? []).filter((s) => rank(s, now, activity) <= URGENCY["input-needed"]).sort((a, b) => rank(a, now, activity) - rank(b, now, activity) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || (a.pid ?? 0) - (b.pid ?? 0));
 }
+function fmtShort(ms) {
+  if (ms == null || !isFinite(ms)) return "";
+  const t = Math.max(0, ms);
+  if (t < 6e4) return Math.floor(t / 1e3) + "s";
+  const m = Math.floor(t / 6e4);
+  if (m < 60) return m + "m";
+  return Math.floor(m / 60) + "h " + m % 60 + "m";
+}
 function autoSlot(keys, context) {
   const me = (keys ?? []).find((k) => k.context === context);
   const sorted = (keys ?? []).filter((k) => (k.device ?? null) === (me?.device ?? null)).sort((a, b) => {
@@ -4081,12 +4089,14 @@ var C = {
 };
 var pctColor = (p) => p == null ? C.dim : p >= 85 ? C.bad : p >= 60 ? C.warn : C.ok;
 var esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-function tintFrame(col, strong = false) {
+function tintFrame(col, strong = false, phase = null) {
   if (!col) return "";
-  return `<rect width="144" height="144" rx="18" fill="${col}" opacity="${strong ? 0.22 : 0.1}"/>
-    <rect x="2" y="2" width="140" height="140" rx="17" fill="none" stroke="${col}" stroke-width="2" opacity="${strong ? 0.45 : 0.22}"/>
+  const p = phase == null ? 1 : [0.45, 0.75, 1][phase % 3];
+  const washOp = (strong ? 0.22 : 0.1) * (phase == null ? 1 : 0.6 + 0.4 * p);
+  return `<rect width="144" height="144" rx="18" fill="${col}" opacity="${washOp.toFixed(3)}"/>
+    <rect x="2" y="2" width="140" height="140" rx="17" fill="none" stroke="${col}" stroke-width="2" opacity="${((strong ? 0.45 : 0.22) * p).toFixed(3)}"/>
     <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="${col}" stroke-width="${strong ? 5 : 3}" opacity="${strong ? 1 : 0.8}"/>
-    <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="${col}" stroke-width="1" opacity="0.18"/>`;
+    <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="${col}" stroke-width="1" opacity="${(0.18 * p).toFixed(3)}"/>`;
 }
 function svgWrap(inner) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="144" height="144" viewBox="0 0 144 144"><rect width="144" height="144" rx="18" fill="${C.bg}"/>${inner}</svg>`;
@@ -4175,14 +4185,14 @@ var STATUS_LOOK = {
   // we couldn't stat. Saying "no status" beats inventing "Idle".
   unknown: { label: "no status", col: C.dim }
 };
-function statusKey(name, st, count, detail = "", tag = "") {
+function statusKey(name, st, count, detail = "", tag = "", phase = null) {
   const look = STATUS_LOOK[st] ?? STATUS_LOOK.none;
   const { label, col } = look;
   const strong = !!look.strong;
   const shown = name || "CLAUDE";
   const corner = count > 1 ? `<circle cx="120" cy="26" r="13" fill="${C.panel}" stroke="${col}" stroke-width="1.5"/><text x="120" y="31" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${count}</text>` : tag ? `<text x="132" y="30" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="600" fill="${C.dim}">${esc(tag)}</text>` : "";
   return svgWrap(`
-    ${tintFrame(col, strong)}
+    ${tintFrame(col, strong, phase)}
     ${corner}
     <text x="72" y="72" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${String(shown).length > 9 ? 22 : 26}" font-weight="700" fill="${st === "none" ? C.dim : C.text}">${esc(String(shown).slice(0, 11))}</text>
     <text x="72" y="100" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${label.length > 11 ? 15 : 18}" font-weight="700" fill="${col}">${esc(label)}</text>
@@ -4678,13 +4688,15 @@ function render(context, kind) {
         const parent = entry.cwd ? path2.basename(path2.dirname(entry.cwd)) : "";
         detail = `${cy.idx + 1}/${resolved.count}${parent ? " \xB7 " + parent : ""}`;
       } else if (entry.waitingFor) {
-        detail = entry.waitingFor;
+        const waited = fmtShort(entry.statusAge);
+        detail = entry.waitingFor + (waited ? " \xB7 " + waited : "");
       } else if (entry.state === "finished") {
         detail = "just now";
       } else if (entry.state === "idle" && entry.statusAge != null) {
         detail = fmtAgo(Date.now() - entry.statusAge) + " idle";
       }
-      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where));
+      const blockedNow = entry.state === "needs-approval" || entry.state === "input-needed";
+      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where, blockedNow ? animPhase : null));
     }
     case "approver-waiting": {
       const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
@@ -4696,7 +4708,9 @@ function render(context, kind) {
       const i = cy && cy.idx >= 0 ? cy.idx % blocked.length : 0;
       const b = blocked[i];
       const st = sessionState(b, Date.now(), state.activity.get(b.sessionId) ?? null);
-      return setImage(context, statusKey(path2.basename(b.cwd ?? "") || "claude", st, blocked.length, String(b.waitingFor ?? "needs you"), sessionWhere(b)));
+      const waited = b.statusUpdatedAt ? fmtShort(Date.now() - b.statusUpdatedAt) : "";
+      const why = String(b.waitingFor ?? "needs you") + (waited ? " \xB7 " + waited : "");
+      return setImage(context, statusKey(path2.basename(b.cwd ?? "") || "claude", st, blocked.length, why, sessionWhere(b), animPhase));
     }
   }
 }
@@ -5177,6 +5191,7 @@ if (process.argv.includes("--selftest")) {
     if (state.usage?.fiveHour?.pct >= 90) kinds.push("usage-session");
     if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
     if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");
+    if (blockedSessions(state.sessions, Date.now(), state.activity).length) kinds.push("approver-status", "approver-waiting");
     if (kinds.length && [...views.values()].some((v) => kinds.includes(v.kind))) renderAll(kinds);
     const expired = [state.usage?.fiveHour, state.usage?.weekly].some((b) => b?.resetsAt && Date.now() - new Date(b.resetsAt).getTime() > 5e3);
     if (expired && !state.usageErr && Date.now() - lastUsageAttempt > 3e4) pollUsage();

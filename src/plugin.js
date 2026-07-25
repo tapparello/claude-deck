@@ -10,7 +10,7 @@ import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript } from "./osa.js";
 import { windowStartMs, parseRequests, mergeById, aggregate } from "./usage.js";
-import { resolveStatusKey, statusEntry, autoSlot, sessionWhere, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
+import { resolveStatusKey, statusEntry, autoSlot, sessionWhere, fmtShort, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
 
 const IS_MAC = process.platform === "darwin";
 
@@ -65,12 +65,16 @@ const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").
 // glow — the look from the reference mockup. Concentric strokes rather than an
 // SVG blur filter: the Stream Deck renderer can't be relied on to support
 // feGaussianBlur. `strong` is for the two "blocked on you" states.
-function tintFrame(col, strong = false) {
+function tintFrame(col, strong = false, phase = null) {
   if (!col) return "";
-  return `<rect width="144" height="144" rx="18" fill="${col}" opacity="${strong ? 0.22 : 0.1}"/>
-    <rect x="2" y="2" width="140" height="140" rx="17" fill="none" stroke="${col}" stroke-width="2" opacity="${strong ? 0.45 : 0.22}"/>
+  // phase != null → breathe: the wash and the outer halo rings vary across the
+  // ticker's 3 frames while the main border holds, so it pulses without flicker.
+  const p = phase == null ? 1 : [0.45, 0.75, 1][phase % 3];
+  const washOp = (strong ? 0.22 : 0.1) * (phase == null ? 1 : 0.6 + 0.4 * p);
+  return `<rect width="144" height="144" rx="18" fill="${col}" opacity="${washOp.toFixed(3)}"/>
+    <rect x="2" y="2" width="140" height="140" rx="17" fill="none" stroke="${col}" stroke-width="2" opacity="${((strong ? 0.45 : 0.22) * p).toFixed(3)}"/>
     <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="${col}" stroke-width="${strong ? 5 : 3}" opacity="${strong ? 1 : 0.8}"/>
-    <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="${col}" stroke-width="1" opacity="0.18"/>`;
+    <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="${col}" stroke-width="1" opacity="${(0.18 * p).toFixed(3)}"/>`;
 }
 
 function svgWrap(inner) {
@@ -178,7 +182,7 @@ const STATUS_LOOK = {
   // we couldn't stat. Saying "no status" beats inventing "Idle".
   unknown: { label: "no status", col: C.dim },
 };
-function statusKey(name, st, count, detail = "", tag = "") {
+function statusKey(name, st, count, detail = "", tag = "", phase = null) {
   const look = STATUS_LOOK[st] ?? STATUS_LOOK.none;
   const { label, col } = look;
   const strong = !!look.strong;
@@ -191,7 +195,7 @@ function statusKey(name, st, count, detail = "", tag = "") {
     ? `<text x="132" y="30" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="600" fill="${C.dim}">${esc(tag)}</text>`
     : "";
   return svgWrap(`
-    ${tintFrame(col, strong)}
+    ${tintFrame(col, strong, phase)}
     ${corner}
     <text x="72" y="72" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${String(shown).length > 9 ? 22 : 26}" font-weight="700" fill="${st === "none" ? C.dim : C.text}">${esc(String(shown).slice(0, 11))}</text>
     <text x="72" y="100" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${label.length > 11 ? 15 : 18}" font-weight="700" fill="${col}">${esc(label)}</text>
@@ -695,13 +699,16 @@ function render(context, kind) {
         const parent = entry.cwd ? path.basename(path.dirname(entry.cwd)) : "";
         detail = `${cy.idx + 1}/${resolved.count}${parent ? " · " + parent : ""}`;
       } else if (entry.waitingFor) {
-        detail = entry.waitingFor; // why it's blocked: "permission prompt", "input needed", …
+        // why it's blocked, plus how long — "just asked" vs "stuck since coffee"
+        const waited = fmtShort(entry.statusAge);
+        detail = entry.waitingFor + (waited ? " · " + waited : "");
       } else if (entry.state === "finished") {
         detail = "just now"; // fmtAgo floors to minutes, so it would always read "0m"
       } else if (entry.state === "idle" && entry.statusAge != null) {
         detail = fmtAgo(Date.now() - entry.statusAge) + " idle";
       }
-      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where));
+      const blockedNow = entry.state === "needs-approval" || entry.state === "input-needed";
+      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where, blockedNow ? animPhase : null));
     }
     case "approver-waiting": {
       // Dark and quiet until a session is actually blocked on you.
@@ -714,7 +721,9 @@ function render(context, kind) {
       const i = cy && cy.idx >= 0 ? cy.idx % blocked.length : 0;
       const b = blocked[i];
       const st = sessionState(b, Date.now(), state.activity.get(b.sessionId) ?? null);
-      return setImage(context, statusKey(path.basename(b.cwd ?? "") || "claude", st, blocked.length, String(b.waitingFor ?? "needs you"), sessionWhere(b)));
+      const waited = b.statusUpdatedAt ? fmtShort(Date.now() - b.statusUpdatedAt) : "";
+      const why = String(b.waitingFor ?? "needs you") + (waited ? " · " + waited : "");
+      return setImage(context, statusKey(path.basename(b.cwd ?? "") || "claude", st, blocked.length, why, sessionWhere(b), animPhase));
     }
   }
 }
@@ -1207,6 +1216,9 @@ if (process.argv.includes("--selftest")) {
     if (state.usage?.fiveHour?.pct >= 90) kinds.push("usage-session");
     if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
     if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");
+    // A session blocked on you makes its keys breathe — far easier to catch than
+    // a static colour. Gated on there actually being one, so a calm deck is idle.
+    if (blockedSessions(state.sessions, Date.now(), state.activity).length) kinds.push("approver-status", "approver-waiting");
     if (kinds.length && [...views.values()].some((v) => kinds.includes(v.kind))) renderAll(kinds);
     // Safety net: a reset time has passed but we still show pre-reset data (missed timer / resume from sleep)
     const expired = [state.usage?.fiveHour, state.usage?.weekly]

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveStatusKey, statusEntry, sessionProject, autoSlot, sessionWhere, sessionState, blockedSessions, sessionSig, FINISHED_MS, transcriptPathFor } from "../src/status.js";
+import { resolveStatusKey, statusEntry, sessionProject, autoSlot, sessionWhere, fmtShort, sessionState, blockedSessions, sessionSig, FINISHED_MS, transcriptPathFor } from "../src/status.js";
 
 const S = (over) => ({ sessionId: "x", cwd: "/Users/me/web-app", status: "idle", updatedAt: 1, pid: 100, ...over });
 
@@ -275,4 +275,18 @@ test("sessionWhere tags the host so same-project sessions are distinguishable", 
   ];
   const r = resolveStatusKey(two, "claude-deck", 0, NOW);
   assert.deepEqual(r.list.map((e) => e.where), ["cli", "code"]);
+});
+
+// Compact wait duration for a blocked key's sub-line ("permission prompt · 3m").
+test("fmtShort: seconds under a minute, minutes under an hour, then h m", () => {
+  assert.equal(fmtShort(0), "0s");
+  assert.equal(fmtShort(18_000), "18s");
+  assert.equal(fmtShort(59_999), "59s");
+  assert.equal(fmtShort(60_000), "1m");
+  assert.equal(fmtShort(3 * 60_000 + 20_000), "3m");
+  assert.equal(fmtShort(59 * 60_000), "59m");
+  assert.equal(fmtShort(60 * 60_000), "1h 0m");
+  assert.equal(fmtShort(80 * 60_000), "1h 20m");
+  assert.equal(fmtShort(null), "");
+  assert.equal(fmtShort(-5), "0s"); // clock skew must not print "-1s"
 });

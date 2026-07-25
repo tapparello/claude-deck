@@ -91,6 +91,17 @@ export function blockedSessions(sessions, now = Date.now(), activity = null) {
     .sort((a, b) => rank(a, now, activity) - rank(b, now, activity) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || (a.pid ?? 0) - (b.pid ?? 0));
 }
 
+// Compact duration for a key's sub-line: "18s" / "3m" / "1h 20m". Null/absent
+// input yields "" so callers can omit the segment rather than print a bogus age.
+export function fmtShort(ms) {
+  if (ms == null || !isFinite(ms)) return "";
+  const t = Math.max(0, ms);
+  if (t < 60_000) return Math.floor(t / 1000) + "s";
+  const m = Math.floor(t / 60_000);
+  if (m < 60) return m + "m";
+  return Math.floor(m / 60) + "h " + (m % 60) + "m";
+}
+
 // Which slot an auto (unbound) Status key occupies, so several such keys show
 // DIFFERENT sessions: slot 0 gets the most urgent, slot 1 the next, and so on.
 //
