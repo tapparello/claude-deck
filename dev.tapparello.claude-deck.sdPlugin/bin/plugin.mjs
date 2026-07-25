@@ -4090,6 +4090,13 @@ try {
 } catch {
   WATERMARK = sparkAt(72, 76, C.accent, 0.08, 2.4);
 }
+function tintFrame(col, strong = false) {
+  if (!col) return "";
+  return `<rect width="144" height="144" rx="18" fill="${col}" opacity="${strong ? 0.22 : 0.1}"/>
+    <rect x="2" y="2" width="140" height="140" rx="17" fill="none" stroke="${col}" stroke-width="2" opacity="${strong ? 0.45 : 0.22}"/>
+    <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="${col}" stroke-width="${strong ? 5 : 3}" opacity="${strong ? 1 : 0.8}"/>
+    <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="${col}" stroke-width="1" opacity="0.18"/>`;
+}
 function svgWrap(inner) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="144" height="144" viewBox="0 0 144 144"><rect width="144" height="144" rx="18" fill="${C.bg}"/>${WATERMARK}${inner}</svg>`;
   return "data:image/svg+xml," + encodeURIComponent(svg);
@@ -4118,9 +4125,10 @@ function linesKey(title, rows, accent = C.accent) {
     <text x="14" y="24" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${accent}">${esc(title)}</text>
     ${rowSvg}`);
 }
-function bigCountKey(title, count, sub, subColor, animPhase2 = null) {
-  const dots = animPhase2 == null ? "" : [0, 1, 2].map((i) => `<circle cx="122" cy="${56 + i * 16}" r="${i === animPhase2 ? 4.5 : 3}" fill="${i === animPhase2 ? C.ok : C.track}"/>`).join("");
+function bigCountKey(title, count, sub, subColor, animPhase2 = null, tint = null, strong = false) {
+  const dots = animPhase2 == null ? "" : [0, 1, 2].map((i) => `<circle cx="122" cy="${56 + i * 16}" r="${i === animPhase2 ? 4.5 : 3}" fill="${i === animPhase2 ? tint ?? C.info : C.track}"/>`).join("");
   return svgWrap(`
+    ${tintFrame(tint, strong)}
     <text x="14" y="27" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(title)}</text>
     ${dots}
     <text x="72" y="96" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="64" font-weight="700" fill="${count > 0 ? C.text : C.dim}">${count}</text>
@@ -4142,7 +4150,7 @@ function usageMeterKey(header, big, sub, isCost) {
     ${isCost && !dim ? `<text x="130" y="58" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" fill="${C.dim}">est</text>` : ""}
     <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub)}</text>`);
 }
-function labelKey(title, label, sub, accent = C.accent) {
+function labelKey(title, label, sub, accent = C.accent, tint = null, strong = false) {
   const text = String(label ?? "").trim() || "\u2014";
   const words = text.split(/\s+/);
   const lines = [];
@@ -4158,38 +4166,36 @@ function labelKey(title, label, sub, accent = C.accent) {
   if (cur && lines.length < 2) lines.push(cur);
   const lineSvg = lines.slice(0, 2).map((l, i) => `<text x="72" y="${lines.length > 1 ? 68 + i * 27 : 82}" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="22" font-weight="700" fill="${C.text}">${esc(l.slice(0, 12))}</text>`).join("");
   return svgWrap(`
+    ${tintFrame(tint, strong)}
     <text x="14" y="27" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${accent}">${esc(title)}</text>
     ${lineSvg}
     <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub ?? "")}</text>`);
 }
 var STATUS_LOOK = {
-  "needs-approval": { label: "Needs approval", col: C.warn, band: true },
-  "input-needed": { label: "Input needed", col: C.ask, band: true },
-  working: { label: "Working", col: C.info, band: false },
-  finished: { label: "Finished", col: C.ok, band: false },
-  idle: { label: "Idle", col: C.dim, band: false },
-  none: { label: "no session", col: C.dim, band: false },
-  quiet: { label: "all clear", col: C.dim, band: false },
+  "needs-approval": { label: "Needs approval", col: C.warn, strong: true },
+  "input-needed": { label: "Input needed", col: C.ask, strong: true },
+  working: { label: "Working", col: C.info },
+  finished: { label: "Finished", col: C.ok },
+  idle: { label: "Idle", col: C.dim },
+  none: { label: "no session", col: C.dim },
+  quiet: { label: "all clear", col: C.dim },
   // Waiting key, nothing pending
   // A session that reports no status (VS Code extension) and whose transcript
   // we couldn't stat. Saying "no status" beats inventing "Idle".
-  unknown: { label: "no status", col: C.dim, band: false }
+  unknown: { label: "no status", col: C.dim }
 };
 function statusKey(name, st, count, detail = "", tag = "") {
   const look = STATUS_LOOK[st] ?? STATUS_LOOK.none;
-  const { label, col, band } = look;
+  const { label, col } = look;
+  const strong = !!look.strong;
   const shown = name || "CLAUDE";
-  const border = band ? `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${col}" stroke-width="6"/>` : st === "working" ? `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.info}" stroke-width="4" opacity="0.9"/>` : `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.track}" stroke-width="3"/>`;
-  const bandSvg = band ? `<rect x="6" y="84" width="132" height="26" rx="7" fill="${col}"/>` : "";
-  const badge = count > 1 ? `<circle cx="120" cy="24" r="13" fill="${C.panel}" stroke="${C.track}" stroke-width="1"/><text x="120" y="29" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${count}</text>` : tag ? `<text x="134" y="29" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="600" fill="${C.dim}">${esc(tag)}</text>` : "";
-  const detailSvg = detail ? `<text x="72" y="126" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" fill="${C.dim}">${esc(detail)}</text>` : "";
+  const corner = count > 1 ? `<circle cx="120" cy="26" r="13" fill="${C.panel}" stroke="${col}" stroke-width="1.5"/><text x="120" y="31" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${count}</text>` : tag ? `<text x="132" y="30" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="600" fill="${C.dim}">${esc(tag)}</text>` : "";
   return svgWrap(`
-    ${border}
-    ${badge}
-    ${bandSvg}
-    <text x="72" y="70" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="26" font-weight="700" fill="${st === "none" ? C.dim : C.text}">${esc(String(shown).slice(0, 11))}</text>
-    <text x="72" y="${band ? 103 : 100}" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${label.length > 11 ? 15 : label.length > 9 ? 16 : 18}" font-weight="700" fill="${band ? C.bg : col}">${esc(label)}</text>
-    ${detailSvg}`);
+    ${tintFrame(col, strong)}
+    ${corner}
+    <text x="72" y="72" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${String(shown).length > 9 ? 22 : 26}" font-weight="700" fill="${st === "none" ? C.dim : C.text}">${esc(String(shown).slice(0, 11))}</text>
+    <text x="72" y="100" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${label.length > 11 ? 15 : 18}" font-weight="700" fill="${col}">${esc(label)}</text>
+    ${detail ? `<text x="72" y="124" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" fill="${C.dim}">${esc(detail)}</text>` : ""}`);
 }
 function fmtReset(iso) {
   if (!iso) return "";
@@ -4615,9 +4621,11 @@ function render(context, kind) {
       const s = pool.length ? fi && fi.sig === poolSig ? pool[fi.i % pool.length] : pool[0] : null;
       if (blocked.length) {
         const b = s ?? blocked[0];
-        return setImage(context, labelKey("FOCUS", b.name ?? "session", String(b.waitingFor ?? "needs you"), C.warn));
+        return setImage(context, labelKey("FOCUS", b.name ?? "session", String(b.waitingFor ?? "needs you"), C.warn, C.warn, true));
       }
-      return setImage(context, labelKey("FOCUS", s ? s.name : `${state.sessions.length} sessions`, s ? s.status : "press to cycle", C.ok));
+      const anyWorking = state.sessions.some((x) => sessionState(x, Date.now(), state.activity.get(x.sessionId) ?? null) === "working");
+      const facc = anyWorking ? C.info : C.dim;
+      return setImage(context, labelKey("FOCUS", s ? s.name : `${state.sessions.length} sessions`, s ? sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) : "press to cycle", facc, anyWorking ? C.info : null));
     }
     case "quick-prompt": {
       const s = views.get(context)?.settings ?? {};
@@ -4634,7 +4642,7 @@ function render(context, kind) {
         const s = state.sessions[cy.idx];
         const st = sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null);
         const stLabel = { "needs-approval": "needs you", "input-needed": "input needed", working: "working", finished: "done", idle: "idle" }[st] ?? st;
-        const stColor = st === "needs-approval" ? C.warn : st === "input-needed" ? C.ask : st === "working" ? C.ok : C.dim;
+        const stColor = st === "needs-approval" ? C.warn : st === "input-needed" ? C.ask : st === "working" ? C.info : C.dim;
         return setImage(context, linesKey(`${cy.idx + 1}/${n}`, [
           { text: (s.name ?? "session").slice(0, 11), big: false, color: C.text },
           { text: stLabel, color: stColor },
@@ -4644,8 +4652,8 @@ function render(context, kind) {
       const blocked = blockedSessions(state.sessions, Date.now(), state.activity).length;
       const busy = state.sessions.filter((s) => sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) === "working").length;
       const sub = blocked > 0 ? `${blocked} needs you` : busy > 0 ? `${busy} working` : n > 0 ? "all idle" : "none running";
-      const subCol = blocked > 0 ? C.warn : busy > 0 ? C.ok : C.dim;
-      return setImage(context, bigCountKey("CLAUDE CODE", n, sub, subCol, busy > 0 ? animPhase : null));
+      const subCol = blocked > 0 ? C.warn : busy > 0 ? C.info : C.dim;
+      return setImage(context, bigCountKey("CLAUDE CODE", n, sub, subCol, busy > 0 ? animPhase : null, blocked > 0 ? C.warn : busy > 0 ? C.info : null, blocked > 0));
     }
     case "today": {
       const t = state.today;
