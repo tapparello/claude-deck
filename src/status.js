@@ -10,25 +10,39 @@ import path from "node:path";
 //   statusUpdatedAt — stamped on every status transition
 // "waiting" means Claude is blocked on the human — treating it as "working"
 // (which this file used to do) reports the opposite of the truth.
-const APPROVAL_WAITS = new Set(["permission prompt", "sandbox request", "worker request"]);
+// Only these read as "Claude is asking you a question"; everything else that is
+// waiting (including a missing or unrecognized waitingFor) reads as an approval
+// request — matching Claude Code's own fallback, which defaults an unmapped
+// dialog kind to "permission prompt". One policy for both kinds of ignorance.
+const QUESTION_WAITS = new Set(["input needed", "dialog open"]);
 export const FINISHED_MS = 60_000;
 
 // Derived display state for one session. `now` is injected for testability.
 export function sessionState(s, now = Date.now()) {
   const st = s?.status;
   if (st === "waiting") {
-    const w = String(s.waitingFor ?? "permission prompt").toLowerCase();
-    // Unknown/new waitingFor values read as "needs your input", not "approve me":
-    // claiming an approval is pending when it isn't would be the worse error.
-    return APPROVAL_WAITS.has(w) ? "needs-approval" : "input-needed";
+    const w = String(s.waitingFor ?? "").toLowerCase();
+    return QUESTION_WAITS.has(w) ? "input-needed" : "needs-approval";
   }
   if (st === "busy" || st === "shell") return "working";
   if (st === "idle") {
-    const at = s.statusUpdatedAt ?? s.updatedAt ?? 0;
+    // Deliberately NO fallback to updatedAt: on a Claude Code build that bumps
+    // updatedAt as a heartbeat, that would pin an hours-idle session at green
+    // "Finished" forever. Missing statusUpdatedAt → plain idle.
+    const at = s.statusUpdatedAt;
+    if (!at) return "idle";
     // Math.max guards a future timestamp (clock skew) from reading as stale.
     return Math.max(0, now - at) < FINISHED_MS ? "finished" : "idle";
   }
   return "idle"; // unknown or missing status
+}
+
+// Signature of the session list *including* derived state, for change detection.
+// The caller must compare this against the signature it cached on the PREVIOUS
+// tick — recomputing both sides with the same `now` makes time-only transitions
+// (finished → idle at 60s) cancel out and never repaint.
+export function sessionSig(sessions, now = Date.now()) {
+  return JSON.stringify((sessions ?? []).map((s) => [s.pid, s.status, s.waitingFor ?? "", sessionState(s, now)]));
 }
 
 // Lower rank = more urgent = shown first on an auto-bound key.

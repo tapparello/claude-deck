@@ -10,7 +10,7 @@ import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle } from "./osa.js";
 import { windowStartMs, parseRequests, mergeById, aggregate } from "./usage.js";
-import { resolveStatusKey, statusEntry, autoOrdinal, sessionState, blockedSessions } from "./status.js";
+import { resolveStatusKey, statusEntry, autoOrdinal, sessionState, blockedSessions, sessionSig } from "./status.js";
 
 const IS_MAC = process.platform === "darwin";
 
@@ -182,7 +182,8 @@ function statusKey(name, st, count, detail = "") {
     : st === "working"
     ? `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.info}" stroke-width="4" opacity="0.9"/>`
     : `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.track}" stroke-width="3"/>`;
-  const bandSvg = band ? `<rect x="10" y="84" width="124" height="26" rx="7" fill="${col}"/>` : "";
+  // Wide enough for the longest label ("Needs approval", 14ch at 15px ≈ 122px).
+  const bandSvg = band ? `<rect x="6" y="84" width="132" height="26" rx="7" fill="${col}"/>` : "";
   const badge = count > 1
     ? `<circle cx="120" cy="24" r="13" fill="${C.panel}" stroke="${C.track}" stroke-width="1"/><text x="120" y="29" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${count}</text>`
     : "";
@@ -194,7 +195,7 @@ function statusKey(name, st, count, detail = "") {
     ${badge}
     ${bandSvg}
     <text x="72" y="70" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="26" font-weight="700" fill="${st === "none" ? C.dim : C.text}">${esc(String(shown).slice(0, 11))}</text>
-    <text x="72" y="${band ? 103 : 100}" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${label.length > 9 ? 16 : 18}" font-weight="700" fill="${band ? C.bg : col}">${esc(label)}</text>
+    <text x="72" y="${band ? 103 : 100}" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${label.length > 11 ? 15 : label.length > 9 ? 16 : 18}" font-weight="700" fill="${band ? C.bg : col}">${esc(label)}</text>
     ${detailSvg}`);
 }
 
@@ -344,10 +345,12 @@ async function pollSessions() {
       } catch {}
     }
     out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-    // Include the derived state so time-relative transitions (Finished → Idle at
-    // 60s) repaint on the next tick; [pid,status] alone never changes for those.
-    const sig = (list) => JSON.stringify(list.map((s) => [s.pid, s.status, s.waitingFor ?? "", sessionState(s)]));
-    const changed = sig(out) !== sig(state.sessions);
+    // Compare against the signature cached on the PREVIOUS tick. Recomputing
+    // both sides with the same `now` would cancel the derived state out, so a
+    // time-only transition (finished → idle at 60s) would never repaint.
+    const nextSig = sessionSig(out);
+    const changed = nextSig !== lastSessionSig;
+    lastSessionSig = nextSig;
     state.sessions = out;
     if (changed) renderAll(["sessions", "focus-session", "approver-status"]);
   } catch (e) {
@@ -549,10 +552,11 @@ function argOf(name) {
 
 const views = new Map(); // context -> { kind, settings }
 const cycle = new Map(); // context -> { idx, timer }
-const focusIdx = new Map(); // context -> session index
+const focusIdx = new Map(); // context -> { i, sig } (sig = the pool it indexes)
 const usageView = new Map(); // context -> "cost" | "tokens" (Usage key toggle)
 let ws = null;
 let animPhase = 0;
+let lastSessionSig = ""; // previous tick's session signature (see pollSessions)
 
 function send(obj) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
@@ -600,8 +604,11 @@ function render(context, kind) {
       // needs you, and the key advertises that with the reason + a warm accent.
       const blocked = blockedSessions(state.sessions);
       const pool = blocked.length ? blocked : state.sessions;
-      const i = focusIdx.get(context);
-      const s = i != null && pool.length ? pool[i % pool.length] : null;
+      const fi = focusIdx.get(context);
+      const poolSig = pool.map((x) => x.pid).join(",");
+      // Only trust the remembered index while the pool is unchanged; otherwise
+      // show the top of the pool rather than a session the user never focused.
+      const s = pool.length ? (fi && fi.sig === poolSig ? pool[fi.i % pool.length] : pool[0]) : null;
       if (blocked.length) {
         const b = s ?? blocked[0];
         return setImage(context, labelKey("FOCUS", b.name ?? "session", String(b.waitingFor ?? "needs you"), C.warn));
@@ -621,10 +628,14 @@ function render(context, kind) {
       const n = state.sessions.length;
       if (cy && cy.idx >= 0 && state.sessions[cy.idx]) {
         const s = state.sessions[cy.idx];
-        const status = s.status ?? "?";
+        // Use the derived state, not the raw status: "waiting" is blocked-on-you,
+        // and rendering it in success-green was the very bug phase 2 fixes.
+        const st = sessionState(s);
+        const stLabel = { "needs-approval": "needs you", "input-needed": "input needed", working: "working", finished: "done", idle: "idle" }[st] ?? st;
+        const stColor = st === "needs-approval" ? C.warn : st === "input-needed" ? C.ask : st === "working" ? C.ok : C.dim;
         return setImage(context, linesKey(`${cy.idx + 1}/${n}`, [
           { text: (s.name ?? "session").slice(0, 11), big: false, color: C.text },
-          { text: status, color: status === "idle" ? C.dim : C.ok },
+          { text: stLabel, color: stColor },
           { text: fmtAgo(s.startedAt ?? Date.now()) + " old", color: C.dim },
         ]));
       }
@@ -668,8 +679,10 @@ function render(context, kind) {
         detail = `${cy.idx + 1}/${resolved.count}${parent ? " · " + parent : ""}`;
       } else if (entry.waitingFor) {
         detail = entry.waitingFor; // why it's blocked: "permission prompt", "input needed", …
-      } else if (entry.state === "finished" || entry.state === "idle") {
-        detail = fmtAgo(Date.now() - entry.statusAge);
+      } else if (entry.state === "finished") {
+        detail = "just now"; // fmtAgo floors to minutes, so it would always read "0m"
+      } else if (entry.state === "idle") {
+        detail = fmtAgo(Date.now() - entry.statusAge) + " idle";
       }
       return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail));
     }
@@ -992,8 +1005,13 @@ function onKeyDown(context, kind) {
       const pool = blocked.length ? blocked : state.sessions;
       const n = pool.length;
       if (!n) return showAlert(context);
-      const i = ((focusIdx.get(context) ?? -1) + 1) % n;
-      focusIdx.set(context, i);
+      // Reset to the top when the pool changed (a session blocked/unblocked or
+      // went away), so the first press always lands on the most urgent rather
+      // than wherever a stale index happened to point.
+      const poolSig = pool.map((s) => s.pid).join(",");
+      const prev = focusIdx.get(context);
+      const i = prev?.sig === poolSig ? (prev.i + 1) % n : 0;
+      focusIdx.set(context, { i, sig: poolSig });
       act(context, platform.focusWindow(pool[i]));
       return render(context, "focus-session");
     }
@@ -1125,5 +1143,5 @@ if (process.argv.includes("--selftest")) {
     if (expired && !state.usageErr && Date.now() - lastUsageAttempt > 30_000) pollUsage();
   }, 600);
   // Keep countdowns ("1h 5m left") fresh between polls
-  setInterval(() => renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate"]), 30_000);
+  setInterval(() => renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate", "approver-status", "focus-session"]), 30_000);
 }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveStatusKey, statusEntry, sessionProject, autoOrdinal, sessionState, blockedSessions, FINISHED_MS } from "../src/status.js";
+import { resolveStatusKey, statusEntry, sessionProject, autoOrdinal, sessionState, blockedSessions, sessionSig, FINISHED_MS } from "../src/status.js";
 
 const S = (over) => ({ sessionId: "x", cwd: "/Users/me/web-app", status: "idle", updatedAt: 1, pid: 100, ...over });
 
@@ -22,8 +22,11 @@ test("waiting + question-ish waitingFor => input-needed", () => {
   for (const w of ["input needed", "dialog open"]) {
     assert.equal(sessionState({ status: "waiting", waitingFor: w }, NOW), "input-needed", w);
   }
-  // an unknown future waitingFor is treated as input-needed, not approval
-  assert.equal(sessionState({ status: "waiting", waitingFor: "something new" }, NOW), "input-needed");
+});
+
+test("unknown or missing waitingFor => needs-approval (one policy for both)", () => {
+  assert.equal(sessionState({ status: "waiting", waitingFor: "something new" }, NOW), "needs-approval");
+  assert.equal(sessionState({ status: "waiting" }, NOW), "needs-approval");
 });
 
 test("busy and shell are both working", () => {
@@ -38,10 +41,28 @@ test("idle splits into finished/idle at the FINISHED_MS boundary", () => {
   assert.equal(sessionState({ status: "idle", statusUpdatedAt: NOW - 600_000 }, NOW), "idle");
 });
 
-test("idle falls back to updatedAt when statusUpdatedAt is absent (older Claude Code)", () => {
-  assert.equal(sessionState({ status: "idle", updatedAt: NOW - 1000 }, NOW), "finished");
-  assert.equal(sessionState({ status: "idle", updatedAt: NOW - 600_000 }, NOW), "idle");
-  assert.equal(sessionState({ status: "idle" }, NOW), "idle"); // no timestamps at all
+test("missing statusUpdatedAt is plain idle, never a sticky green 'Finished'", () => {
+  // No fallback to updatedAt on purpose: a build that bumps updatedAt as a
+  // heartbeat would otherwise pin an hours-idle session at green forever.
+  assert.equal(sessionState({ status: "idle", updatedAt: NOW - 1000 }, NOW), "idle");
+  assert.equal(sessionState({ status: "idle" }, NOW), "idle");
+});
+
+test("sessionSig changes across the finished→idle boundary for identical records", () => {
+  // The bug this pins: comparing sig(list, now) against sig(list, now) cancels
+  // the derived state out, so the 60s transition never repaints. A cached
+  // previous-tick signature must differ from the current one.
+  const rec = { pid: 42, status: "idle", statusUpdatedAt: NOW - 59_000 };
+  const before = sessionSig([rec], NOW); // still "finished"
+  const after = sessionSig([rec], NOW + 2000); // now "idle"
+  assert.notEqual(before, after);
+  assert.match(before, /finished/);
+  assert.match(after, /idle/);
+});
+
+test("sessionSig is stable when nothing changed", () => {
+  const rec = { pid: 42, status: "busy", updatedAt: NOW };
+  assert.equal(sessionSig([rec], NOW), sessionSig([rec], NOW + 1000));
 });
 
 test("clock skew (future timestamp) does not produce a bogus state", () => {
