@@ -13,7 +13,7 @@ The usage gauges show the **same session/weekly percentages Claude Desktop and C
 | **Session 5h** | Live 5-hour limit % ring + reset countdown. Press to refresh. |
 | **Weekly** | Weekly limit % ring + per-model weekly % underneath. |
 | **Today** | Today's Claude Code activity: chats, messages, tokens. |
-| **Sessions** | Count of running Claude Code sessions and how many are busy (5s refresh). Press to cycle per-session details. |
+| **Sessions** | Count of running Claude Code sessions and how many are busy — or **"N needs you"** when a session is blocked on a prompt (5s refresh). Press to cycle per-session details. |
 | **Launch Claude Desktop** | Opens the Claude Desktop app (Microsoft Store install auto-detected). |
 | **Quick Chat** | Fires Claude's global quick-chat hotkey (Ctrl+Alt+Space). |
 | **Open claude.ai** | New chat in your browser. |
@@ -22,10 +22,10 @@ The usage gauges show the **same session/weekly percentages Claude Desktop and C
 | **Burn Rate** | Tokens/hour over the last hour + estimated time until the 5h session cap ("cap in ~1h 20m" / "steady"). |
 | **Usage** | Local Claude Code token volume + estimated cost over a window (Today / Month-to-date / 7-day, set per key). Press to toggle cost ↔ tokens. Cost is an estimate (`est`). Especially useful on enterprise/Foundry accounts where the % gauges read n/a. For accurate cost, enter your exact per-model input/output $/M-token rates in the key's settings (shared across all Usage keys; blank = standard-rate default). |
 | **Project Terminal** | Configurable: opens Claude Code in a specific project folder (label + path in key settings). |
-| **Focus Session** | Press to cycle running sessions and bring each one's terminal window to the front. |
+| **Focus Session** | Press to cycle running sessions and bring each one's window to the front. When a session is waiting on you it takes priority, so the first press lands on the one that needs an answer. |
 | **Quick Prompt** | Configurable: opens quick chat and pastes a canned prompt (optionally presses Enter). Overwrites the clipboard. |
 | **Claude Custom** | A Claude-styled spare key that opens anything you set: app, URL, or folder. |
-| **Claude Status** | Live status of one Claude Code session: project name + **Working**/**Idle**. Bind it to a project folder name in the key's settings, or leave blank to auto-track the most active session. Shows a count badge when several sessions share a project name; press to cycle them (each shows its parent folder + index). |
+| **Claude Status** | Live state of one Claude Code session: **Needs approval** (blocked on a permission prompt) · **Input needed** · **Working** · **Finished** · **Idle**, with the reason or age underneath. A session that's waiting on you takes priority, so an auto-bound key surfaces the one that needs attention. Bind it to a project folder name in the key's settings, or leave blank to auto-track. Count badge + press-to-cycle when several sessions share a project name. |
 
 Bar colors: green < 60%, amber 60–85%, red ≥ 85%. At 90%+ the gauge pulses red.
 The sessions key shows an animated dot cycle while any session is actively working.
@@ -121,7 +121,9 @@ So on Foundry (or any enterprise backend), skip the `%` rings and lean on **Usag
 
 - Not affiliated with or endorsed by Anthropic. The spark icons are original artwork drawn in a similar spirit; official Anthropic/Claude logos are trademarks and are not included.
 - Usage percentages are account-wide, so desktop app, claude.ai, and Claude Code usage all show up in the gauges.
-- The **Claude Status** key reflects Claude Code sessions running on this machine (from `~/.claude/sessions/`), the same source as the Sessions key. A full Allow / Deny approval feature (surfacing Claude Code's permission prompts on the deck) is planned as a follow-up.
+- The **Claude Status**, **Sessions** and **Focus Session** keys all read `~/.claude/sessions/*.json`, which Claude Code updates as each session's state changes — including `waiting` (blocked on a permission prompt or a question) with the reason. No hooks, no setup, no config changes: install the plugin and it works.
+- Sessions that write no session file — headless (`claude -p`) and nested/child sessions — aren't visible to these keys.
+- Approving or denying still happens in the terminal; the deck tells you *which* session is asking and takes you there. A physical Allow/Deny key was prototyped and dropped: Claude Code can override a hook's decision back into a terminal prompt, and a hook that holds a request can make a tool call fail outright, so it isn't safe to promise.
 
 ## License
 

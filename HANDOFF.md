@@ -149,7 +149,16 @@ command passthrough in Claude Code).
 
 ## Claude Status key (added 2026-07)
 
-- `src/status.js` — pure resolver for the **Claude Status** key (`resolveStatusKey`/`statusEntry`/`autoOrdinal`). Status shares the existing `pollSessions` source of truth (session `status` + pid liveness), keyed on `sessionId`, bound by project-folder name (or auto). No hooks/IPC — the Allow/Deny approver is a planned phase 2 (see `docs/superpowers/specs/2026-07-24-claude-code-approver-design.md` §12).
+- `src/status.js` — pure resolver for the **Claude Status** key (`resolveStatusKey`/`statusEntry`/`autoOrdinal`). Status shares the existing `pollSessions` source of truth (session `status` + pid liveness), keyed on `sessionId`, bound by project-folder name (or auto).
+
+## Session status enum — the thing to know (verified 2.1.219)
+
+`~/.claude/sessions/<pid>.json` carries **`status` ∈ `busy` | `shell` | `idle` | `waiting`**, plus **`waitingFor`** (`permission prompt` | `input needed` | `dialog open` | `sandbox request` | `worker request`) and **`statusUpdatedAt`**. `waiting` means **Claude is blocked on the human**.
+
+- `sessionState()` in `src/status.js` maps these to `needs-approval` / `input-needed` / `working` / `finished` / `idle`. **Don't reintroduce `status !== "idle"` as "working"** — that was a real bug: a session sitting on a permission prompt rendered as blue "Working" and counted in the Sessions key's "N working" with the dots animating.
+- `blockedSessions()` returns **full poller records** on purpose: `platform.focusWindow` rejects without `s.pid`.
+- `pollSessions`' change-signature includes the derived state, so time-relative transitions (Finished → Idle at 60s) repaint. Without that, `[pid,status]` alone never changes and the key goes stale.
+- This is **~6s faster than the `Notification` hook** (which waits out a user-idle debounce) and needs no hooks at all. A hook-based approver (Allow/Deny keys) was designed and rejected — see the local spec `docs/superpowers/specs/2026-07-24-approver-phase2-design.md` §6 for the disqualifying findings (fail-closed on hook timeout; `ask` rules re-prompt over a hook `allow`; Bash splits compound commands; subagents share `session_id`).
 
 ## Things NOT to do
 
