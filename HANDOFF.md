@@ -160,7 +160,37 @@ command passthrough in Claude Code).
 - `blockedSessions()` returns **full poller records** on purpose: `platform.focusWindow` rejects without `s.pid`.
 - `pollSessions`' change-signature includes the derived state, so time-relative transitions (Finished → Idle at 60s) repaint. Without that, `[pid,status]` alone never changes and the key goes stale.
 - **`entrypoint` matters.** Only `entrypoint: "cli"` sessions carry `status`/`waitingFor`/`statusUpdatedAt`; **`entrypoint: "claude-vscode"` sessions write none of them** (verified — the extension never calls the status writer). For status-less sessions `sessionState()` falls back to the transcript mtime (`transcriptPathFor()` → `<projects>/<cwd with / and _ → ->/<sessionId>.jsonl`), injected as a `Map` so `status.js` stays pure: fresh write → `working`, stale → `idle`, no transcript → `unknown` ("no status"). A real status **always** wins. Don't "simplify" a status-less session to `idle` — that reports Idle for a VS Code session that is mid-turn.
-- This is **~6s faster than the `Notification` hook** (which waits out a user-idle debounce) and needs no hooks at all. A hook-based approver (Allow/Deny keys) was designed and rejected — see the local spec `docs/superpowers/specs/2026-07-24-approver-phase2-design.md` §6 for the disqualifying findings (fail-closed on hook timeout; `ask` rules re-prompt over a hook `allow`; Bash splits compound commands; subagents share `session_id`).
+- This is **~6s faster than the `Notification` hook** (which waits out a user-idle debounce) and needs no hooks at all — that's why **Claude Status** stays hook-free even now that a separate hook-based approver exists (see below). **Superseded (2026-07-25):** this note used to say a hook-based approver (Allow/Deny keys) was designed and rejected as unsafe. That verdict didn't hold up — see **Approver (v1.7.0.0)** below for the shipped design and how it handles the same failure modes that originally disqualified it (fail-closed on hook timeout, `ask` rules re-prompting over a hook `allow`, Bash splitting compound commands, subagents sharing `session_id`).
+
+## Approver (v1.7.0.0)
+
+- **`sanitizeSuggestions` (`src/approve.js`) is a security boundary.** It whitelists
+  `type:"addRules"` + `behavior:"allow"` + a non-empty `ruleContent`, and clamps
+  `destination` to `localSettings`/`session`. Clamping the destination alone is NOT
+  enough: `setMode` would persist `defaultMode:"acceptEdits"`, `addDirectories` would
+  grant a whole directory. A test asserts no input can emit a forbidden type or
+  destination — do not weaken it.
+- **The hook consumer in Claude Code skips the over-broad-rule filter** that its TUI,
+  bridge and SDK all apply, and the payload does not carry the `showAlwaysAllow`
+  signals. That is why we drop rules with no `ruleContent` and refuse `mcp__*`.
+- **A press answers `shownReq.get(context)`, not `head(queue)`.** They differ whenever a
+  drop or new request lands between paint and press.
+- **Staleness is request-scoped** (`statusUpdatedAt`/transcript-mtime snapshots), never
+  "the session left `waiting`": VS Code sessions write no `status`, and two live pids can
+  share one `sessionId` after a resume.
+- The secret lives in **Stream Deck global settings**, not `PLUGIN_DIR` — `deploy.sh`
+  does `rm -rf "$DST"` and would wipe it. Merge global settings, never clobber (`rates`
+  lives there too), and **never regenerate over a secret already in `state.hookSecret`**
+  or the URL the user pasted stops working silently.
+- **`oneSafeRule` is the single source of truth for ALWAYS.** The key's label and its
+  decision both derive from it, so a key rendering `ALWAYS n/a` is structurally unable to
+  write anything. Do not give `decisionBody` its own, looser check.
+- **Staleness baselines are seeded on first observation, not at enqueue.** `state.sessions`
+  is up to 5 s stale, and the status flip that causes a prompt lands ~simultaneously with
+  the hook POST — snapshotting at enqueue makes every request look stale and cuts the real
+  hold to 10-15 s.
+- **Socket tests must carry `{ timeout: … }`.** `node --test` has no default bound, so a
+  test that awaits a held response hangs CI for hours instead of failing.
 
 ## Things NOT to do
 

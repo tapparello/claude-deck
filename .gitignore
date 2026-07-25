@@ -6,3 +6,5 @@ product/
 .superpowers/
 docs/superpowers/
 .playwright-mcp/
+hook-secret
+hook-token
