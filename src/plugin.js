@@ -10,7 +10,7 @@ import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript } from "./osa.js";
 import { windowStartMs, parseRequests, mergeById, aggregate } from "./usage.js";
-import { resolveStatusKey, statusEntry, autoOrdinal, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
+import { resolveStatusKey, statusEntry, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
 
 const IS_MAC = process.platform === "darwin";
 
@@ -684,7 +684,7 @@ function render(context, kind) {
     }
     case "approver-status": {
       const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context), Date.now(), state.activity);
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", 0, Date.now(), state.activity);
       const cy = cycle.get(context);
       const cycling = !!(cy && cy.idx >= 0);
       const entry = statusEntry(resolved, cycling ? cy.idx : null);
@@ -698,7 +698,7 @@ function render(context, kind) {
         detail = entry.waitingFor; // why it's blocked: "permission prompt", "input needed", …
       } else if (entry.state === "finished") {
         detail = "just now"; // fmtAgo floors to minutes, so it would always read "0m"
-      } else if (entry.state === "idle") {
+      } else if (entry.state === "idle" && entry.statusAge != null) {
         detail = fmtAgo(Date.now() - entry.statusAge) + " idle";
       }
       return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail));
@@ -727,15 +727,6 @@ function renderAll(kinds) {
 // name/cwd (Windows), so callers must hand it the record, not a projection.
 function sessionByPid(pid) {
   return state.sessions.find((s) => s.pid === pid) ?? null;
-}
-
-// Position of this auto (unbound) status key among all visible auto status
-// keys — delegated to the pure autoOrdinal() so the ordering is testable.
-function autoOrdinalFor(context) {
-  const autos = [...views.entries()]
-    .filter(([, v]) => v.kind === "approver-status" && !(v.settings?.project && v.settings.project.trim()))
-    .map(([ctx]) => ctx);
-  return autoOrdinal(autos, context);
 }
 
 // ---------- platform adapter ----------
@@ -1080,7 +1071,7 @@ function onKeyDown(context, kind) {
       // approval" is to go answer it. With several candidates, each press
       // advances to the next one and focuses that.
       const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context), Date.now(), state.activity);
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", 0, Date.now(), state.activity);
       if (!resolved.count) return showAlert(context);
       let idx = resolved.index;
       if (resolved.count > 1) {

@@ -3996,19 +3996,18 @@ function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(), acti
     name: path.basename(s.cwd ?? "") || "claude",
     state: sessionState(s, now, actOf(s, activity)),
     waitingFor: s.status === "waiting" ? String(s.waitingFor ?? "permission prompt") : "",
-    statusAge: Math.max(0, now - (s.statusUpdatedAt ?? s.updatedAt ?? 0)),
+    // null when the session reports no timestamp at all (VS Code) — otherwise
+    // `now - 0` renders as an absurd age like "495817h idle".
+    statusAge: s.statusUpdatedAt ?? s.updatedAt ? Math.max(0, now - (s.statusUpdatedAt ?? s.updatedAt)) : null,
     cwd: s.cwd ?? "",
     sessionId: s.sessionId ?? null,
     pid: s.pid ?? null
   }));
-  return { list, index: explicit ? 0 : autoIdx, count: list.length };
+  return { list, index: 0, count: list.length };
 }
 function statusEntry(resolved, cycleIdx = null) {
   const i = cycleIdx != null ? cycleIdx : resolved.index;
   return resolved.list[i] ?? { name: "", state: "none", waitingFor: "", statusAge: 0, cwd: "", sessionId: null, pid: null };
-}
-function autoOrdinal(autoContexts, context) {
-  return Math.max(0, (autoContexts ?? []).slice().sort().indexOf(context));
 }
 
 // src/plugin.js
@@ -4651,7 +4650,7 @@ function render(context, kind) {
     }
     case "approver-status": {
       const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context), Date.now(), state.activity);
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", 0, Date.now(), state.activity);
       const cy = cycle.get(context);
       const cycling = !!(cy && cy.idx >= 0);
       const entry = statusEntry(resolved, cycling ? cy.idx : null);
@@ -4665,7 +4664,7 @@ function render(context, kind) {
         detail = entry.waitingFor;
       } else if (entry.state === "finished") {
         detail = "just now";
-      } else if (entry.state === "idle") {
+      } else if (entry.state === "idle" && entry.statusAge != null) {
         detail = fmtAgo(Date.now() - entry.statusAge) + " idle";
       }
       return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail));
@@ -4689,10 +4688,6 @@ function renderAll(kinds) {
 }
 function sessionByPid(pid) {
   return state.sessions.find((s) => s.pid === pid) ?? null;
-}
-function autoOrdinalFor(context) {
-  const autos = [...views.entries()].filter(([, v]) => v.kind === "approver-status" && !(v.settings?.project && v.settings.project.trim())).map(([ctx]) => ctx);
-  return autoOrdinal(autos, context);
 }
 var OSA_TIMEOUT_MS = 8e3;
 function spawnDetached(cmd, args) {
@@ -5019,7 +5014,7 @@ function onKeyDown(context, kind) {
     }
     case "approver-status": {
       const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context), Date.now(), state.activity);
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", 0, Date.now(), state.activity);
       if (!resolved.count) return showAlert(context);
       let idx = resolved.index;
       if (resolved.count > 1) {

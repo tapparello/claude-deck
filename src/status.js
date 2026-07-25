@@ -99,9 +99,8 @@ function byDisplayOrder(a, b, now, activity) {
 // Resolve one Status key to the sessions it could display.
 //   sessions    - live sessions (state.sessions)
 //   project     - the key's configured project (basename match); "" => auto
-//   autoIdx     - for auto keys, this key's 0-based position among visible auto
-//                 keys, so multiple auto keys bind to distinct sessions; ignored
-//                 for explicit keys.
+//   autoIdx     - accepted for call-site compatibility, no longer used (see the
+//                 return below: every key shows the most urgent session).
 export function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(), activity = null) {
   const explicit = !!(project && String(project).trim());
   const want = explicit ? String(project).trim().toLowerCase() : null;
@@ -112,12 +111,17 @@ export function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(
       name: path.basename(s.cwd ?? "") || "claude",
       state: sessionState(s, now, actOf(s, activity)),
       waitingFor: s.status === "waiting" ? String(s.waitingFor ?? "permission prompt") : "",
-      statusAge: Math.max(0, now - (s.statusUpdatedAt ?? s.updatedAt ?? 0)),
+      // null when the session reports no timestamp at all (VS Code) — otherwise
+      // `now - 0` renders as an absurd age like "495817h idle".
+      statusAge: s.statusUpdatedAt ?? s.updatedAt ? Math.max(0, now - (s.statusUpdatedAt ?? s.updatedAt)) : null,
       cwd: s.cwd ?? "",
       sessionId: s.sessionId ?? null,
       pid: s.pid ?? null,
     }));
-  return { list, index: explicit ? 0 : autoIdx, count: list.length };
+  // Always index 0: every key shows the most urgent session. `autoIdx` is kept
+  // in the signature for callers but no longer distributes keys across sessions
+  // (that made a key's target depend on which other keys happened to be visible).
+  return { list, index: 0, count: list.length };
 }
 
 // The entry a key should show now (honoring an active cycle offset), or a
@@ -127,8 +131,3 @@ export function statusEntry(resolved, cycleIdx = null) {
   return resolved.list[i] ?? { name: "", state: "none", waitingFor: "", statusAge: 0, cwd: "", sessionId: null, pid: null };
 }
 
-// Stable 0-based position of `context` among the given auto-key contexts,
-// sorted deterministically so distinct keys get distinct ordinals.
-export function autoOrdinal(autoContexts, context) {
-  return Math.max(0, (autoContexts ?? []).slice().sort().indexOf(context));
-}

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveStatusKey, statusEntry, sessionProject, autoOrdinal, sessionState, blockedSessions, sessionSig, FINISHED_MS, transcriptPathFor } from "../src/status.js";
+import { resolveStatusKey, statusEntry, sessionProject, sessionState, blockedSessions, sessionSig, FINISHED_MS, transcriptPathFor } from "../src/status.js";
 
 const S = (over) => ({ sessionId: "x", cwd: "/Users/me/web-app", status: "idle", updatedAt: 1, pid: 100, ...over });
 
@@ -165,15 +165,6 @@ test("collision count reflects multiple same-project sessions", () => {
   assert.equal(r.count, 2);
 });
 
-test("auto keys bind to distinct sessions by ordinal", () => {
-  const sessions = [
-    S({ cwd: "/a/one", status: "busy", updatedAt: 5, pid: 1 }),
-    S({ cwd: "/b/two", status: "idle", updatedAt: 4, pid: 2 }),
-  ];
-  assert.equal(statusEntry(resolveStatusKey(sessions, "", 0)).name, "one"); // working first
-  assert.equal(statusEntry(resolveStatusKey(sessions, "", 1)).name, "two");
-});
-
 test("auto ordering is working-first even when the working session is older", () => {
   const sessions = [
     S({ cwd: "/a/old-busy", status: "busy", updatedAt: 1, pid: 9 }),
@@ -185,11 +176,6 @@ test("auto ordering is working-first even when the working session is older", ()
 test("no candidate => none", () => {
   const r = resolveStatusKey([], "web-app");
   assert.equal(r.count, 0);
-  assert.equal(statusEntry(r).state, "none");
-});
-
-test("auto ordinal beyond candidates => none", () => {
-  const r = resolveStatusKey([S({ cwd: "/a/only", pid: 1 })], "", 3);
   assert.equal(statusEntry(r).state, "none");
 });
 
@@ -217,10 +203,25 @@ test("cycle offset selects a specific candidate", () => {
   assert.equal(statusEntry(r, 1).cwd, "/b/dup");
 });
 
-test("autoOrdinal assigns stable distinct positions, fallback 0", () => {
-  const ctxs = ["ctxB", "ctxA", "ctxC"]; // unsorted on purpose
-  assert.equal(autoOrdinal(ctxs, "ctxA"), 0);
-  assert.equal(autoOrdinal(ctxs, "ctxB"), 1);
-  assert.equal(autoOrdinal(ctxs, "ctxC"), 2);
-  assert.equal(autoOrdinal(ctxs, "missing"), 0);
+
+// Auto (unbound) Status keys always show the MOST URGENT session. They used to be
+// distributed by a per-key ordinal derived from the live `views` map, which made
+// the same key flip between ordinals as keys/pages appeared — pinning it to a
+// second, idle session. Deliberate per-session keys are made by binding a project.
+test("an auto key shows the most urgent session, not an idle one", () => {
+  const sessions = [
+    S({ cwd: "/a/idle-proj", status: "idle", statusUpdatedAt: NOW - 600_000, updatedAt: 99, pid: 1 }),
+    S({ cwd: "/b/busy-proj", status: "busy", updatedAt: 1, pid: 2 }),
+    S({ cwd: "/c/ask-proj", status: "waiting", waitingFor: "permission prompt", updatedAt: 1, pid: 3 }),
+  ];
+  assert.equal(statusEntry(resolveStatusKey(sessions, "", 0, NOW)).name, "ask-proj");
+  // ...and every auto key agrees, rather than each taking a different slot.
+  for (const ordinalThatUsedToMatter of [0, 1, 2]) {
+    assert.equal(statusEntry(resolveStatusKey(sessions, "", ordinalThatUsedToMatter, NOW)).state, "needs-approval");
+  }
+});
+
+test("statusAge is null when the session reports no timestamps (no '495817h')", () => {
+  const e = statusEntry(resolveStatusKey([{ sessionId: "z", pid: 1, cwd: "/x/y" }], "", 0, NOW));
+  assert.equal(e.statusAge, null);
 });
