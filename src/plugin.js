@@ -509,6 +509,21 @@ async function pollSessions() {
     for (const id of [...state.activity.keys()]) {
       if (!out.some((s) => s.sessionId === id)) state.activity.delete(id);
     }
+    // Runs on EVERY tick, deliberately outside the `changed` branch below: two
+    // different prompts in one session are byte-identical to sessionSig, so a drop
+    // gated on `changed` would never fire. `out` is used rather than state.sessions
+    // because state has not been updated yet.
+    if (state.approveQueue.length) {
+      const now = Date.now();
+      // Compare first, THEN baseline the newcomers: a request seeded on this very tick
+      // has nothing to compare against yet and must not be dropped.
+      const gone = new Set([
+        ...staleIds(state.approveQueue, out, state.activity, now),
+        ...expiredIds(state.approveQueue, now, HOLD_MS()),
+      ]);
+      state.approveQueue = seedBaselines(state.approveQueue, out, state.activity);
+      if (gone.size) answerAndDrop([...gone], "session moved on or hold expired");
+    }
     // Compare against the signature cached on the PREVIOUS tick. Recomputing
     // both sides with the same `now` would cancel the derived state out, so a
     // time-only transition (finished → idle at 60s) would never repaint.
@@ -1608,8 +1623,15 @@ if (process.argv.includes("--selftest")) {
       process.exit(1);
     }
     process.exit(0);
-  })();
+  })().catch((e) => { log("selftest crashed:", e?.stack ?? String(e)); process.exit(1); });
 } else {
+  // A throw in one key's path must not take the others with it. Scoped to the plugin
+  // branch on purpose: at module scope these handlers also cover the selftest IIFE,
+  // which has no .catch(), so a selftest crash would exit 0 and CI would go green on a
+  // broken build. (Measured.)
+  process.on("uncaughtException", (e) => log("uncaughtException:", e?.stack ?? String(e)));
+  process.on("unhandledRejection", (e) => log("unhandledRejection:", e?.stack ?? String(e)));
+
   const port = argOf("-port");
   const pluginUUID = argOf("-pluginUUID");
   const registerEvent = argOf("-registerEvent");
@@ -1650,6 +1672,14 @@ if (process.argv.includes("--selftest")) {
       focusIdx.delete(context);
       usageView.delete(context);
       modelIdx.delete(context);
+      // Deferred by a second: Stream Deck emits every willDisappear for the outgoing
+      // page BEFORE any willAppear for the incoming one, so an immediate flush would
+      // destroy a live queue when an identical key reappears milliseconds later.
+      setTimeout(() => {
+        if (!hasApproveKey() && state.approveQueue.length) {
+          answerAndDrop(state.approveQueue.map((r) => r.id), "no Approve key visible");
+        }
+      }, 1000);
     } else if (event === "didReceiveSettings" && action) {
       const v = views.get(context);
       if (v) { v.settings = msg.payload?.settings ?? {}; render(context, v.kind); if (v.kind === "usage-meter" || GAUGE_WINDOW[v.kind]) pollUsageMeter(); }
@@ -1699,6 +1729,16 @@ if (process.argv.includes("--selftest")) {
     const freshBlocked = blockedSessions(state.sessions, Date.now(), state.activity)
       .some((b) => !b.statusUpdatedAt || Date.now() - b.statusUpdatedAt < PULSE_MS);
     if (freshBlocked) kinds.push("approver-status", "approver-waiting");
+    // With a 20s hold, PULSE_MS (120s) never bounds anything, so a non-empty queue
+    // is the right gate. Without this the keys would only repaint at 5s/30s and the
+    // breath would be erratic frames instead of a pulse.
+    if (state.approveQueue.length) {
+      // Expire here as well as in pollSessions: the pasted `timeout` equals HOLD_S
+      // exactly, so waiting up to 5s for the next poll would leave zero margin.
+      const dead = expiredIds(state.approveQueue, Date.now(), HOLD_MS());
+      if (dead.length) answerAndDrop(dead, "hold expired");
+      if (state.approveQueue.length) kinds.push(...APPROVE_KINDS);
+    }
     if (kinds.length && [...views.values()].some((v) => kinds.includes(v.kind))) renderAll(kinds);
     // Safety net: a reset time has passed but we still show pre-reset data (missed timer / resume from sleep)
     const expired = [state.usage?.fiveHour, state.usage?.weekly]
@@ -1706,5 +1746,9 @@ if (process.argv.includes("--selftest")) {
     if (expired && !state.usageErr && Date.now() - lastUsageAttempt > 30_000) pollUsage();
   }, 600);
   // Keep countdowns ("1h 5m left") fresh between polls
-  setInterval(() => renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate", "approver-status", "approver-waiting", "focus-session"]), 30_000);
+  setInterval(() => {
+    renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate", "approver-status", "approver-waiting", "focus-session", ...APPROVE_KINDS]);
+    // Self-heal a failed bind: nothing else retries after the initial attempts.
+    if (state.hookErr) ensureHookServer();
+  }, 30_000);
 }

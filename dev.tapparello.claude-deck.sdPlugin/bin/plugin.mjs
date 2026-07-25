@@ -4174,6 +4174,7 @@ function alwaysRule(req, sessionOnly = false) {
 }
 var QUEUE_MAX = 8;
 var HOLD_S_DEFAULT = 20;
+var YOUNG_MS = 1e4;
 function enqueue(queue, req) {
   const next = [...queue, req];
   if (next.length <= QUEUE_MAX) return { queue: next, evicted: null };
@@ -4184,6 +4185,38 @@ var head = (queue) => queue[0] ?? null;
 function resolve(queue, id) {
   const req = queue.find((r) => r.id === id) ?? null;
   return { queue: req ? queue.filter((r) => r.id !== id) : queue, req };
+}
+var expiredIds = (queue, now, holdMs) => queue.filter((r) => now - r.receivedAt > holdMs).map((r) => r.id);
+function seedBaselines(queue, sessions, activity) {
+  if (!queue.some((r) => !r.baselined)) return queue;
+  return queue.map((r) => {
+    if (r.baselined) return r;
+    const matches = (sessions ?? []).filter((s2) => s2.sessionId === r.sessionId);
+    const s = matches.slice().sort((a, b) => (b.statusUpdatedAt ?? 0) - (a.statusUpdatedAt ?? 0))[0] ?? null;
+    return {
+      ...r,
+      statusSnapshot: s?.statusUpdatedAt ?? null,
+      activitySnapshot: activity?.get?.(r.sessionId) ?? null,
+      baselined: true
+    };
+  });
+}
+function staleIds(queue, sessions, activity, now) {
+  const out = [];
+  for (const r of queue) {
+    if (!r.baselined) continue;
+    if (now - r.receivedAt < YOUNG_MS) continue;
+    const matches = (sessions ?? []).filter((s2) => s2.sessionId === r.sessionId);
+    if (!matches.length) continue;
+    const s = matches.slice().sort((a, b) => (b.statusUpdatedAt ?? 0) - (a.statusUpdatedAt ?? 0) || Number(b.cwd === r.cwd) - Number(a.cwd === r.cwd))[0];
+    if (s.statusUpdatedAt != null && r.statusSnapshot != null && s.statusUpdatedAt > r.statusSnapshot) {
+      out.push(r.id);
+      continue;
+    }
+    const mt = activity?.get?.(r.sessionId) ?? null;
+    if (mt != null && r.activitySnapshot != null && mt > r.activitySnapshot) out.push(r.id);
+  }
+  return out;
 }
 var SETTLE_MS = 500;
 function pressDecision({ queue, shownId, lastHeadChangeAt, now, settleMs = SETTLE_MS }) {
@@ -4735,6 +4768,15 @@ async function pollSessions() {
     }
     for (const id of [...state.activity.keys()]) {
       if (!out.some((s) => s.sessionId === id)) state.activity.delete(id);
+    }
+    if (state.approveQueue.length) {
+      const now = Date.now();
+      const gone = /* @__PURE__ */ new Set([
+        ...staleIds(state.approveQueue, out, state.activity, now),
+        ...expiredIds(state.approveQueue, now, HOLD_MS())
+      ]);
+      state.approveQueue = seedBaselines(state.approveQueue, out, state.activity);
+      if (gone.size) answerAndDrop([...gone], "session moved on or hold expired");
     }
     const nextSig = sessionSig(out, Date.now(), state.activity);
     const changed = nextSig !== lastSessionSig;
@@ -5753,8 +5795,13 @@ if (process.argv.includes("--selftest")) {
       process.exit(1);
     }
     process.exit(0);
-  })();
+  })().catch((e) => {
+    log("selftest crashed:", e?.stack ?? String(e));
+    process.exit(1);
+  });
 } else {
+  process.on("uncaughtException", (e) => log("uncaughtException:", e?.stack ?? String(e)));
+  process.on("unhandledRejection", (e) => log("unhandledRejection:", e?.stack ?? String(e)));
   const port = argOf("-port");
   const pluginUUID = argOf("-pluginUUID");
   const registerEvent = argOf("-registerEvent");
@@ -5803,6 +5850,11 @@ if (process.argv.includes("--selftest")) {
       focusIdx.delete(context);
       usageView.delete(context);
       modelIdx.delete(context);
+      setTimeout(() => {
+        if (!hasApproveKey() && state.approveQueue.length) {
+          answerAndDrop(state.approveQueue.map((r) => r.id), "no Approve key visible");
+        }
+      }, 1e3);
     } else if (event === "didReceiveSettings" && action) {
       const v = views.get(context);
       if (v) {
@@ -5854,9 +5906,17 @@ if (process.argv.includes("--selftest")) {
     }
     const freshBlocked = blockedSessions(state.sessions, Date.now(), state.activity).some((b) => !b.statusUpdatedAt || Date.now() - b.statusUpdatedAt < PULSE_MS);
     if (freshBlocked) kinds.push("approver-status", "approver-waiting");
+    if (state.approveQueue.length) {
+      const dead = expiredIds(state.approveQueue, Date.now(), HOLD_MS());
+      if (dead.length) answerAndDrop(dead, "hold expired");
+      if (state.approveQueue.length) kinds.push(...APPROVE_KINDS);
+    }
     if (kinds.length && [...views.values()].some((v) => kinds.includes(v.kind))) renderAll(kinds);
     const expired = [state.usage?.fiveHour, state.usage?.weekly].some((b) => b?.resetsAt && Date.now() - new Date(b.resetsAt).getTime() > 5e3);
     if (expired && !state.usageErr && Date.now() - lastUsageAttempt > 3e4) pollUsage();
   }, 600);
-  setInterval(() => renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate", "approver-status", "approver-waiting", "focus-session"]), 3e4);
+  setInterval(() => {
+    renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate", "approver-status", "approver-waiting", "focus-session", ...APPROVE_KINDS]);
+    if (state.hookErr) ensureHookServer();
+  }, 3e4);
 }
