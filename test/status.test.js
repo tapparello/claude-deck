@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveStatusKey, statusEntry, sessionProject, autoSlot, sessionWhere, fmtShort, sessionState, blockedSessions, sessionSig, FINISHED_MS, transcriptPathFor } from "../src/status.js";
+import { resolveStatusKey, statusEntry, sessionProject, autoSlot, sessionWhere, fmtShort, shortWait, sessionState, blockedSessions, sessionSig, FINISHED_MS, transcriptPathFor } from "../src/status.js";
 
 const S = (over) => ({ sessionId: "x", cwd: "/Users/me/web-app", status: "idle", updatedAt: 1, pid: 100, ...over });
 
@@ -289,4 +289,32 @@ test("fmtShort: seconds under a minute, minutes under an hour, then h m", () => 
   assert.equal(fmtShort(80 * 60_000), "1h 20m");
   assert.equal(fmtShort(null), "");
   assert.equal(fmtShort(-5), "0s"); // clock skew must not print "-1s"
+});
+
+// The detail line is 13px with no truncation on a 144px key, so the full
+// waitingFor + duration ("permission prompt · 1h 20m" = 156px) clipped at both
+// ends — and that reason is the DEFAULT, so the worst case was the common one.
+test("shortWait abbreviates the reason so reason + duration fits the key", () => {
+  assert.equal(shortWait("permission prompt"), "permission");
+  assert.equal(shortWait("sandbox request"), "sandbox");
+  assert.equal(shortWait("worker request"), "worker");
+  assert.equal(shortWait("input needed"), "input");
+  assert.equal(shortWait("dialog open"), "dialog");
+  assert.equal(shortWait("Permission Prompt"), "permission"); // case-insensitive
+  assert.equal(shortWait("some future reason"), "some future reason"); // pass through
+  assert.equal(shortWait(""), "");
+  assert.equal(shortWait(null), "");
+  // the worst realistic line must stay well inside the key
+  assert.ok((shortWait("permission prompt") + " · " + fmtShort(80 * 60_000)).length <= 20);
+});
+
+test("waitingSince is statusUpdatedAt only, never the updatedAt fallback", () => {
+  // Both keys must measure from the same anchor, and status.js already warns
+  // that updatedAt may be a heartbeat on some builds.
+  const w = { pid: 1, cwd: "/a/x", sessionId: "s", status: "waiting", waitingFor: "permission prompt", statusUpdatedAt: NOW - 5000, updatedAt: NOW };
+  assert.equal(statusEntry(resolveStatusKey([w], "", 0, NOW)).waitingSince, NOW - 5000);
+  const noStamp = { pid: 1, cwd: "/a/x", sessionId: "s", status: "waiting", updatedAt: NOW - 9000 };
+  assert.equal(statusEntry(resolveStatusKey([noStamp], "", 0, NOW)).waitingSince, null);
+  const busy = { pid: 1, cwd: "/a/x", sessionId: "s", status: "busy", statusUpdatedAt: NOW - 5000 };
+  assert.equal(statusEntry(resolveStatusKey([busy], "", 0, NOW)).waitingSince, null);
 });

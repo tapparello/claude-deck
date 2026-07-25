@@ -10,7 +10,7 @@ import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript } from "./osa.js";
 import { windowStartMs, parseRequests, mergeById, aggregate } from "./usage.js";
-import { resolveStatusKey, statusEntry, autoSlot, sessionWhere, fmtShort, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
+import { resolveStatusKey, statusEntry, autoSlot, sessionWhere, fmtShort, shortWait, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
 
 const IS_MAC = process.platform === "darwin";
 
@@ -69,11 +69,16 @@ function tintFrame(col, strong = false, phase = null) {
   if (!col) return "";
   // phase != null → breathe: the wash and the outer halo rings vary across the
   // ticker's 3 frames while the main border holds, so it pulses without flicker.
-  const p = phase == null ? 1 : [0.45, 0.75, 1][phase % 3];
+  const p = phase == null ? 1 : [0.3, 0.65, 1][phase % 3];
   const washOp = (strong ? 0.22 : 0.1) * (phase == null ? 1 : 0.6 + 0.4 * p);
+  // The 5px stroke is the element the eye actually tracks, so IT has to swing —
+  // gaugeKey's pulse moves its 6px stroke 0.2→0.95 for the same reason. Holding
+  // it constant (as the first cut did) made the breath imperceptible at arm's
+  // length while still paying the full frame cost.
+  const mainOp = phase == null ? (strong ? 1 : 0.8) : 0.25 + 0.75 * p;
   return `<rect width="144" height="144" rx="18" fill="${col}" opacity="${washOp.toFixed(3)}"/>
     <rect x="2" y="2" width="140" height="140" rx="17" fill="none" stroke="${col}" stroke-width="2" opacity="${((strong ? 0.45 : 0.22) * p).toFixed(3)}"/>
-    <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="${col}" stroke-width="${strong ? 5 : 3}" opacity="${strong ? 1 : 0.8}"/>
+    <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="${col}" stroke-width="${strong ? 5 : 3}" opacity="${mainOp.toFixed(3)}"/>
     <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="${col}" stroke-width="1" opacity="${(0.18 * p).toFixed(3)}"/>`;
 }
 
@@ -700,15 +705,16 @@ function render(context, kind) {
         detail = `${cy.idx + 1}/${resolved.count}${parent ? " · " + parent : ""}`;
       } else if (entry.waitingFor) {
         // why it's blocked, plus how long — "just asked" vs "stuck since coffee"
-        const waited = fmtShort(entry.statusAge);
-        detail = entry.waitingFor + (waited ? " · " + waited : "");
+        const waited = entry.waitingSince ? fmtShort(Date.now() - entry.waitingSince) : "";
+        detail = shortWait(entry.waitingFor) + (waited ? " · " + waited : "");
       } else if (entry.state === "finished") {
         detail = "just now"; // fmtAgo floors to minutes, so it would always read "0m"
       } else if (entry.state === "idle" && entry.statusAge != null) {
         detail = fmtAgo(Date.now() - entry.statusAge) + " idle";
       }
       const blockedNow = entry.state === "needs-approval" || entry.state === "input-needed";
-      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where, blockedNow ? animPhase : null));
+      const fresh = blockedNow && (!entry.waitingSince || Date.now() - entry.waitingSince < PULSE_MS);
+      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where, fresh ? animPhase : null));
     }
     case "approver-waiting": {
       // Dark and quiet until a session is actually blocked on you.
@@ -721,9 +727,11 @@ function render(context, kind) {
       const i = cy && cy.idx >= 0 ? cy.idx % blocked.length : 0;
       const b = blocked[i];
       const st = sessionState(b, Date.now(), state.activity.get(b.sessionId) ?? null);
-      const waited = b.statusUpdatedAt ? fmtShort(Date.now() - b.statusUpdatedAt) : "";
-      const why = String(b.waitingFor ?? "needs you") + (waited ? " · " + waited : "");
-      return setImage(context, statusKey(path.basename(b.cwd ?? "") || "claude", st, blocked.length, why, sessionWhere(b), animPhase));
+      const since = b.status === "waiting" && b.statusUpdatedAt ? b.statusUpdatedAt : null;
+      const waited = since ? fmtShort(Date.now() - since) : "";
+      const why = shortWait(b.waitingFor ?? "") || "needs you";
+      const fresh = !since || Date.now() - since < PULSE_MS;
+      return setImage(context, statusKey(path.basename(b.cwd ?? "") || "claude", st, blocked.length, why + (waited ? " · " + waited : ""), sessionWhere(b), fresh ? animPhase : null));
     }
   }
 }
@@ -749,6 +757,10 @@ function sessionByPid(pid) {
 
 // ---------- platform adapter ----------
 const OSA_TIMEOUT_MS = 8000;
+// A blocked session can sit unanswered all night, and unlike the other ticker
+// animations this state does not self-terminate. Breathe long enough to catch
+// the eye, then hold static instead of pushing frames until morning.
+const PULSE_MS = 120_000;
 
 // Resolve on successful spawn, reject if the process can't be launched.
 // Matches the old optimistic "showOk right after spawn" behavior, but now
@@ -1218,7 +1230,9 @@ if (process.argv.includes("--selftest")) {
     if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");
     // A session blocked on you makes its keys breathe — far easier to catch than
     // a static colour. Gated on there actually being one, so a calm deck is idle.
-    if (blockedSessions(state.sessions, Date.now(), state.activity).length) kinds.push("approver-status", "approver-waiting");
+    const freshBlocked = blockedSessions(state.sessions, Date.now(), state.activity)
+      .some((b) => !b.statusUpdatedAt || Date.now() - b.statusUpdatedAt < PULSE_MS);
+    if (freshBlocked) kinds.push("approver-status", "approver-waiting");
     if (kinds.length && [...views.values()].some((v) => kinds.includes(v.kind))) renderAll(kinds);
     // Safety net: a reset time has passed but we still show pre-reset data (missed timer / resume from sleep)
     const expired = [state.usage?.fiveHour, state.usage?.weekly]

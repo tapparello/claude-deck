@@ -3994,6 +3994,18 @@ function fmtShort(ms) {
   if (m < 60) return m + "m";
   return Math.floor(m / 60) + "h " + m % 60 + "m";
 }
+var WAIT_SHORT = {
+  "permission prompt": "permission",
+  "sandbox request": "sandbox",
+  "worker request": "worker",
+  "input needed": "input",
+  "dialog open": "dialog"
+};
+function shortWait(reason) {
+  const r = String(reason ?? "").toLowerCase();
+  if (!r) return "";
+  return WAIT_SHORT[r] ?? String(reason);
+}
 function autoSlot(keys, context) {
   const me = (keys ?? []).find((k) => k.context === context);
   const sorted = (keys ?? []).filter((k) => (k.device ?? null) === (me?.device ?? null)).sort((a, b) => {
@@ -4024,6 +4036,9 @@ function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(), acti
     // null when the session reports no timestamp at all (VS Code) — otherwise
     // `now - 0` renders as an absurd age like "495817h idle".
     statusAge: s.statusUpdatedAt ?? s.updatedAt ? Math.max(0, now - (s.statusUpdatedAt ?? s.updatedAt)) : null,
+    // When the wait began. statusUpdatedAt ONLY — never the updatedAt fallback,
+    // so every key measures the same wait from the same anchor.
+    waitingSince: s.status === "waiting" && s.statusUpdatedAt ? s.statusUpdatedAt : null,
     cwd: s.cwd ?? "",
     sessionId: s.sessionId ?? null,
     pid: s.pid ?? null,
@@ -4033,7 +4048,7 @@ function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(), acti
 }
 function statusEntry(resolved, cycleIdx = null) {
   const i = cycleIdx != null ? cycleIdx : resolved.index;
-  return resolved.list[i] ?? { name: "", state: "none", waitingFor: "", statusAge: 0, cwd: "", sessionId: null, pid: null };
+  return resolved.list[i] ?? { name: "", state: "none", waitingFor: "", statusAge: 0, waitingSince: null, cwd: "", sessionId: null, pid: null, where: "" };
 }
 
 // src/plugin.js
@@ -4091,11 +4106,12 @@ var pctColor = (p) => p == null ? C.dim : p >= 85 ? C.bad : p >= 60 ? C.warn : C
 var esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 function tintFrame(col, strong = false, phase = null) {
   if (!col) return "";
-  const p = phase == null ? 1 : [0.45, 0.75, 1][phase % 3];
+  const p = phase == null ? 1 : [0.3, 0.65, 1][phase % 3];
   const washOp = (strong ? 0.22 : 0.1) * (phase == null ? 1 : 0.6 + 0.4 * p);
+  const mainOp = phase == null ? strong ? 1 : 0.8 : 0.25 + 0.75 * p;
   return `<rect width="144" height="144" rx="18" fill="${col}" opacity="${washOp.toFixed(3)}"/>
     <rect x="2" y="2" width="140" height="140" rx="17" fill="none" stroke="${col}" stroke-width="2" opacity="${((strong ? 0.45 : 0.22) * p).toFixed(3)}"/>
-    <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="${col}" stroke-width="${strong ? 5 : 3}" opacity="${strong ? 1 : 0.8}"/>
+    <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="${col}" stroke-width="${strong ? 5 : 3}" opacity="${mainOp.toFixed(3)}"/>
     <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="${col}" stroke-width="1" opacity="${(0.18 * p).toFixed(3)}"/>`;
 }
 function svgWrap(inner) {
@@ -4688,15 +4704,16 @@ function render(context, kind) {
         const parent = entry.cwd ? path2.basename(path2.dirname(entry.cwd)) : "";
         detail = `${cy.idx + 1}/${resolved.count}${parent ? " \xB7 " + parent : ""}`;
       } else if (entry.waitingFor) {
-        const waited = fmtShort(entry.statusAge);
-        detail = entry.waitingFor + (waited ? " \xB7 " + waited : "");
+        const waited = entry.waitingSince ? fmtShort(Date.now() - entry.waitingSince) : "";
+        detail = shortWait(entry.waitingFor) + (waited ? " \xB7 " + waited : "");
       } else if (entry.state === "finished") {
         detail = "just now";
       } else if (entry.state === "idle" && entry.statusAge != null) {
         detail = fmtAgo(Date.now() - entry.statusAge) + " idle";
       }
       const blockedNow = entry.state === "needs-approval" || entry.state === "input-needed";
-      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where, blockedNow ? animPhase : null));
+      const fresh = blockedNow && (!entry.waitingSince || Date.now() - entry.waitingSince < PULSE_MS);
+      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where, fresh ? animPhase : null));
     }
     case "approver-waiting": {
       const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
@@ -4708,9 +4725,11 @@ function render(context, kind) {
       const i = cy && cy.idx >= 0 ? cy.idx % blocked.length : 0;
       const b = blocked[i];
       const st = sessionState(b, Date.now(), state.activity.get(b.sessionId) ?? null);
-      const waited = b.statusUpdatedAt ? fmtShort(Date.now() - b.statusUpdatedAt) : "";
-      const why = String(b.waitingFor ?? "needs you") + (waited ? " \xB7 " + waited : "");
-      return setImage(context, statusKey(path2.basename(b.cwd ?? "") || "claude", st, blocked.length, why, sessionWhere(b), animPhase));
+      const since = b.status === "waiting" && b.statusUpdatedAt ? b.statusUpdatedAt : null;
+      const waited = since ? fmtShort(Date.now() - since) : "";
+      const why = shortWait(b.waitingFor ?? "") || "needs you";
+      const fresh = !since || Date.now() - since < PULSE_MS;
+      return setImage(context, statusKey(path2.basename(b.cwd ?? "") || "claude", st, blocked.length, why + (waited ? " \xB7 " + waited : ""), sessionWhere(b), fresh ? animPhase : null));
     }
   }
 }
@@ -4725,6 +4744,7 @@ function sessionByPid(pid) {
   return state.sessions.find((s) => s.pid === pid) ?? null;
 }
 var OSA_TIMEOUT_MS = 8e3;
+var PULSE_MS = 12e4;
 function spawnDetached(cmd, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
@@ -5191,7 +5211,8 @@ if (process.argv.includes("--selftest")) {
     if (state.usage?.fiveHour?.pct >= 90) kinds.push("usage-session");
     if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
     if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");
-    if (blockedSessions(state.sessions, Date.now(), state.activity).length) kinds.push("approver-status", "approver-waiting");
+    const freshBlocked = blockedSessions(state.sessions, Date.now(), state.activity).some((b) => !b.statusUpdatedAt || Date.now() - b.statusUpdatedAt < PULSE_MS);
+    if (freshBlocked) kinds.push("approver-status", "approver-waiting");
     if (kinds.length && [...views.values()].some((v) => kinds.includes(v.kind))) renderAll(kinds);
     const expired = [state.usage?.fiveHour, state.usage?.weekly].some((b) => b?.resetsAt && Date.now() - new Date(b.resetsAt).getTime() > 5e3);
     if (expired && !state.usageErr && Date.now() - lastUsageAttempt > 3e4) pollUsage();
