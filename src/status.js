@@ -81,6 +81,23 @@ export function blockedSessions(sessions, now = Date.now(), activity = null) {
     .sort((a, b) => rank(a, now, activity) - rank(b, now, activity) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || (a.pid ?? 0) - (b.pid ?? 0));
 }
 
+// Which slot an auto (unbound) Status key occupies, so several such keys show
+// DIFFERENT sessions: slot 0 gets the most urgent, slot 1 the next, and so on.
+// Ordered by physical key position (row, then column) — deliberately NOT by the
+// order contexts landed in a map, which is unstable and made a key's target
+// change as unrelated keys appeared. Keys without coordinates sort last.
+//   keys: [{ context, row, col }]
+export function autoSlot(keys, context) {
+  const sorted = (keys ?? []).slice().sort((a, b) => {
+    const ar = a.row ?? Infinity, br = b.row ?? Infinity;
+    if (ar !== br) return ar - br;
+    const ac = a.col ?? Infinity, bc = b.col ?? Infinity;
+    if (ac !== bc) return ac - bc;
+    return String(a.context).localeCompare(String(b.context));
+  });
+  return Math.max(0, sorted.findIndex((k) => k.context === context));
+}
+
 // basename(cwd), lowercased; "" when cwd is missing.
 export function sessionProject(s) {
   return path.basename(s.cwd ?? "").toLowerCase();
@@ -118,10 +135,11 @@ export function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(
       sessionId: s.sessionId ?? null,
       pid: s.pid ?? null,
     }));
-  // Always index 0: every key shows the most urgent session. `autoIdx` is kept
-  // in the signature for callers but no longer distributes keys across sessions
-  // (that made a key's target depend on which other keys happened to be visible).
-  return { list, index: 0, count: list.length };
+  // Explicit (project-bound) keys always show their project's most urgent
+  // session. Auto keys take their slot: 0 = most urgent, 1 = next, ... so a row
+  // of auto keys covers several sessions. An out-of-range slot yields the "none"
+  // placeholder via statusEntry (more keys than sessions -> "no session").
+  return { list, index: explicit ? 0 : autoIdx, count: list.length };
 }
 
 // The entry a key should show now (honoring an active cycle offset), or a

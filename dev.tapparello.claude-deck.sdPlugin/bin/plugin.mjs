@@ -3980,6 +3980,16 @@ var rank = (s, now, activity) => URGENCY[sessionState(s, now, actOf(s, activity)
 function blockedSessions(sessions, now = Date.now(), activity = null) {
   return (sessions ?? []).filter((s) => rank(s, now, activity) <= URGENCY["input-needed"]).sort((a, b) => rank(a, now, activity) - rank(b, now, activity) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || (a.pid ?? 0) - (b.pid ?? 0));
 }
+function autoSlot(keys, context) {
+  const sorted = (keys ?? []).slice().sort((a, b) => {
+    const ar = a.row ?? Infinity, br = b.row ?? Infinity;
+    if (ar !== br) return ar - br;
+    const ac = a.col ?? Infinity, bc = b.col ?? Infinity;
+    if (ac !== bc) return ac - bc;
+    return String(a.context).localeCompare(String(b.context));
+  });
+  return Math.max(0, sorted.findIndex((k) => k.context === context));
+}
 function sessionProject(s) {
   return path.basename(s.cwd ?? "").toLowerCase();
 }
@@ -4003,7 +4013,7 @@ function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(), acti
     sessionId: s.sessionId ?? null,
     pid: s.pid ?? null
   }));
-  return { list, index: 0, count: list.length };
+  return { list, index: explicit ? 0 : autoIdx, count: list.length };
 }
 function statusEntry(resolved, cycleIdx = null) {
   const i = cycleIdx != null ? cycleIdx : resolved.index;
@@ -4650,7 +4660,7 @@ function render(context, kind) {
     }
     case "approver-status": {
       const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", 0, Date.now(), state.activity);
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoSlotFor(context), Date.now(), state.activity);
       const cy = cycle.get(context);
       const cycling = !!(cy && cy.idx >= 0);
       const entry = statusEntry(resolved, cycling ? cy.idx : null);
@@ -4685,6 +4695,10 @@ function render(context, kind) {
 }
 function renderAll(kinds) {
   for (const [context, v] of views) if (kinds.includes(v.kind)) render(context, v.kind);
+}
+function autoSlotFor(context) {
+  const keys = [...views.entries()].filter(([, v]) => v.kind === "approver-status" && !(v.settings?.project && v.settings.project.trim())).map(([ctx, v]) => ({ context: ctx, row: v.row, col: v.col }));
+  return autoSlot(keys, context);
 }
 function sessionByPid(pid) {
   return state.sessions.find((s) => s.pid === pid) ?? null;
@@ -5014,7 +5028,7 @@ function onKeyDown(context, kind) {
     }
     case "approver-status": {
       const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", 0, Date.now(), state.activity);
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoSlotFor(context), Date.now(), state.activity);
       if (!resolved.count) return showAlert(context);
       let idx = resolved.index;
       if (resolved.count > 1) {
@@ -5102,7 +5116,13 @@ if (process.argv.includes("--selftest")) {
     }
     const { event, context, action } = msg;
     if (event === "willAppear" && action) {
-      views.set(context, { kind: kindOf(action), settings: msg.payload?.settings ?? {} });
+      views.set(context, {
+        kind: kindOf(action),
+        settings: msg.payload?.settings ?? {},
+        // Physical position: used to give several auto Status keys a stable slot.
+        row: msg.payload?.coordinates?.row ?? null,
+        col: msg.payload?.coordinates?.column ?? null
+      });
       setTitle(context);
       render(context, kindOf(action));
       if (kindOf(action) === "usage-meter") pollUsageMeter();

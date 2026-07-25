@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveStatusKey, statusEntry, sessionProject, sessionState, blockedSessions, sessionSig, FINISHED_MS, transcriptPathFor } from "../src/status.js";
+import { resolveStatusKey, statusEntry, sessionProject, autoSlot, sessionState, blockedSessions, sessionSig, FINISHED_MS, transcriptPathFor } from "../src/status.js";
 
 const S = (over) => ({ sessionId: "x", cwd: "/Users/me/web-app", status: "idle", updatedAt: 1, pid: 100, ...over });
 
@@ -208,17 +208,40 @@ test("cycle offset selects a specific candidate", () => {
 // distributed by a per-key ordinal derived from the live `views` map, which made
 // the same key flip between ordinals as keys/pages appeared — pinning it to a
 // second, idle session. Deliberate per-session keys are made by binding a project.
-test("an auto key shows the most urgent session, not an idle one", () => {
+test("autoSlot orders by physical position (row, then column), not map order", () => {
+  const keys = [
+    { context: "zzz", row: 0, col: 1 },
+    { context: "aaa", row: 1, col: 0 },
+    { context: "mmm", row: 0, col: 0 },
+  ];
+  assert.equal(autoSlot(keys, "mmm"), 0); // top-left first...
+  assert.equal(autoSlot(keys, "zzz"), 1); // ...then along the row
+  assert.equal(autoSlot(keys, "aaa"), 2); // ...then the next row
+  assert.equal(autoSlot(keys, "missing"), 0); // unknown context -> slot 0
+  // A key with no coordinates sorts last rather than stealing slot 0.
+  assert.equal(autoSlot([{ context: "n" }, { context: "m", row: 0, col: 0 }], "m"), 0);
+});
+
+test("several auto keys cover different sessions, most urgent first", () => {
   const sessions = [
     S({ cwd: "/a/idle-proj", status: "idle", statusUpdatedAt: NOW - 600_000, updatedAt: 99, pid: 1 }),
     S({ cwd: "/b/busy-proj", status: "busy", updatedAt: 1, pid: 2 }),
     S({ cwd: "/c/ask-proj", status: "waiting", waitingFor: "permission prompt", updatedAt: 1, pid: 3 }),
   ];
-  assert.equal(statusEntry(resolveStatusKey(sessions, "", 0, NOW)).name, "ask-proj");
-  // ...and every auto key agrees, rather than each taking a different slot.
-  for (const ordinalThatUsedToMatter of [0, 1, 2]) {
-    assert.equal(statusEntry(resolveStatusKey(sessions, "", ordinalThatUsedToMatter, NOW)).state, "needs-approval");
-  }
+  assert.equal(statusEntry(resolveStatusKey(sessions, "", 0, NOW)).name, "ask-proj"); // slot 0
+  assert.equal(statusEntry(resolveStatusKey(sessions, "", 1, NOW)).name, "busy-proj"); // slot 1
+  assert.equal(statusEntry(resolveStatusKey(sessions, "", 2, NOW)).name, "idle-proj"); // slot 2
+  // more keys than sessions -> honest empty slot
+  assert.equal(statusEntry(resolveStatusKey(sessions, "", 3, NOW)).state, "none");
+});
+
+test("slot 0 always holds the most urgent session", () => {
+  const sessions = [
+    S({ cwd: "/a/idle-proj", status: "idle", statusUpdatedAt: NOW - 600_000, updatedAt: 99, pid: 1 }),
+    S({ cwd: "/b/busy-proj", status: "busy", updatedAt: 1, pid: 2 }),
+    S({ cwd: "/c/ask-proj", status: "waiting", waitingFor: "permission prompt", updatedAt: 1, pid: 3 }),
+  ];
+  assert.equal(statusEntry(resolveStatusKey(sessions, "", 0, NOW)).state, "needs-approval");
 });
 
 test("statusAge is null when the session reports no timestamps (no '495817h')", () => {

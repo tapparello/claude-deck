@@ -10,7 +10,7 @@ import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript } from "./osa.js";
 import { windowStartMs, parseRequests, mergeById, aggregate } from "./usage.js";
-import { resolveStatusKey, statusEntry, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
+import { resolveStatusKey, statusEntry, autoSlot, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
 
 const IS_MAC = process.platform === "darwin";
 
@@ -684,7 +684,7 @@ function render(context, kind) {
     }
     case "approver-status": {
       const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", 0, Date.now(), state.activity);
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoSlotFor(context), Date.now(), state.activity);
       const cy = cycle.get(context);
       const cycling = !!(cy && cy.idx >= 0);
       const entry = statusEntry(resolved, cycling ? cy.idx : null);
@@ -721,6 +721,15 @@ function render(context, kind) {
 
 function renderAll(kinds) {
   for (const [context, v] of views) if (kinds.includes(v.kind)) render(context, v.kind);
+}
+
+// Slot for this auto (unbound) Status key among the visible ones, by physical
+// position, so a row of auto keys shows different sessions (0 = most urgent).
+function autoSlotFor(context) {
+  const keys = [...views.entries()]
+    .filter(([, v]) => v.kind === "approver-status" && !(v.settings?.project && v.settings.project.trim()))
+    .map(([ctx, v]) => ({ context: ctx, row: v.row, col: v.col }));
+  return autoSlot(keys, context);
 }
 
 // The full poller record for a pid — platform.focusWindow needs pid (macOS) and
@@ -1071,7 +1080,7 @@ function onKeyDown(context, kind) {
       // approval" is to go answer it. With several candidates, each press
       // advances to the next one and focuses that.
       const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", 0, Date.now(), state.activity);
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoSlotFor(context), Date.now(), state.activity);
       if (!resolved.count) return showAlert(context);
       let idx = resolved.index;
       if (resolved.count > 1) {
@@ -1149,7 +1158,13 @@ if (process.argv.includes("--selftest")) {
     try { msg = JSON.parse(data.toString()); } catch { return; }
     const { event, context, action } = msg;
     if (event === "willAppear" && action) {
-      views.set(context, { kind: kindOf(action), settings: msg.payload?.settings ?? {} });
+      views.set(context, {
+        kind: kindOf(action),
+        settings: msg.payload?.settings ?? {},
+        // Physical position: used to give several auto Status keys a stable slot.
+        row: msg.payload?.coordinates?.row ?? null,
+        col: msg.payload?.coordinates?.column ?? null,
+      });
       setTitle(context);
       render(context, kindOf(action));
       if (kindOf(action) === "usage-meter") pollUsageMeter();
