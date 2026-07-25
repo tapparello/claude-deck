@@ -102,14 +102,20 @@ export function mergeById(lists) {
 
 // Aggregate tokens (all models) and estimated cost (priced models) over
 // requests with t >= startMs.
+// `tokens` is the grand total (incl. cache); `in`/`out` are the plain input and
+// output counts, which the keys show when toggled out of cost view. Cache reads
+// and writes are deliberately not folded into `in` — they are billed at
+// different multipliers and lumping them would misreport the input figure.
 export function aggregate(requests, startMs, overrides) {
-  let tokens = 0, cost = 0;
+  let tokens = 0, cost = 0, inTok = 0, outTok = 0;
   for (const r of requests) {
     if (r.t < startMs) continue;
     tokens += totalOf(r.tok);
+    inTok += r.tok?.in ?? 0;
+    outTok += r.tok?.out ?? 0;
     cost += estimateCost(r.model, r.tok, overrides);
   }
-  return { tokens, cost };
+  return { tokens, cost, in: inTok, out: outTok };
 }
 
 // Per-family totals within a window, most expensive first. Requests whose model

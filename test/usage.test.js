@@ -149,8 +149,10 @@ test("estimateCost applies overrides incl. cache multipliers on overridden input
 test("aggregate applies overrides to cost; tokens unchanged; default when omitted", () => {
   const M = 1_000_000;
   const reqs = [{ t: 200, model: "claude-opus-4-8", tok: { in: M, out: 0, cacheRead: 0, cacheCreate: 0 } }];
-  assert.deepEqual(aggregate(reqs, 100, { opus: { in: 4 } }), { tokens: M, cost: 4 });
-  assert.deepEqual(aggregate(reqs, 100), { tokens: M, cost: 5 });
+  // Assert the fields under test rather than the whole object, so adding a
+  // field to the aggregate shape (in/out) isn't a false failure.
+  assert.deepEqual(aggregate(reqs, 100, { opus: { in: 4 } }), { tokens: M, cost: 4, in: M, out: 0 });
+  assert.deepEqual(aggregate(reqs, 100), { tokens: M, cost: 5, in: M, out: 0 });
 });
 
 // ---------- 5h rolling window ----------
@@ -244,4 +246,21 @@ test("hasSubscriptionData is account-level, not per-bucket", () => {
   assert.equal(hasSubscriptionData({ models: [] }), false);
   assert.equal(hasSubscriptionData({ weeklyOpus: { pct: 1 } }), true);
   assert.equal(hasSubscriptionData({ scopedPct: 0 }), true); // 0 is real data
+});
+
+test("aggregate reports input and output separately from the grand total", () => {
+  const now = 1_000_000_000;
+  const reqs = [
+    { model: "claude-sonnet-5", t: now, tok: { in: 100, out: 20, cacheRead: 1000, cacheCreate: 7 } },
+    { model: "claude-sonnet-5", t: now, tok: { in: 5, out: 3, cacheRead: 0, cacheCreate: 0 } },
+    { model: "claude-sonnet-5", t: now - 99_999, tok: { in: 9999, out: 9999, cacheRead: 0, cacheCreate: 0 } },
+  ];
+  const a = aggregate(reqs, now - 1000);
+  assert.equal(a.in, 105, "plain input only");
+  assert.equal(a.out, 23, "plain output only");
+  // cache is in the grand total but must NOT be folded into `in`
+  assert.equal(a.tokens, 100 + 20 + 1000 + 7 + 5 + 3);
+  assert.ok(a.cost > 0);
+  const empty = aggregate([], now);
+  assert.deepEqual([empty.in, empty.out, empty.tokens], [0, 0, 0]);
 });

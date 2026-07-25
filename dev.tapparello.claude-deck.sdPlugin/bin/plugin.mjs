@@ -3939,13 +3939,15 @@ function mergeById(lists) {
   return [...byId.values(), ...noId];
 }
 function aggregate(requests, startMs, overrides) {
-  let tokens = 0, cost = 0;
+  let tokens = 0, cost = 0, inTok = 0, outTok = 0;
   for (const r of requests) {
     if (r.t < startMs) continue;
     tokens += totalOf(r.tok);
+    inTok += r.tok?.in ?? 0;
+    outTok += r.tok?.out ?? 0;
     cost += estimateCost(r.model, r.tok, overrides);
   }
-  return { tokens, cost };
+  return { tokens, cost, in: inTok, out: outTok };
 }
 function aggregateByModel(requests, startMs, overrides) {
   const by = /* @__PURE__ */ new Map();
@@ -4204,8 +4206,11 @@ function usageMeterKey(header, big, sub, isCost) {
     ${isCost && !dim ? `<text x="130" y="58" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" fill="${C.dim}">est</text>` : ""}
     <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub)}</text>`);
 }
-function localGauge(header, agg, budget) {
+function localGauge(header, agg, budget, view = "cost") {
   if (!agg) return usageMeterKey(header, "--", "no data yet", true);
+  if (view === "tokens") {
+    return usageMeterKey(header, fmtNum(agg.tokens), `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out`, false);
+  }
   const pct = budgetPct(agg.cost, budget);
   if (pct == null) return usageMeterKey(header, "$" + agg.cost.toFixed(2), "est", true);
   const over = pct > 100 ? " \xB7 " + Math.round(pct) + "%" : "";
@@ -4683,14 +4688,14 @@ function render(context, kind) {
   switch (kind) {
     case "usage-session": {
       const mode = gaugeMode("usage-session");
-      if (mode === "local") return setImage(context, localGauge("LAST 5H", state.usageMeter?.["5h"], views.get(context)?.settings?.budget));
+      if (mode === "local") return setImage(context, localGauge("LAST 5H", state.usageMeter?.["5h"], views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
       if (mode !== "subscription") return setImage(context, gaugeKey("SESSION 5H", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
       const b = state.usage?.fiveHour;
       return setImage(context, gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt) : "no data", b?.pct >= 90 ? animPhase : null));
     }
     case "usage-weekly": {
       const mode = gaugeMode("usage-weekly");
-      if (mode === "local") return setImage(context, localGauge("LAST 7D", state.usageMeter?.["7day"], views.get(context)?.settings?.budget));
+      if (mode === "local") return setImage(context, localGauge("LAST 7D", state.usageMeter?.["7day"], views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
       if (mode !== "subscription") return setImage(context, gaugeKey("WEEKLY", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
       const b = state.usage?.weekly;
       const u = state.usage;
@@ -4710,7 +4715,7 @@ function render(context, kind) {
       const more = list.length > 1 ? ` ${i + 1}/${list.length}` : "";
       if (!pick) return setImage(context, usageMeterKey(head, "--", mmode === "local" ? "no data yet" : "no data", true));
       if (mmode === "local") {
-        return setImage(context, localGauge(head + more, pick, views.get(context)?.settings?.budget));
+        return setImage(context, localGauge(head + more, pick, views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
       }
       return setImage(context, gaugeKey(head + more, pick.pct ?? null, pick.resetsAt ? fmtReset(pick.resetsAt) : "no data", pick.pct >= 90 ? animPhase : null));
     }
@@ -4780,7 +4785,7 @@ function render(context, kind) {
       const suffix = s.label ? " \xB7 " + s.label : "";
       if (!agg) return setImage(context, usageMeterKey(header, "--", "no data", view === "cost"));
       if (view === "cost") return setImage(context, usageMeterKey(header, "$" + agg.cost.toFixed(2), "cost" + suffix, true));
-      return setImage(context, usageMeterKey(header, fmtNum(agg.tokens), "tokens" + suffix, false));
+      return setImage(context, usageMeterKey(header, fmtNum(agg.tokens), agg.in != null ? `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out` : "tokens" + suffix, false));
     }
     case "approver-status": {
       const s = views.get(context)?.settings ?? {};
@@ -5089,8 +5094,12 @@ function onKeyDown(context, kind) {
   switch (kind) {
     case "usage-session":
     case "usage-weekly":
-      if (gaugeMode(kind) === "local") pollUsageMeter();
-      else if (Date.now() - lastUsageAttempt > 3e4) pollUsage();
+      if (gaugeMode(kind) === "local") {
+        usageView.set(context, (usageView.get(context) ?? "cost") === "cost" ? "tokens" : "cost");
+        pollUsageMeter();
+        return render(context, kind);
+      }
+      if (Date.now() - lastUsageAttempt > 3e4) pollUsage();
       return;
     case "today":
       pollToday();
