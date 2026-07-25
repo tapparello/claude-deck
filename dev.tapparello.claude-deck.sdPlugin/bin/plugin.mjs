@@ -4121,7 +4121,9 @@ var STATUS_LOOK = {
   working: { label: "Working", col: C.info, band: false },
   finished: { label: "Finished", col: C.ok, band: false },
   idle: { label: "Idle", col: C.dim, band: false },
-  none: { label: "no session", col: C.dim, band: false }
+  none: { label: "no session", col: C.dim, band: false },
+  quiet: { label: "all clear", col: C.dim, band: false }
+  // Waiting key, nothing pending
 };
 function statusKey(name, st, count, detail = "") {
   const look = STATUS_LOOK[st] ?? STATUS_LOOK.none;
@@ -4287,7 +4289,7 @@ async function pollSessions() {
     const changed = nextSig !== lastSessionSig;
     lastSessionSig = nextSig;
     state.sessions = out;
-    if (changed) renderAll(["sessions", "focus-session", "approver-status"]);
+    if (changed) renderAll(["sessions", "focus-session", "approver-status", "approver-waiting"]);
   } catch (e) {
     log("sessions poll failed:", String(e));
   }
@@ -4621,10 +4623,25 @@ function render(context, kind) {
       }
       return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail));
     }
+    case "approver-waiting": {
+      const blocked = blockedSessions(state.sessions);
+      if (!blocked.length) {
+        const n = state.sessions.length;
+        return setImage(context, statusKey("WAITING", "quiet", 1, n ? `${n} session${n > 1 ? "s" : ""} ok` : "no sessions"));
+      }
+      const cy = cycle.get(context);
+      const i = cy && cy.idx >= 0 ? cy.idx % blocked.length : 0;
+      const b = blocked[i];
+      const st = sessionState(b);
+      return setImage(context, statusKey(b.name ?? "claude", st, blocked.length, String(b.waitingFor ?? "needs you")));
+    }
   }
 }
 function renderAll(kinds) {
   for (const [context, v] of views) if (kinds.includes(v.kind)) render(context, v.kind);
+}
+function sessionByPid(pid) {
+  return state.sessions.find((s) => s.pid === pid) ?? null;
 }
 function autoOrdinalFor(context) {
   const autos = [...views.entries()].filter(([, v]) => v.kind === "approver-status" && !(v.settings?.project && v.settings.project.trim())).map(([ctx]) => ctx);
@@ -4962,16 +4979,36 @@ function onKeyDown(context, kind) {
     case "approver-status": {
       const s = views.get(context)?.settings ?? {};
       const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context));
-      if (resolved.count <= 1) return showOk(context);
-      const cy = cycle.get(context) ?? { idx: resolved.index, timer: null };
-      cy.idx = (cy.idx + 1) % resolved.count;
+      if (!resolved.count) return showAlert(context);
+      let idx = resolved.index;
+      if (resolved.count > 1) {
+        const cy = cycle.get(context) ?? { idx: resolved.index - 1, timer: null };
+        cy.idx = (cy.idx + 1) % resolved.count;
+        if (cy.timer) clearTimeout(cy.timer);
+        cy.timer = setTimeout(() => {
+          cycle.set(context, { idx: -1, timer: null });
+          render(context, "approver-status");
+        }, 4e3);
+        cycle.set(context, cy);
+        idx = cy.idx;
+      }
+      const entry = statusEntry(resolved, resolved.count > 1 ? idx : null);
+      render(context, "approver-status");
+      return act(context, platform.focusWindow(sessionByPid(entry.pid)));
+    }
+    case "approver-waiting": {
+      const blocked = blockedSessions(state.sessions);
+      if (!blocked.length) return showAlert(context);
+      const cy = cycle.get(context) ?? { idx: -1, timer: null };
+      cy.idx = (cy.idx + 1) % blocked.length;
       if (cy.timer) clearTimeout(cy.timer);
       cy.timer = setTimeout(() => {
         cycle.set(context, { idx: -1, timer: null });
-        render(context, "approver-status");
+        render(context, "approver-waiting");
       }, 4e3);
       cycle.set(context, cy);
-      return render(context, "approver-status");
+      render(context, "approver-waiting");
+      return act(context, platform.focusWindow(blocked[cy.idx]));
     }
   }
 }
@@ -5078,5 +5115,5 @@ if (process.argv.includes("--selftest")) {
     const expired = [state.usage?.fiveHour, state.usage?.weekly].some((b) => b?.resetsAt && Date.now() - new Date(b.resetsAt).getTime() > 5e3);
     if (expired && !state.usageErr && Date.now() - lastUsageAttempt > 3e4) pollUsage();
   }, 600);
-  setInterval(() => renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate", "approver-status", "focus-session"]), 3e4);
+  setInterval(() => renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate", "approver-status", "approver-waiting", "focus-session"]), 3e4);
 }

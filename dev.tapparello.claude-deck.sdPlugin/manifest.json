@@ -183,6 +183,16 @@
       "SupportedInMultiActions": false,
       "UserTitleEnabled": false,
       "States": [{ "Image": "imgs/status", "ShowTitle": false }]
+    },
+    {
+      "UUID": "dev.tapparello.claude-deck.approver-waiting",
+      "Name": "Claude Waiting",
+      "Tooltip": "Lights up when any Claude Code session is waiting on you (permission prompt or question). Press to jump to that session's window; press again to cycle if several are waiting.",
+      "Icon": "imgs/waiting",
+      "Controllers": ["Keypad"],
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false,
+      "States": [{ "Image": "imgs/waiting", "ShowTitle": false }]
     }
   ]
 }

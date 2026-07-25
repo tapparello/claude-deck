@@ -172,6 +172,7 @@ const STATUS_LOOK = {
   finished: { label: "Finished", col: C.ok, band: false },
   idle: { label: "Idle", col: C.dim, band: false },
   none: { label: "no session", col: C.dim, band: false },
+  quiet: { label: "all clear", col: C.dim, band: false }, // Waiting key, nothing pending
 };
 function statusKey(name, st, count, detail = "") {
   const look = STATUS_LOOK[st] ?? STATUS_LOOK.none;
@@ -352,7 +353,7 @@ async function pollSessions() {
     const changed = nextSig !== lastSessionSig;
     lastSessionSig = nextSig;
     state.sessions = out;
-    if (changed) renderAll(["sessions", "focus-session", "approver-status"]);
+    if (changed) renderAll(["sessions", "focus-session", "approver-status", "approver-waiting"]);
   } catch (e) {
     log("sessions poll failed:", String(e));
   }
@@ -686,11 +687,30 @@ function render(context, kind) {
       }
       return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail));
     }
+    case "approver-waiting": {
+      // Dark and quiet until a session is actually blocked on you.
+      const blocked = blockedSessions(state.sessions);
+      if (!blocked.length) {
+        const n = state.sessions.length;
+        return setImage(context, statusKey("WAITING", "quiet", 1, n ? `${n} session${n > 1 ? "s" : ""} ok` : "no sessions"));
+      }
+      const cy = cycle.get(context);
+      const i = cy && cy.idx >= 0 ? cy.idx % blocked.length : 0;
+      const b = blocked[i];
+      const st = sessionState(b);
+      return setImage(context, statusKey(b.name ?? "claude", st, blocked.length, String(b.waitingFor ?? "needs you")));
+    }
   }
 }
 
 function renderAll(kinds) {
   for (const [context, v] of views) if (kinds.includes(v.kind)) render(context, v.kind);
+}
+
+// The full poller record for a pid — platform.focusWindow needs pid (macOS) and
+// name/cwd (Windows), so callers must hand it the record, not a projection.
+function sessionByPid(pid) {
+  return state.sessions.find((s) => s.pid === pid) ?? null;
 }
 
 // Position of this auto (unbound) status key among all visible auto status
@@ -1038,15 +1058,37 @@ function onKeyDown(context, kind) {
       return render(context, "usage-meter");
     }
     case "approver-status": {
+      // Press takes you to that session's window — the point of seeing "Needs
+      // approval" is to go answer it. With several candidates, each press
+      // advances to the next one and focuses that.
       const s = views.get(context)?.settings ?? {};
       const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context));
-      if (resolved.count <= 1) return showOk(context);
-      const cy = cycle.get(context) ?? { idx: resolved.index, timer: null };
-      cy.idx = (cy.idx + 1) % resolved.count;
+      if (!resolved.count) return showAlert(context);
+      let idx = resolved.index;
+      if (resolved.count > 1) {
+        const cy = cycle.get(context) ?? { idx: resolved.index - 1, timer: null };
+        cy.idx = (cy.idx + 1) % resolved.count;
+        if (cy.timer) clearTimeout(cy.timer);
+        cy.timer = setTimeout(() => { cycle.set(context, { idx: -1, timer: null }); render(context, "approver-status"); }, 4000);
+        cycle.set(context, cy);
+        idx = cy.idx;
+      }
+      const entry = statusEntry(resolved, resolved.count > 1 ? idx : null);
+      render(context, "approver-status");
+      return act(context, platform.focusWindow(sessionByPid(entry.pid)));
+    }
+    case "approver-waiting": {
+      // Dedicated "who needs me" key: press focuses the front blocked session,
+      // repeated presses walk the rest.
+      const blocked = blockedSessions(state.sessions);
+      if (!blocked.length) return showAlert(context);
+      const cy = cycle.get(context) ?? { idx: -1, timer: null };
+      cy.idx = (cy.idx + 1) % blocked.length;
       if (cy.timer) clearTimeout(cy.timer);
-      cy.timer = setTimeout(() => { cycle.set(context, { idx: -1, timer: null }); render(context, "approver-status"); }, 4000);
+      cy.timer = setTimeout(() => { cycle.set(context, { idx: -1, timer: null }); render(context, "approver-waiting"); }, 4000);
       cycle.set(context, cy);
-      return render(context, "approver-status");
+      render(context, "approver-waiting");
+      return act(context, platform.focusWindow(blocked[cy.idx]));
     }
   }
 }
@@ -1143,5 +1185,5 @@ if (process.argv.includes("--selftest")) {
     if (expired && !state.usageErr && Date.now() - lastUsageAttempt > 30_000) pollUsage();
   }, 600);
   // Keep countdowns ("1h 5m left") fresh between polls
-  setInterval(() => renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate", "approver-status", "focus-session"]), 30_000);
+  setInterval(() => renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate", "approver-status", "approver-waiting", "focus-session"]), 30_000);
 }
