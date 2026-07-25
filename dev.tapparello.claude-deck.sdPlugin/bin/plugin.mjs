@@ -3949,6 +3949,12 @@ import path from "node:path";
 var QUESTION_WAITS = /* @__PURE__ */ new Set(["input needed", "dialog open"]);
 var FINISHED_MS = 6e4;
 var ACTIVITY_MS = 6e4;
+function sessionWhere(s) {
+  const e = String(s?.entrypoint ?? "");
+  if (e === "cli") return "cli";
+  if (e.includes("vscode")) return "code";
+  return "";
+}
 function transcriptPathFor(projectsDir, s) {
   if (!s?.cwd || !s?.sessionId) return null;
   return `${projectsDir}/${String(s.cwd).replace(/[/_]/g, "-")}/${s.sessionId}.jsonl`;
@@ -3981,7 +3987,8 @@ function blockedSessions(sessions, now = Date.now(), activity = null) {
   return (sessions ?? []).filter((s) => rank(s, now, activity) <= URGENCY["input-needed"]).sort((a, b) => rank(a, now, activity) - rank(b, now, activity) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || (a.pid ?? 0) - (b.pid ?? 0));
 }
 function autoSlot(keys, context) {
-  const sorted = (keys ?? []).slice().sort((a, b) => {
+  const me = (keys ?? []).find((k) => k.context === context);
+  const sorted = (keys ?? []).filter((k) => (k.device ?? null) === (me?.device ?? null)).sort((a, b) => {
     const ar = a.row ?? Infinity, br = b.row ?? Infinity;
     if (ar !== br) return ar - br;
     const ac = a.col ?? Infinity, bc = b.col ?? Infinity;
@@ -4011,7 +4018,8 @@ function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(), acti
     statusAge: s.statusUpdatedAt ?? s.updatedAt ? Math.max(0, now - (s.statusUpdatedAt ?? s.updatedAt)) : null,
     cwd: s.cwd ?? "",
     sessionId: s.sessionId ?? null,
-    pid: s.pid ?? null
+    pid: s.pid ?? null,
+    where: sessionWhere(s)
   }));
   return { list, index: explicit ? 0 : autoIdx, count: list.length };
 }
@@ -4167,13 +4175,13 @@ var STATUS_LOOK = {
   // we couldn't stat. Saying "no status" beats inventing "Idle".
   unknown: { label: "no status", col: C.dim, band: false }
 };
-function statusKey(name, st, count, detail = "") {
+function statusKey(name, st, count, detail = "", tag = "") {
   const look = STATUS_LOOK[st] ?? STATUS_LOOK.none;
   const { label, col, band } = look;
   const shown = name || "CLAUDE";
   const border = band ? `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${col}" stroke-width="6"/>` : st === "working" ? `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.info}" stroke-width="4" opacity="0.9"/>` : `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.track}" stroke-width="3"/>`;
   const bandSvg = band ? `<rect x="6" y="84" width="132" height="26" rx="7" fill="${col}"/>` : "";
-  const badge = count > 1 ? `<circle cx="120" cy="24" r="13" fill="${C.panel}" stroke="${C.track}" stroke-width="1"/><text x="120" y="29" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${count}</text>` : "";
+  const badge = count > 1 ? `<circle cx="120" cy="24" r="13" fill="${C.panel}" stroke="${C.track}" stroke-width="1"/><text x="120" y="29" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${count}</text>` : tag ? `<text x="134" y="29" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="600" fill="${C.dim}">${esc(tag)}</text>` : "";
   const detailSvg = detail ? `<text x="72" y="126" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" fill="${C.dim}">${esc(detail)}</text>` : "";
   return svgWrap(`
     ${border}
@@ -4677,7 +4685,7 @@ function render(context, kind) {
       } else if (entry.state === "idle" && entry.statusAge != null) {
         detail = fmtAgo(Date.now() - entry.statusAge) + " idle";
       }
-      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail));
+      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where));
     }
     case "approver-waiting": {
       const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
@@ -4689,7 +4697,7 @@ function render(context, kind) {
       const i = cy && cy.idx >= 0 ? cy.idx % blocked.length : 0;
       const b = blocked[i];
       const st = sessionState(b, Date.now(), state.activity.get(b.sessionId) ?? null);
-      return setImage(context, statusKey(b.name ?? "claude", st, blocked.length, String(b.waitingFor ?? "needs you")));
+      return setImage(context, statusKey(path2.basename(b.cwd ?? "") || "claude", st, blocked.length, String(b.waitingFor ?? "needs you"), sessionWhere(b)));
     }
   }
 }
@@ -4697,7 +4705,7 @@ function renderAll(kinds) {
   for (const [context, v] of views) if (kinds.includes(v.kind)) render(context, v.kind);
 }
 function autoSlotFor(context) {
-  const keys = [...views.entries()].filter(([, v]) => v.kind === "approver-status" && !(v.settings?.project && v.settings.project.trim())).map(([ctx, v]) => ({ context: ctx, row: v.row, col: v.col }));
+  const keys = [...views.entries()].filter(([, v]) => v.kind === "approver-status" && !(v.settings?.project && v.settings.project.trim())).map(([ctx, v]) => ({ context: ctx, device: v.device, row: v.row, col: v.col }));
   return autoSlot(keys, context);
 }
 function sessionByPid(pid) {
@@ -5119,7 +5127,9 @@ if (process.argv.includes("--selftest")) {
       views.set(context, {
         kind: kindOf(action),
         settings: msg.payload?.settings ?? {},
-        // Physical position: used to give several auto Status keys a stable slot.
+        // Device + physical position: used to give several auto Status keys a
+        // stable slot, numbered per device (two Stream Decks are live at once).
+        device: msg.device ?? null,
         row: msg.payload?.coordinates?.row ?? null,
         col: msg.payload?.coordinates?.column ?? null
       });

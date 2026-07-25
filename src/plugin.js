@@ -10,7 +10,7 @@ import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript } from "./osa.js";
 import { windowStartMs, parseRequests, mergeById, aggregate } from "./usage.js";
-import { resolveStatusKey, statusEntry, autoSlot, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
+import { resolveStatusKey, statusEntry, autoSlot, sessionWhere, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
 
 const IS_MAC = process.platform === "darwin";
 
@@ -177,7 +177,7 @@ const STATUS_LOOK = {
   // we couldn't stat. Saying "no status" beats inventing "Idle".
   unknown: { label: "no status", col: C.dim, band: false },
 };
-function statusKey(name, st, count, detail = "") {
+function statusKey(name, st, count, detail = "", tag = "") {
   const look = STATUS_LOOK[st] ?? STATUS_LOOK.none;
   const { label, col, band } = look;
   const shown = name || "CLAUDE";
@@ -190,6 +190,10 @@ function statusKey(name, st, count, detail = "") {
   const bandSvg = band ? `<rect x="6" y="84" width="132" height="26" rx="7" fill="${col}"/>` : "";
   const badge = count > 1
     ? `<circle cx="120" cy="24" r="13" fill="${C.panel}" stroke="${C.track}" stroke-width="1"/><text x="120" y="29" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${count}</text>`
+    // Where the session lives ("cli"/"code") — the only way to tell two sessions
+    // in the same project apart, since their names truncate identically.
+    : tag
+    ? `<text x="134" y="29" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="600" fill="${C.dim}">${esc(tag)}</text>`
     : "";
   const detailSvg = detail
     ? `<text x="72" y="126" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" fill="${C.dim}">${esc(detail)}</text>`
@@ -701,7 +705,7 @@ function render(context, kind) {
       } else if (entry.state === "idle" && entry.statusAge != null) {
         detail = fmtAgo(Date.now() - entry.statusAge) + " idle";
       }
-      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail));
+      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where));
     }
     case "approver-waiting": {
       // Dark and quiet until a session is actually blocked on you.
@@ -714,7 +718,7 @@ function render(context, kind) {
       const i = cy && cy.idx >= 0 ? cy.idx % blocked.length : 0;
       const b = blocked[i];
       const st = sessionState(b, Date.now(), state.activity.get(b.sessionId) ?? null);
-      return setImage(context, statusKey(b.name ?? "claude", st, blocked.length, String(b.waitingFor ?? "needs you")));
+      return setImage(context, statusKey(path.basename(b.cwd ?? "") || "claude", st, blocked.length, String(b.waitingFor ?? "needs you"), sessionWhere(b)));
     }
   }
 }
@@ -728,7 +732,7 @@ function renderAll(kinds) {
 function autoSlotFor(context) {
   const keys = [...views.entries()]
     .filter(([, v]) => v.kind === "approver-status" && !(v.settings?.project && v.settings.project.trim()))
-    .map(([ctx, v]) => ({ context: ctx, row: v.row, col: v.col }));
+    .map(([ctx, v]) => ({ context: ctx, device: v.device, row: v.row, col: v.col }));
   return autoSlot(keys, context);
 }
 
@@ -1161,7 +1165,9 @@ if (process.argv.includes("--selftest")) {
       views.set(context, {
         kind: kindOf(action),
         settings: msg.payload?.settings ?? {},
-        // Physical position: used to give several auto Status keys a stable slot.
+        // Device + physical position: used to give several auto Status keys a
+        // stable slot, numbered per device (two Stream Decks are live at once).
+        device: msg.device ?? null,
         row: msg.payload?.coordinates?.row ?? null,
         col: msg.payload?.coordinates?.column ?? null,
       });

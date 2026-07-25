@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveStatusKey, statusEntry, sessionProject, autoSlot, sessionState, blockedSessions, sessionSig, FINISHED_MS, transcriptPathFor } from "../src/status.js";
+import { resolveStatusKey, statusEntry, sessionProject, autoSlot, sessionWhere, sessionState, blockedSessions, sessionSig, FINISHED_MS, transcriptPathFor } from "../src/status.js";
 
 const S = (over) => ({ sessionId: "x", cwd: "/Users/me/web-app", status: "idle", updatedAt: 1, pid: 100, ...over });
 
@@ -208,6 +208,22 @@ test("cycle offset selects a specific candidate", () => {
 // distributed by a per-key ordinal derived from the live `views` map, which made
 // the same key flip between ordinals as keys/pages appeared — pinning it to a
 // second, idle session. Deliberate per-session keys are made by binding a project.
+test("autoSlot numbers each device's keys independently (two Stream Decks)", () => {
+  // Both decks have a key at the same coordinates; each must start at slot 0,
+  // or the second deck's key shows the 2nd-most-urgent session instead.
+  const keys = [
+    { context: "deckA-key", device: "A", row: 2, col: 1 },
+    { context: "deckB-key", device: "B", row: 2, col: 1 },
+  ];
+  assert.equal(autoSlot(keys, "deckA-key"), 0);
+  assert.equal(autoSlot(keys, "deckB-key"), 0);
+  // ...and a second key on deck A still gets slot 1 on that deck.
+  keys.push({ context: "deckA-key2", device: "A", row: 2, col: 2 });
+  assert.equal(autoSlot(keys, "deckA-key"), 0);
+  assert.equal(autoSlot(keys, "deckA-key2"), 1);
+  assert.equal(autoSlot(keys, "deckB-key"), 0);
+});
+
 test("autoSlot orders by physical position (row, then column), not map order", () => {
   const keys = [
     { context: "zzz", row: 0, col: 1 },
@@ -247,4 +263,16 @@ test("slot 0 always holds the most urgent session", () => {
 test("statusAge is null when the session reports no timestamps (no '495817h')", () => {
   const e = statusEntry(resolveStatusKey([{ sessionId: "z", pid: 1, cwd: "/x/y" }], "", 0, NOW));
   assert.equal(e.statusAge, null);
+});
+
+test("sessionWhere tags the host so same-project sessions are distinguishable", () => {
+  assert.equal(sessionWhere({ entrypoint: "cli" }), "cli");
+  assert.equal(sessionWhere({ entrypoint: "claude-vscode" }), "code");
+  assert.equal(sessionWhere({}), "");
+  const two = [
+    S({ cwd: "/a/claude-deck", entrypoint: "cli", status: "busy", pid: 1 }),
+    S({ cwd: "/b/claude-deck", entrypoint: "claude-vscode", pid: 2 }),
+  ];
+  const r = resolveStatusKey(two, "claude-deck", 0, NOW);
+  assert.deepEqual(r.list.map((e) => e.where), ["cli", "code"]);
 });

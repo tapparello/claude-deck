@@ -20,6 +20,16 @@ export const FINISHED_MS = 60_000;
 // Only used for sessions that report no status at all (see below).
 export const ACTIVITY_MS = 60_000;
 
+// Short tag for where a session lives, so two sessions in the SAME project are
+// distinguishable on a key (their names truncate to the same text) and you know
+// which app to look in. From the session file's own `entrypoint`.
+export function sessionWhere(s) {
+  const e = String(s?.entrypoint ?? "");
+  if (e === "cli") return "cli";
+  if (e.includes("vscode")) return "code";
+  return "";
+}
+
 // Path of a session's transcript, or null if it can't be derived. Claude Code
 // stores them as <projects>/<cwd with / and _ replaced by ->/<sessionId>.jsonl.
 export function transcriptPathFor(projectsDir, s) {
@@ -83,12 +93,16 @@ export function blockedSessions(sessions, now = Date.now(), activity = null) {
 
 // Which slot an auto (unbound) Status key occupies, so several such keys show
 // DIFFERENT sessions: slot 0 gets the most urgent, slot 1 the next, and so on.
-// Ordered by physical key position (row, then column) — deliberately NOT by the
-// order contexts landed in a map, which is unstable and made a key's target
-// change as unrelated keys appeared. Keys without coordinates sort last.
-//   keys: [{ context, row, col }]
+//
+// Scoped PER DEVICE: with two Stream Decks both profiles are live at once and
+// their keys share coordinates, so a global ordering made the second deck's key
+// take slot 1 (an idle session) — each deck must number its own keys from 0.
+// Within a device, ordered by physical position (row, then column), never by the
+// order contexts landed in a map (unstable). Keys without coordinates sort last.
+//   keys: [{ context, device, row, col }]
 export function autoSlot(keys, context) {
-  const sorted = (keys ?? []).slice().sort((a, b) => {
+  const me = (keys ?? []).find((k) => k.context === context);
+  const sorted = (keys ?? []).filter((k) => (k.device ?? null) === (me?.device ?? null)).sort((a, b) => {
     const ar = a.row ?? Infinity, br = b.row ?? Infinity;
     if (ar !== br) return ar - br;
     const ac = a.col ?? Infinity, bc = b.col ?? Infinity;
@@ -134,6 +148,7 @@ export function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(
       cwd: s.cwd ?? "",
       sessionId: s.sessionId ?? null,
       pid: s.pid ?? null,
+      where: sessionWhere(s),
     }));
   // Explicit (project-bound) keys always show their project's most urgent
   // session. Auto keys take their slot: 0 = most urgent, 1 = next, ... so a row
