@@ -9,7 +9,7 @@ import path from "node:path";
 import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript } from "./osa.js";
-import { windowStartMs, parseRequests, mergeById, aggregate } from "./usage.js";
+import { windowStartMs, parseRequests, mergeById, aggregate, aggregateByModel, budgetPct, gaugeSource, familyOf } from "./usage.js";
 import { resolveStatusKey, statusEntry, autoSlot, sessionWhere, fmtShort, shortWait, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
 
 const IS_MAC = process.platform === "darwin";
@@ -147,6 +147,19 @@ function usageMeterKey(header, big, sub, isCost) {
     <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub)}</text>`);
 }
 
+// A gauge key rendered from local transcript data. With a budget it becomes the
+// familiar ring (gaugeKey clamps the drawn bar at 100%, so an overage is carried
+// in the sub-line instead); without one it shows the absolute spend. A missing
+// aggregate renders "--" — never "$0.00", which would claim zero spend on a
+// machine that has spent hundreds today.
+function localGauge(header, agg, budget) {
+  if (!agg) return usageMeterKey(header, "--", "no data yet", true);
+  const pct = budgetPct(agg.cost, budget);
+  if (pct == null) return usageMeterKey(header, "$" + agg.cost.toFixed(2), "est", true);
+  const over = pct > 100 ? " · " + Math.round(pct) + "%" : "";
+  return gaugeKey(header, pct, `$${Math.round(agg.cost)} / $${Math.round(Number(budget))}${over}`, pct >= 90 ? animPhase : null);
+}
+
 // Generic key for configurable actions: header + big wrapped label + footer
 function labelKey(title, label, sub, accent = C.accent, tint = null, strong = false) {
   const text = String(label ?? "").trim() || "—";
@@ -234,6 +247,7 @@ const state = {
   activity: new Map(), // sessionId -> transcript mtimeMs (status-less sessions only)
   usage: null,        // { fiveHour, weekly, weeklyOpus } each { pct, resetsAt }
   usageErr: null,
+  usageMeterModels: null, // [{model,tokens,cost}] over 7d, for the model key in local mode
   usageAt: 0,
   sessions: [],
   today: null,
@@ -321,6 +335,8 @@ async function pollUsage() {
   } catch (e) {
     state.usageErr = String(e.message ?? e);
     log("usage poll failed:", state.usageErr);
+    // The gauges may have just flipped to fallback; make sure they have numbers.
+    pollUsageMeter();
   }
   renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate"]);
 }
@@ -335,6 +351,17 @@ function scheduleResetPoll() {
   if (!deltas.length) return;
   clearTimeout(resetTimer);
   resetTimer = setTimeout(pollUsage, Math.min(...deltas) + 8000);
+}
+
+// Which local window each gauge key needs when it falls back.
+const GAUGE_WINDOW = { "usage-session": "5h", "usage-weekly": "7day", "usage-model": "7day" };
+
+// Source for the gauge keys. Kept in one place so the poller and all three
+// render cases can never disagree about which mode they are in.
+function gaugeMode(kind) {
+  const win = GAUGE_WINDOW[kind];
+  const hasLocal = !!(win && state.usageMeter?.[win]);
+  return gaugeSource({ usage: state.usage, usageErr: state.usageErr, usageAt: state.usageAt, now: Date.now() }, hasLocal);
 }
 
 // ---------- data: running sessions ----------
@@ -519,7 +546,13 @@ const usageFileCache = new Map(); // path -> { size, mtimeMs, requests }
 async function pollUsageMeter(forceWins) {
   const wins = new Set();
   if (forceWins) for (const w of forceWins) wins.add(w);
-  else for (const v of views.values()) if (v.kind === "usage-meter") wins.add(v.settings?.window ?? "today");
+  else for (const v of views.values()) {
+    if (v.kind === "usage-meter") wins.add(v.settings?.window ?? "today");
+    // Gauge keys need a local window too, but only while they're in fallback.
+    else if (GAUGE_WINDOW[v.kind] && gaugeMode(v.kind) === "local") wins.add(GAUGE_WINDOW[v.kind]);
+    // Burn Rate's ETA falls back to local 5h spend, so it needs that window too.
+    else if (v.kind === "burn-rate" && gaugeMode("usage-session") === "local") wins.add("5h");
+  }
   if (!wins.size) return; // gated: no Usage keys visible
   const now = Date.now();
   const cutoff = Math.min(...[...wins].map((w) => windowStartMs(w, now)));
@@ -542,7 +575,9 @@ async function pollUsageMeter(forceWins) {
     const out = {};
     for (const w of wins) out[w] = aggregate(merged, windowStartMs(w, now), state.rates);
     state.usageMeter = out;
-    renderAll(["usage-meter"]);
+    // Per-model split for the model key (same scan, no extra I/O).
+    if (wins.has("7day")) state.usageMeterModels = aggregateByModel(merged, windowStartMs("7day", now), state.rates);
+    renderAll(["usage-meter", "usage-session", "usage-weekly", "usage-model", "burn-rate"]);
   } catch (e) {
     log("usage-meter poll failed:", String(e));
   }
@@ -550,6 +585,14 @@ async function pollUsageMeter(forceWins) {
 
 // Projects time-to-cap from the trend of 5h utilization samples
 function sessionEta() {
+  // pctHistory is fed only from the subscription 5h percentage, so on an account
+  // without one it stays empty forever and this used to read "measuring…"
+  // indefinitely — implying a number was coming that never would. Say what is
+  // actually true instead; the tok/hr figure above it is still real.
+  if (gaugeMode("usage-session") !== "subscription") {
+    const b5 = state.usageMeter?.["5h"];
+    return b5 ? "$" + b5.cost.toFixed(2) + " last 5h" : "no cap";
+  }
   const h = state.pctHistory;
   if (h.length < 2) return "measuring…";
   const latest = h[h.length - 1];
@@ -592,12 +635,16 @@ const kindOf = (action) => action.replace("dev.tapparello.claude-deck.", "");
 function render(context, kind) {
   switch (kind) {
     case "usage-session": {
-      if (state.usageErr && !state.usage) return setImage(context, gaugeKey("SESSION 5H", null, state.usageErr.includes("429") ? "throttled" : (IS_MAC && state.usageErr.includes("no OAuth token")) ? "n/a" : "sign in?"));
+      const mode = gaugeMode("usage-session");
+      if (mode === "local") return setImage(context, localGauge("LAST 5H", state.usageMeter?.["5h"], views.get(context)?.settings?.budget));
+      if (mode !== "subscription") return setImage(context, gaugeKey("SESSION 5H", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
       const b = state.usage?.fiveHour;
       return setImage(context, gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt) : "no data", b?.pct >= 90 ? animPhase : null));
     }
     case "usage-weekly": {
-      if (state.usageErr && !state.usage) return setImage(context, gaugeKey("WEEKLY", null, state.usageErr.includes("429") ? "throttled" : (IS_MAC && state.usageErr.includes("no OAuth token")) ? "n/a" : "sign in?"));
+      const mode = gaugeMode("usage-weekly");
+      if (mode === "local") return setImage(context, localGauge("LAST 7D", state.usageMeter?.["7day"], views.get(context)?.settings?.budget));
+      if (mode !== "subscription") return setImage(context, gaugeKey("WEEKLY", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
       const b = state.usage?.weekly;
       const u = state.usage;
       const sub = u?.scopedPct != null && u.scopedName
@@ -607,6 +654,21 @@ function render(context, kind) {
       return setImage(context, gaugeKey("WEEKLY", b?.pct ?? null, sub, b?.pct >= 90 ? animPhase : null));
     }
     case "usage-model": {
+      const mmode = gaugeMode("usage-model");
+      if (mmode === "local") {
+        const list = state.usageMeterModels ?? [];
+        const want = String(views.get(context)?.settings?.model ?? "").toLowerCase();
+        // A model saved from API days ("Opus") won't equal a local family
+        // ("opus"), so match on family and fall back to the priciest.
+        const pick = list.find((e) => e.model === (familyOf(want) ?? want)) ?? list[0];
+        const head = (pick?.model ?? want ?? "MODEL").toUpperCase().slice(0, 8) + " 7D";
+        if (!list.length) return setImage(context, usageMeterKey(head, "--", "no data yet", true));
+        if (!pick) return setImage(context, usageMeterKey(head, "--", "no local data", true));
+        return setImage(context, localGauge(head, pick, views.get(context)?.settings?.budget));
+      }
+      if (mmode !== "subscription") {
+        return setImage(context, gaugeKey("MODEL 7D", null, mmode === "throttled" ? "throttled" : mmode === "error" ? "sign in?" : "no data"));
+      }
       const models = state.usage?.models ?? [];
       const want = views.get(context)?.settings?.model;
       const m = models.find((x) => x.name === want) ?? models[0];
@@ -1032,7 +1094,8 @@ function onKeyDown(context, kind) {
   switch (kind) {
     case "usage-session":
     case "usage-weekly":
-      if (Date.now() - lastUsageAttempt > 30_000) pollUsage();
+      if (gaugeMode(kind) === "local") pollUsageMeter();
+      else if (Date.now() - lastUsageAttempt > 30_000) pollUsage();
       return showOk(context);
     case "today":
       pollToday();
@@ -1048,7 +1111,8 @@ function onKeyDown(context, kind) {
       return render(context, "sessions");
     }
     case "usage-model":
-      if (Date.now() - lastUsageAttempt > 30_000) pollUsage();
+      if (gaugeMode("usage-model") === "local") pollUsageMeter();
+      else if (Date.now() - lastUsageAttempt > 30_000) pollUsage();
       return showOk(context);
     case "burn-rate":
       pollBurn();
@@ -1154,10 +1218,12 @@ if (process.argv.includes("--selftest")) {
     }
     await pollToday();
     log("selftest today:", JSON.stringify(state.today));
+    await pollUsageMeter(["5h"]);
     await pollBurn();
     log("selftest burn:", JSON.stringify(state.burn), "eta:", sessionEta());
-    await pollUsageMeter(["today", "month", "7day"]);
+    await pollUsageMeter(["5h", "today", "month", "7day"]);
     log("selftest usage-meter:", JSON.stringify(state.usageMeter));
+    log("selftest per-model 7d:", JSON.stringify(state.usageMeterModels));
     process.exit(0);
   })();
 } else {
@@ -1193,7 +1259,7 @@ if (process.argv.includes("--selftest")) {
       });
       setTitle(context);
       render(context, kindOf(action));
-      if (kindOf(action) === "usage-meter") pollUsageMeter();
+      if (kindOf(action) === "usage-meter" || GAUGE_WINDOW[kindOf(action)]) pollUsageMeter();
     } else if (event === "willDisappear") {
       views.delete(context);
       cycle.delete(context);
@@ -1201,7 +1267,7 @@ if (process.argv.includes("--selftest")) {
       usageView.delete(context);
     } else if (event === "didReceiveSettings" && action) {
       const v = views.get(context);
-      if (v) { v.settings = msg.payload?.settings ?? {}; render(context, v.kind); if (v.kind === "usage-meter") pollUsageMeter(); }
+      if (v) { v.settings = msg.payload?.settings ?? {}; render(context, v.kind); if (v.kind === "usage-meter" || GAUGE_WINDOW[v.kind]) pollUsageMeter(); }
     } else if (event === "didReceiveGlobalSettings") {
       state.rates = msg.payload?.settings?.rates ?? {};
       pollUsageMeter();
@@ -1228,6 +1294,14 @@ if (process.argv.includes("--selftest")) {
     if (state.usage?.fiveHour?.pct >= 90) kinds.push("usage-session");
     if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
     if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");
+    // Local/budget rings live outside state.usage, so gate them separately or a
+    // ring at 98% would sit perfectly still while README promises a pulse.
+    for (const [k, win] of Object.entries(GAUGE_WINDOW)) {
+      if (gaugeMode(k) !== "local") continue;
+      const agg = k === "usage-model" ? (state.usageMeterModels ?? [])[0] : state.usageMeter?.[win];
+      const bud = [...views.values()].find((v) => v.kind === k)?.settings?.budget;
+      if (agg && (budgetPct(agg.cost, bud) ?? 0) >= 90) kinds.push(k);
+    }
     // A session blocked on you makes its keys breathe — far easier to catch than
     // a static colour. Gated on there actually being one, so a calm deck is idle.
     const freshBlocked = blockedSessions(state.sessions, Date.now(), state.activity)

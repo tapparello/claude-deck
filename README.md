@@ -10,17 +10,17 @@ The usage gauges show the **same session/weekly percentages Claude Desktop and C
 
 | Key | What it shows / does |
 |---|---|
-| **Session 5h** | Live 5-hour limit % ring + reset countdown. Press to refresh. |
-| **Weekly** | Weekly limit % ring + per-model weekly % underneath. |
+| **Session 5h** | On a subscription: the live 5-hour limit % ring + reset countdown. On accounts without one (Foundry/Bedrock/Vertex): **local spend over the last 5 hours**. Set a **Budget $** in the key's settings to turn that into a % ring. Press to refresh. |
+| **Weekly** | On a subscription: the weekly limit % ring + per-model weekly % underneath. Otherwise: **local spend over the last 7 days**, with an optional **Budget $** ring. |
 | **Today** | Today's Claude Code activity: chats, messages, tokens. |
 | **Sessions** | Count of running Claude Code sessions and how many are busy — or **"N needs you"** when a session is blocked on a prompt (5s refresh). Press to cycle per-session details. |
 | **Launch Claude Desktop** | Opens the Claude Desktop app (Microsoft Store install auto-detected). |
 | **Quick Chat** | Fires Claude's global quick-chat hotkey (Ctrl+Alt+Space). |
 | **Open claude.ai** | New chat in your browser. |
 | **Claude Code Terminal** | Opens a terminal running `claude` in `Documents\GitHub` (falls back to your home folder). |
-| **Model Usage (weekly)** | Per-model weekly limit % (e.g. your Fable allowance). |
-| **Burn Rate** | Tokens/hour over the last hour + estimated time until the 5h session cap ("cap in ~1h 20m" / "steady"). |
-| **Usage** | Local Claude Code token volume + estimated cost over a window (Today / Month-to-date / 7-day, set per key). Press to toggle cost ↔ tokens. Cost is an estimate (`est`). Especially useful on enterprise/Foundry accounts where the % gauges read n/a. For accurate cost, enter your exact per-model input/output $/M-token rates in the key's settings (shared across all Usage keys; blank = standard-rate default). |
+| **Model Usage (weekly)** | On a subscription: per-model weekly limit %. Otherwise: **local 7-day spend for that model family** (opus / sonnet / haiku / fable), with an optional **Budget $** ring. |
+| **Burn Rate** | Tokens/hour over the last hour. On a subscription, plus the estimated time to the 5h cap ("cap in ~1h 20m" / "steady"); otherwise your local spend over the last 5 hours. |
+| **Usage** | Local Claude Code token volume + estimated cost over a window (Today / Month-to-date / 7-day, set per key). Press to toggle cost ↔ tokens. Cost is an estimate (`est`). Especially useful on enterprise/Foundry accounts, which have no subscription percentages. For accurate cost, enter your exact per-model input/output $/M-token rates in the key's settings (shared across all Usage keys; blank = standard-rate default). |
 | **Project Terminal** | Configurable: opens Claude Code in a specific project folder (label + path in key settings). |
 | **Focus Session** | Press to cycle running sessions and bring each one's window to the front. When a session is waiting on you it takes priority, so the first press lands on the one that needs an answer. |
 | **Quick Prompt** | Configurable: opens quick chat and pastes a canned prompt (optionally presses Enter). Overwrites the clipboard. |
@@ -40,7 +40,7 @@ The sessions key shows an animated dot cycle while any session is actively worki
 - Windows 10+ or macOS 11+, Stream Deck software 6.5+ (Node.js plugin runtime)
 - [Claude Code](https://claude.com/claude-code) signed in — provides session and activity data, and the OAuth token used for the usage gauges (Windows: `~/.claude/.credentials.json`; macOS: the login Keychain, service `Claude Code-credentials`)
 - Claude Desktop (optional, for the launcher / quick-chat keys)
-- **macOS only:** the usage gauges show a live percentage only for a consumer Pro/Max subscription. On an enterprise/Foundry setup (no subscription limits) they read **n/a** — Sessions / Today / Burn Rate still work.
+- The usage gauges show a live subscription percentage only on a consumer Pro/Max account. On an enterprise/Foundry setup (no subscription limits) they switch to **local spend** for the same window — see **Enterprise / non-Anthropic Claude Code** below.
 - **macOS only:** the Quick Chat and Quick Prompt keys need Accessibility + Automation permission (see **macOS permissions** below).
 
 ## Install
@@ -108,7 +108,7 @@ app, so the key never does nothing. A session running under `screen`/`tmux`
 
 ## Enterprise / non-Anthropic Claude Code (Azure AI Foundry, Bedrock, Vertex)
 
-Claude Code can talk to Anthropic's API directly **or** run through a cloud gateway — **Azure AI Foundry** (`CLAUDE_CODE_USE_FOUNDRY`), **Amazon Bedrock**, or **Google Vertex**. Those enterprise backends bill per token and have **no consumer subscription rate limits**, so the **Session / Weekly / Model percentage gauges have nothing to report** — on macOS they show a clean **`n/a`** (on Windows, "sign in?", since there's no consumer OAuth token).
+Claude Code can talk to Anthropic's API directly **or** run through a cloud gateway — **Azure AI Foundry** (`CLAUDE_CODE_USE_FOUNDRY`), **Amazon Bedrock**, or **Google Vertex**. Those enterprise backends bill per token and have **no consumer subscription rate limits**, so there are no percentages to report — the **Session 5h**, **Weekly** and **Model Usage** keys automatically switch to **local spend** for the same window instead (`LAST 5H` / `LAST 7D`), and **Burn Rate** reports your last-5h spend in place of a cap ETA. Give any of those keys a **Budget $** and it becomes a % ring against your own target.
 
 Everything sourced from your **local** Claude Code data works the same regardless of backend:
 
@@ -116,7 +116,7 @@ Everything sourced from your **local** Claude Code data works the same regardles
 - **Today**, **Burn Rate** — local token activity
 - **Usage** — local token volume + **estimated cost** for a window; set your exact per-model `$/M`-token rates in the key's settings for accurate Foundry / Bedrock / Vertex spend
 
-So on Foundry (or any enterprise backend), skip the `%` rings and lean on **Usage** for spend and **Status / Sessions** for activity.
+Every one of those figures is **local to this machine** and cost is an **estimate**, so treat a budget ring as a spending signal, not billing truth — nothing is enforced. For accurate numbers, set your real per-model rates in a Usage key's settings.
 
 ## Notes
 
