@@ -105,6 +105,26 @@ test("INVARIANT: no input can produce a forbidden type or destination", () => {
   }
 });
 
+test("INVARIANT: rule objects never leak sibling fields", () => {
+  // A refactor of the rule-mapping step from `.map((r) => ({ toolName: r.toolName, ruleContent: r.ruleContent }))`
+  // to `.map((r) => ({...r}))` would leak extra keys. This test ensures rule objects carry only exactly
+  // the two expected keys, even when the input rule carries sibling fields like `evil: "leak"`.
+  const out = sanitizeSuggestions([{
+    type: "addRules",
+    behavior: "allow",
+    destination: "localSettings",
+    rules: [
+      { toolName: "Bash", ruleContent: "npm test", evil: "leak", extra: "field" },
+      { toolName: "Read", ruleContent: "path", nested: { object: true } },
+    ],
+  }], "Bash");
+  assert.equal(out.length, 1);
+  assert.equal(out[0].rules.length, 2);
+  for (const rule of out[0].rules) {
+    assert.deepEqual(Object.keys(rule).sort(), ["ruleContent", "toolName"]);
+  }
+});
+
 test("decisionBody: allow", () => {
   assert.deepEqual(decisionBody("allow", { toolName: "Bash", suggestions: [] }), {
     hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } },
