@@ -29,7 +29,7 @@ The usage gauges show the **same session/weekly percentages Claude Desktop and C
 | **Claude Custom** | A Claude-styled spare key that opens anything you set: app, URL, or folder. |
 | **Claude Waiting** | Dark ("all clear") until a Claude Code session is waiting on you, then shows that session's name, why (permission prompt / input needed) and a count if several are waiting. Press to jump straight to that session's window; press again to cycle the rest. |
 | **Claude Status** | Live state of one Claude Code session: **Needs approval** (blocked on a permission prompt) · **Input needed** · **Working** · **Finished** · **Idle**, with the reason or age underneath. Press to jump to that session's window. Two ways to use it: **bind it to a project** (folder name, in the key's settings) so it always tracks that project, or **leave it blank (auto)** — then a row of auto keys covers your busiest sessions, most-urgent first, ordered by key position (top-left = most urgent). Extra auto keys beyond the session count read "no session". Optional **"Press cycles through sessions"** makes a press walk the list instead of keeping the key's own slot — off by default, since Focus Session already cycles. |
-| **Claude Allow** | Dark ("all clear") until a session hits a permission prompt (up to 8 queued, oldest shown first), then lights up with the command. Press to **allow** it for that one turn — the same as answering "Yes" in the terminal. See **Approving from the deck** below for setup. |
+| **Claude Allow** | Dark ("all clear") until a session hits a permission prompt (up to 8 queued, oldest shown first), then lights up with what's pending (see **What the keys show** below). Press to **allow** it for that one turn — the same as answering "Yes" in the terminal. See **Approving from the deck** below for setup. |
 | **Claude Always Allow** | Same request, but presses "always allow" — shows the **rule** it would save (e.g. `Bash(gh pr *)`), not the command, since Claude Code's own suggestion is usually a wildcard. Reads **`ALWAYS n/a`** and refuses to press when no single safe rule is on offer (including every MCP tool, which this key always refuses) — the request is left untouched for Allow or Deny to answer instead. See **Approving from the deck** below. |
 | **Claude Deny** | Same request, presses **deny** — the same as answering "No" in the terminal. See **Approving from the deck** below for setup. |
 
@@ -62,7 +62,7 @@ The sessions key shows an animated dot cycle while any session is actively worki
 
 Three keys mirror the three options Claude Code shows in the terminal. When a session
 asks for permission, all three light up with what pressing them would do about it (Allow
-and Deny show the command, Always Allow shows the rule — see **What the keys show**
+and Deny show what's pending, Always Allow shows the rule — see **What the keys show**
 below); press one and the terminal prompt is answered for you. The terminal keeps working
 exactly as before — whichever you answer first wins, and if you ignore the deck nothing
 changes.
@@ -76,11 +76,18 @@ The URL in that snippet contains a secret unique to your install — **treat it 
 password**. Anything that can reach it can put fake prompts on your deck (it cannot
 approve anything on its own; only a key press does that).
 
-**What the keys show.** Allow and Deny show the command. **Always Allow shows the rule
-it would save** — Claude Code's suggestions are often wildcards, so approving
-`gh pr merge --admin 1234` may save `Bash(gh pr *)`. The key greys out to `ALWAYS n/a`
-when no safe rule is on offer, including for MCP tools, where a suggestion is often a
-whole-tool grant that the terminal itself refuses to offer.
+**What the keys show.** Allow and Deny show what's pending — the exact command for a
+`Bash` request, and for everything else whatever identifies it (a filename, hostname,
+search query, subagent type, or `server·tool`), shortened to 14 characters. **Always
+Allow shows the rule it would save** — Claude Code's suggestions are often wildcards, so
+approving `gh pr merge --admin 1234` may save `Bash(gh pr *)`. The key greys out to
+`ALWAYS n/a` when no safe rule is on offer, including for MCP tools, where a suggestion
+is often a whole-tool grant that the terminal itself refuses to offer.
+
+Because values are shortened to fit, two different requests can look alike at a
+glance — two files with the same name in different folders, two URLs on the same host.
+Treat the deck as a nudge to go look, not as proof of what's being approved; the
+terminal prompt is still the authoritative record.
 
 Always Allow writes to the project's `.claude/settings.local.json` (the git root),
 exactly like the terminal's option 2. Tick *"Remember for this session only"* to keep it
@@ -93,7 +100,10 @@ started with `claude -p` never prompt, so they never appear.
 
 If something else already holds the port, the keys read `port busy` and the plugin keeps
 retrying every 30 seconds — free the port and they recover on their own. If the keys read
-`auth?`, the URL in your settings no longer matches this install: copy the snippet again.
+`auth?`, this install has seen repeated requests to the wrong path — usually a stale or
+mis-pasted URL. Copying the snippet again (and restarting Claude Code) fixes the cause;
+the key itself doesn't clear instantly, though — it clears as soon as a correctly-addressed
+request arrives, or on its own a few minutes after the bad requests stop.
 
 ## Build from source
 
