@@ -108,6 +108,36 @@ export function hostAppForPid(tree, pid, maxDepth = 16) {
   return null;
 }
 
+// AppleScript that raises the Terminal window owning `tty`.
+//
+// Ordering is load-bearing, established empirically (2026-07-25): `activate`
+// MUST come first, and the window is raised with `set frontmost of w to true`.
+// The earlier version did `set index of w to 1` and then `activate` last, which
+// works only while Terminal is already frontmost — the case that never happens
+// when you press a Stream Deck key. Backgrounded, the trailing `activate`
+// restored Terminal's own last-used window and discarded the index change, so
+// pressing the key always surfaced the wrong terminal. Don't reorder these.
+export function terminalFocusScript(tty) {
+  const esc = escapeAppleScript(String(tty));
+  return [
+    "with timeout of 7 seconds",
+    'tell application "Terminal"',
+    "  activate",
+    "  repeat with w in windows",
+    "    repeat with t in tabs of w",
+    `      if (tty of t) ends with "${esc}" then`,
+    "        set selected of t to true",
+    "        set frontmost of w to true",
+    "        return",
+    "      end if",
+    "    end repeat",
+    "  end repeat",
+    "end tell",
+    'error "not found"',
+    "end timeout",
+  ];
+}
+
 // Which focus strategy an app bundle gets: exact-window for Terminal (by tty)
 // and VS Code (by window title), plain app-activation for anything else.
 export function focusStrategyForBundle(bundle) {

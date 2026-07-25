@@ -3827,6 +3827,26 @@ function hostAppForPid(tree, pid, maxDepth = 16) {
   }
   return null;
 }
+function terminalFocusScript(tty) {
+  const esc2 = escapeAppleScript(String(tty));
+  return [
+    "with timeout of 7 seconds",
+    'tell application "Terminal"',
+    "  activate",
+    "  repeat with w in windows",
+    "    repeat with t in tabs of w",
+    `      if (tty of t) ends with "${esc2}" then`,
+    "        set selected of t to true",
+    "        set frontmost of w to true",
+    "        return",
+    "      end if",
+    "    end repeat",
+    "  end repeat",
+    "end tell",
+    'error "not found"',
+    "end timeout"
+  ];
+}
 function focusStrategyForBundle(bundle) {
   if (!bundle) return null;
   const base = String(bundle).replace(/\/+$/, "").split("/").pop();
@@ -3926,32 +3946,86 @@ function aggregate(requests, startMs, overrides) {
 
 // src/status.js
 import path from "node:path";
-var isWorking = (s) => !!(s.status && s.status !== "idle");
+var QUESTION_WAITS = /* @__PURE__ */ new Set(["input needed", "dialog open"]);
+var FINISHED_MS = 6e4;
+var ACTIVITY_MS = 6e4;
+function sessionWhere(s) {
+  const e = String(s?.entrypoint ?? "");
+  if (e === "cli") return "cli";
+  if (e.includes("vscode")) return "code";
+  return "";
+}
+function transcriptPathFor(projectsDir, s) {
+  if (!s?.cwd || !s?.sessionId) return null;
+  return `${projectsDir}/${String(s.cwd).replace(/[/_]/g, "-")}/${s.sessionId}.jsonl`;
+}
+function sessionState(s, now = Date.now(), activityAt = null) {
+  const st = s?.status;
+  if (st === "waiting") {
+    const w = String(s.waitingFor ?? "").toLowerCase();
+    return QUESTION_WAITS.has(w) ? "input-needed" : "needs-approval";
+  }
+  if (st === "busy" || st === "shell") return "working";
+  if (!st) {
+    if (!activityAt) return "unknown";
+    return Math.max(0, now - activityAt) < ACTIVITY_MS ? "working" : "idle";
+  }
+  if (st === "idle") {
+    const at = s.statusUpdatedAt;
+    if (!at) return "idle";
+    return Math.max(0, now - at) < FINISHED_MS ? "finished" : "idle";
+  }
+  return "idle";
+}
+function sessionSig(sessions, now = Date.now(), activity = null) {
+  return JSON.stringify((sessions ?? []).map((s) => [s.pid, s.status ?? "", s.waitingFor ?? "", sessionState(s, now, actOf(s, activity))]));
+}
+var URGENCY = { "needs-approval": 0, "input-needed": 1, working: 2, finished: 3, idle: 4, unknown: 5 };
+var actOf = (s, activity) => activity && s?.sessionId ? activity.get(s.sessionId) ?? null : null;
+var rank = (s, now, activity) => URGENCY[sessionState(s, now, actOf(s, activity))] ?? 5;
+function blockedSessions(sessions, now = Date.now(), activity = null) {
+  return (sessions ?? []).filter((s) => rank(s, now, activity) <= URGENCY["input-needed"]).sort((a, b) => rank(a, now, activity) - rank(b, now, activity) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || (a.pid ?? 0) - (b.pid ?? 0));
+}
+function autoSlot(keys, context) {
+  const me = (keys ?? []).find((k) => k.context === context);
+  const sorted = (keys ?? []).filter((k) => (k.device ?? null) === (me?.device ?? null)).sort((a, b) => {
+    const ar = a.row ?? Infinity, br = b.row ?? Infinity;
+    if (ar !== br) return ar - br;
+    const ac = a.col ?? Infinity, bc = b.col ?? Infinity;
+    if (ac !== bc) return ac - bc;
+    return String(a.context).localeCompare(String(b.context));
+  });
+  return Math.max(0, sorted.findIndex((k) => k.context === context));
+}
 function sessionProject(s) {
   return path.basename(s.cwd ?? "").toLowerCase();
 }
-function byDisplayOrder(a, b) {
-  if (isWorking(a) !== isWorking(b)) return isWorking(a) ? -1 : 1;
+function byDisplayOrder(a, b, now, activity) {
+  const ra = rank(a, now, activity), rb = rank(b, now, activity);
+  if (ra !== rb) return ra - rb;
   if ((b.updatedAt ?? 0) !== (a.updatedAt ?? 0)) return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
   return (a.pid ?? 0) - (b.pid ?? 0);
 }
-function resolveStatusKey(sessions, project, autoIdx = 0) {
+function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(), activity = null) {
   const explicit = !!(project && String(project).trim());
   const want = explicit ? String(project).trim().toLowerCase() : null;
-  const list = (sessions ?? []).filter((s) => explicit ? sessionProject(s) === want : true).sort(byDisplayOrder).map((s) => ({
+  const list = (sessions ?? []).filter((s) => explicit ? sessionProject(s) === want : true).sort((a, b) => byDisplayOrder(a, b, now, activity)).map((s) => ({
     name: path.basename(s.cwd ?? "") || "claude",
-    state: isWorking(s) ? "working" : "idle",
+    state: sessionState(s, now, actOf(s, activity)),
+    waitingFor: s.status === "waiting" ? String(s.waitingFor ?? "permission prompt") : "",
+    // null when the session reports no timestamp at all (VS Code) — otherwise
+    // `now - 0` renders as an absurd age like "495817h idle".
+    statusAge: s.statusUpdatedAt ?? s.updatedAt ? Math.max(0, now - (s.statusUpdatedAt ?? s.updatedAt)) : null,
     cwd: s.cwd ?? "",
-    sessionId: s.sessionId ?? null
+    sessionId: s.sessionId ?? null,
+    pid: s.pid ?? null,
+    where: sessionWhere(s)
   }));
   return { list, index: explicit ? 0 : autoIdx, count: list.length };
 }
 function statusEntry(resolved, cycleIdx = null) {
   const i = cycleIdx != null ? cycleIdx : resolved.index;
-  return resolved.list[i] ?? { name: "", state: "none", cwd: "", sessionId: null };
-}
-function autoOrdinal(autoContexts, context) {
-  return Math.max(0, (autoContexts ?? []).slice().sort().indexOf(context));
+  return resolved.list[i] ?? { name: "", state: "none", waitingFor: "", statusAge: 0, cwd: "", sessionId: null, pid: null };
 }
 
 // src/plugin.js
@@ -4000,8 +4074,10 @@ var C = {
   warn: "#fbbf24",
   bad: "#f87171",
   track: "#3a3745",
-  info: "#60a5fa"
+  info: "#60a5fa",
   // status: working (blue)
+  ask: "#a855f7"
+  // status: input needed (purple)
 };
 var pctColor = (p) => p == null ? C.dim : p >= 85 ? C.bad : p >= 60 ? C.warn : C.ok;
 var esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -4086,18 +4162,33 @@ function labelKey(title, label, sub, accent = C.accent) {
     ${lineSvg}
     <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub ?? "")}</text>`);
 }
-function statusKey(name, st, count, detail = "") {
-  const label = { working: "Working", idle: "Idle", none: "no session" }[st] ?? "";
-  const col = st === "working" ? C.info : C.dim;
+var STATUS_LOOK = {
+  "needs-approval": { label: "Needs approval", col: C.warn, band: true },
+  "input-needed": { label: "Input needed", col: C.ask, band: true },
+  working: { label: "Working", col: C.info, band: false },
+  finished: { label: "Finished", col: C.ok, band: false },
+  idle: { label: "Idle", col: C.dim, band: false },
+  none: { label: "no session", col: C.dim, band: false },
+  quiet: { label: "all clear", col: C.dim, band: false },
+  // Waiting key, nothing pending
+  // A session that reports no status (VS Code extension) and whose transcript
+  // we couldn't stat. Saying "no status" beats inventing "Idle".
+  unknown: { label: "no status", col: C.dim, band: false }
+};
+function statusKey(name, st, count, detail = "", tag = "") {
+  const look = STATUS_LOOK[st] ?? STATUS_LOOK.none;
+  const { label, col, band } = look;
   const shown = name || "CLAUDE";
-  const border = st === "working" ? `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.info}" stroke-width="4" opacity="0.9"/>` : `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.track}" stroke-width="3"/>`;
-  const badge = count > 1 ? `<circle cx="120" cy="24" r="13" fill="${C.panel}" stroke="${C.track}" stroke-width="1"/><text x="120" y="29" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${count}</text>` : "";
+  const border = band ? `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${col}" stroke-width="6"/>` : st === "working" ? `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.info}" stroke-width="4" opacity="0.9"/>` : `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.track}" stroke-width="3"/>`;
+  const bandSvg = band ? `<rect x="6" y="84" width="132" height="26" rx="7" fill="${col}"/>` : "";
+  const badge = count > 1 ? `<circle cx="120" cy="24" r="13" fill="${C.panel}" stroke="${C.track}" stroke-width="1"/><text x="120" y="29" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${count}</text>` : tag ? `<text x="134" y="29" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="600" fill="${C.dim}">${esc(tag)}</text>` : "";
   const detailSvg = detail ? `<text x="72" y="126" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" fill="${C.dim}">${esc(detail)}</text>` : "";
   return svgWrap(`
     ${border}
     ${badge}
+    ${bandSvg}
     <text x="72" y="70" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="26" font-weight="700" fill="${st === "none" ? C.dim : C.text}">${esc(String(shown).slice(0, 11))}</text>
-    <text x="72" y="100" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="18" font-weight="600" fill="${col}">${esc(label)}</text>
+    <text x="72" y="${band ? 103 : 100}" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${label.length > 11 ? 15 : label.length > 9 ? 16 : 18}" font-weight="700" fill="${band ? C.bg : col}">${esc(label)}</text>
     ${detailSvg}`);
 }
 function fmtReset(iso) {
@@ -4121,6 +4212,8 @@ function fmtAgo(ts) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 var state = {
+  activity: /* @__PURE__ */ new Map(),
+  // sessionId -> transcript mtimeMs (status-less sessions only)
   usage: null,
   // { fiveHour, weekly, weeklyOpus } each { pct, resetsAt }
   usageErr: null,
@@ -4244,9 +4337,23 @@ async function pollSessions() {
       }
     }
     out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-    const changed = JSON.stringify(out.map((s) => [s.pid, s.status])) !== JSON.stringify(state.sessions.map((s) => [s.pid, s.status]));
+    for (const s of out) {
+      if (s.status) continue;
+      const tp = transcriptPathFor(PROJECTS_DIR, s);
+      if (!tp) continue;
+      try {
+        state.activity.set(s.sessionId, (await fsp.stat(tp)).mtimeMs);
+      } catch {
+      }
+    }
+    for (const id of [...state.activity.keys()]) {
+      if (!out.some((s) => s.sessionId === id)) state.activity.delete(id);
+    }
+    const nextSig = sessionSig(out, Date.now(), state.activity);
+    const changed = nextSig !== lastSessionSig;
+    lastSessionSig = nextSig;
     state.sessions = out;
-    if (changed) renderAll(["sessions", "focus-session", "approver-status"]);
+    if (changed) renderAll(["sessions", "focus-session", "approver-status", "approver-waiting"]);
   } catch (e) {
     log("sessions poll failed:", String(e));
   }
@@ -4463,6 +4570,7 @@ var focusIdx = /* @__PURE__ */ new Map();
 var usageView = /* @__PURE__ */ new Map();
 var ws = null;
 var animPhase = 0;
+var lastSessionSig = "";
 function send(obj) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
@@ -4500,8 +4608,15 @@ function render(context, kind) {
       return setImage(context, labelKey("PROJECT", label || "configure", s.path ? "" : "set folder in settings"));
     }
     case "focus-session": {
-      const i = focusIdx.get(context);
-      const s = i != null && state.sessions.length ? state.sessions[i % state.sessions.length] : null;
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
+      const pool = blocked.length ? blocked : state.sessions;
+      const fi = focusIdx.get(context);
+      const poolSig = pool.map((x) => x.pid).join(",");
+      const s = pool.length ? fi && fi.sig === poolSig ? pool[fi.i % pool.length] : pool[0] : null;
+      if (blocked.length) {
+        const b = s ?? blocked[0];
+        return setImage(context, labelKey("FOCUS", b.name ?? "session", String(b.waitingFor ?? "needs you"), C.warn));
+      }
       return setImage(context, labelKey("FOCUS", s ? s.name : `${state.sessions.length} sessions`, s ? s.status : "press to cycle", C.ok));
     }
     case "quick-prompt": {
@@ -4517,15 +4632,20 @@ function render(context, kind) {
       const n = state.sessions.length;
       if (cy && cy.idx >= 0 && state.sessions[cy.idx]) {
         const s = state.sessions[cy.idx];
-        const status = s.status ?? "?";
+        const st = sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null);
+        const stLabel = { "needs-approval": "needs you", "input-needed": "input needed", working: "working", finished: "done", idle: "idle" }[st] ?? st;
+        const stColor = st === "needs-approval" ? C.warn : st === "input-needed" ? C.ask : st === "working" ? C.ok : C.dim;
         return setImage(context, linesKey(`${cy.idx + 1}/${n}`, [
           { text: (s.name ?? "session").slice(0, 11), big: false, color: C.text },
-          { text: status, color: status === "idle" ? C.dim : C.ok },
+          { text: stLabel, color: stColor },
           { text: fmtAgo(s.startedAt ?? Date.now()) + " old", color: C.dim }
         ]));
       }
-      const busy = state.sessions.filter((s) => s.status && s.status !== "idle").length;
-      return setImage(context, bigCountKey("CLAUDE CODE", n, busy > 0 ? `${busy} working` : n > 0 ? "all idle" : "none running", busy > 0 ? C.ok : C.dim, busy > 0 ? animPhase : null));
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity).length;
+      const busy = state.sessions.filter((s) => sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) === "working").length;
+      const sub = blocked > 0 ? `${blocked} needs you` : busy > 0 ? `${busy} working` : n > 0 ? "all idle" : "none running";
+      const subCol = blocked > 0 ? C.warn : busy > 0 ? C.ok : C.dim;
+      return setImage(context, bigCountKey("CLAUDE CODE", n, sub, subCol, busy > 0 ? animPhase : null));
     }
     case "today": {
       const t = state.today;
@@ -4548,7 +4668,7 @@ function render(context, kind) {
     }
     case "approver-status": {
       const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context));
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoSlotFor(context), Date.now(), state.activity);
       const cy = cycle.get(context);
       const cycling = !!(cy && cy.idx >= 0);
       const entry = statusEntry(resolved, cycling ? cy.idx : null);
@@ -4558,17 +4678,38 @@ function render(context, kind) {
       if (cycling && resolved.count > 1) {
         const parent = entry.cwd ? path2.basename(path2.dirname(entry.cwd)) : "";
         detail = `${cy.idx + 1}/${resolved.count}${parent ? " \xB7 " + parent : ""}`;
+      } else if (entry.waitingFor) {
+        detail = entry.waitingFor;
+      } else if (entry.state === "finished") {
+        detail = "just now";
+      } else if (entry.state === "idle" && entry.statusAge != null) {
+        detail = fmtAgo(Date.now() - entry.statusAge) + " idle";
       }
-      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail));
+      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where));
+    }
+    case "approver-waiting": {
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
+      if (!blocked.length) {
+        const n = state.sessions.length;
+        return setImage(context, statusKey("WAITING", "quiet", 1, n ? `${n} session${n > 1 ? "s" : ""} ok` : "no sessions"));
+      }
+      const cy = cycle.get(context);
+      const i = cy && cy.idx >= 0 ? cy.idx % blocked.length : 0;
+      const b = blocked[i];
+      const st = sessionState(b, Date.now(), state.activity.get(b.sessionId) ?? null);
+      return setImage(context, statusKey(path2.basename(b.cwd ?? "") || "claude", st, blocked.length, String(b.waitingFor ?? "needs you"), sessionWhere(b)));
     }
   }
 }
 function renderAll(kinds) {
   for (const [context, v] of views) if (kinds.includes(v.kind)) render(context, v.kind);
 }
-function autoOrdinalFor(context) {
-  const autos = [...views.entries()].filter(([, v]) => v.kind === "approver-status" && !(v.settings?.project && v.settings.project.trim())).map(([ctx]) => ctx);
-  return autoOrdinal(autos, context);
+function autoSlotFor(context) {
+  const keys = [...views.entries()].filter(([, v]) => v.kind === "approver-status" && !(v.settings?.project && v.settings.project.trim())).map(([ctx, v]) => ({ context: ctx, device: v.device, row: v.row, col: v.col }));
+  return autoSlot(keys, context);
+}
+function sessionByPid(pid) {
+  return state.sessions.find((s) => s.pid === pid) ?? null;
 }
 var OSA_TIMEOUT_MS = 8e3;
 function spawnDetached(cmd, args) {
@@ -4753,29 +4894,20 @@ var macPlatform = {
       if (!bundle) throw new Error("no host app for pid " + pid);
       const activateApp = () => openMac([bundle]);
       const strat = focusStrategyForBundle(bundle);
+      const fallback = (why) => (e) => {
+        log(`focusWindow: ${why} for pid ${pid} (${bundle}) -> activating app instead:`, String(e?.message ?? e));
+        return activateApp();
+      };
       if (strat === "terminal") {
         return ps(["-o", "tty=", "-p", String(pid)]).then((t) => {
           const tty = t.trim();
-          if (!tty || tty === "??") return activateApp();
-          const esc2 = escapeAppleScript(tty);
-          return runOsa([
-            "with timeout of 7 seconds",
-            'tell application "Terminal"',
-            "  repeat with w in windows",
-            "    repeat with t in tabs of w",
-            `      if (tty of t) ends with "${esc2}" then`,
-            "        set selected of t to true",
-            "        set index of w to 1",
-            "        activate",
-            "        return",
-            "      end if",
-            "    end repeat",
-            "  end repeat",
-            "end tell",
-            'error "not found"',
-            "end timeout"
-          ]).catch(activateApp);
-        }).catch(activateApp);
+          if (!tty || tty === "??") {
+            log(`focusWindow: no tty for pid ${pid} -> activating app instead`);
+            return activateApp();
+          }
+          log(`focusWindow: terminal strategy, pid ${pid}, tty ${tty}`);
+          return runOsa(terminalFocusScript(tty)).catch(fallback("terminal tty match failed"));
+        }).catch(fallback("tty lookup failed"));
       }
       if (strat === "vscode") {
         const base = path2.basename(s.cwd ?? "");
@@ -4798,7 +4930,7 @@ var macPlatform = {
           "  end tell",
           "end tell",
           "end timeout"
-        ]).catch(activateApp);
+        ]).catch(fallback("vscode window match failed"));
       }
       return activateApp();
     });
@@ -4828,6 +4960,9 @@ var macPlatform = {
 var platform = IS_MAC ? macPlatform : winPlatform;
 function act(context, p) {
   p.then(() => showOk(context)).catch(() => showAlert(context));
+}
+function actQuiet(context, p) {
+  p.catch(() => showAlert(context));
 }
 function onKeyDown(context, kind) {
   switch (kind) {
@@ -4863,11 +4998,15 @@ function onKeyDown(context, kind) {
       return act(context, platform.openTerminal(s.path));
     }
     case "focus-session": {
-      const n = state.sessions.length;
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
+      const pool = blocked.length ? blocked : state.sessions;
+      const n = pool.length;
       if (!n) return showAlert(context);
-      const i = ((focusIdx.get(context) ?? -1) + 1) % n;
-      focusIdx.set(context, i);
-      act(context, platform.focusWindow(state.sessions[i]));
+      const poolSig = pool.map((s) => s.pid).join(",");
+      const prev = focusIdx.get(context);
+      const i = prev?.sig === poolSig ? (prev.i + 1) % n : 0;
+      focusIdx.set(context, { i, sig: poolSig });
+      actQuiet(context, platform.focusWindow(pool[i]));
       return render(context, "focus-session");
     }
     case "quick-prompt": {
@@ -4897,17 +5036,37 @@ function onKeyDown(context, kind) {
     }
     case "approver-status": {
       const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoOrdinalFor(context));
-      if (resolved.count <= 1) return showOk(context);
-      const cy = cycle.get(context) ?? { idx: resolved.index, timer: null };
-      cy.idx = (cy.idx + 1) % resolved.count;
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoSlotFor(context), Date.now(), state.activity);
+      if (!resolved.count) return showAlert(context);
+      let idx = resolved.index;
+      if (resolved.count > 1) {
+        const cy = cycle.get(context) ?? { idx: resolved.index - 1, timer: null };
+        cy.idx = (cy.idx + 1) % resolved.count;
+        if (cy.timer) clearTimeout(cy.timer);
+        cy.timer = setTimeout(() => {
+          cycle.set(context, { idx: -1, timer: null });
+          render(context, "approver-status");
+        }, 4e3);
+        cycle.set(context, cy);
+        idx = cy.idx;
+      }
+      const entry = statusEntry(resolved, resolved.count > 1 ? idx : null);
+      render(context, "approver-status");
+      return actQuiet(context, platform.focusWindow(sessionByPid(entry.pid)));
+    }
+    case "approver-waiting": {
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
+      if (!blocked.length) return showAlert(context);
+      const cy = cycle.get(context) ?? { idx: -1, timer: null };
+      cy.idx = (cy.idx + 1) % blocked.length;
       if (cy.timer) clearTimeout(cy.timer);
       cy.timer = setTimeout(() => {
         cycle.set(context, { idx: -1, timer: null });
-        render(context, "approver-status");
+        render(context, "approver-waiting");
       }, 4e3);
       cycle.set(context, cy);
-      return render(context, "approver-status");
+      render(context, "approver-waiting");
+      return actQuiet(context, platform.focusWindow(blocked[cy.idx]));
     }
   }
 }
@@ -4918,11 +5077,13 @@ if (process.argv.includes("--selftest")) {
     log("selftest usage:", state.usage ? JSON.stringify(state.usage) : `ERROR: ${state.usageErr}`);
     await pollSessions();
     log("selftest sessions:", state.sessions.map((s) => `${s.name}[${s.status}]`).join(", ") || "(none)");
-    log("selftest status (auto k0):", JSON.stringify(statusEntry(resolveStatusKey(state.sessions, "", 0))));
+    log("selftest states:", state.sessions.map((s) => `${s.name}=${sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null)}${s.waitingFor ? "(" + s.waitingFor + ")" : ""}`).join(", ") || "(none)");
+    log("selftest blocked:", blockedSessions(state.sessions, Date.now(), state.activity).map((s) => s.name).join(", ") || "(none)");
+    log("selftest status (auto k0):", JSON.stringify(statusEntry(resolveStatusKey(state.sessions, "", 0, Date.now(), state.activity))));
     const demo0 = state.sessions[0];
     if (demo0) {
       const proj = path2.basename(demo0.cwd ?? "");
-      const r = resolveStatusKey(state.sessions, proj, 0);
+      const r = resolveStatusKey(state.sessions, proj, 0, Date.now(), state.activity);
       log(`selftest status (explicit ${proj}) count=${r.count}:`, JSON.stringify(statusEntry(r)));
     }
     await pollToday();
@@ -4963,7 +5124,15 @@ if (process.argv.includes("--selftest")) {
     }
     const { event, context, action } = msg;
     if (event === "willAppear" && action) {
-      views.set(context, { kind: kindOf(action), settings: msg.payload?.settings ?? {} });
+      views.set(context, {
+        kind: kindOf(action),
+        settings: msg.payload?.settings ?? {},
+        // Device + physical position: used to give several auto Status keys a
+        // stable slot, numbered per device (two Stream Decks are live at once).
+        device: msg.device ?? null,
+        row: msg.payload?.coordinates?.row ?? null,
+        col: msg.payload?.coordinates?.column ?? null
+      });
       setTitle(context);
       render(context, kindOf(action));
       if (kindOf(action) === "usage-meter") pollUsageMeter();
@@ -5004,7 +5173,7 @@ if (process.argv.includes("--selftest")) {
   setInterval(() => {
     animPhase = (animPhase + 1) % 3;
     const kinds = [];
-    if (state.sessions.some((s) => s.status && s.status !== "idle")) kinds.push("sessions");
+    if (state.sessions.some((s) => sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) === "working")) kinds.push("sessions");
     if (state.usage?.fiveHour?.pct >= 90) kinds.push("usage-session");
     if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
     if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");
@@ -5012,5 +5181,5 @@ if (process.argv.includes("--selftest")) {
     const expired = [state.usage?.fiveHour, state.usage?.weekly].some((b) => b?.resetsAt && Date.now() - new Date(b.resetsAt).getTime() > 5e3);
     if (expired && !state.usageErr && Date.now() - lastUsageAttempt > 3e4) pollUsage();
   }, 600);
-  setInterval(() => renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate"]), 3e4);
+  setInterval(() => renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate", "approver-status", "approver-waiting", "focus-session"]), 3e4);
 }

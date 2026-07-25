@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, outermostAppBundle, parsePsTree, hostAppForPid, focusStrategyForBundle } from "../src/osa.js";
+import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, outermostAppBundle, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript } from "../src/osa.js";
 
 test("escapeAppleScript leaves plain text alone", () => {
   assert.equal(escapeAppleScript("hello world"), "hello world");
@@ -173,4 +173,26 @@ test("focusStrategyForBundle maps known apps", () => {
   assert.equal(focusStrategyForBundle("/Applications/iTerm.app"), "app");
   assert.equal(focusStrategyForBundle("/Applications/Terminal.app/"), "terminal"); // trailing slash tolerated
   assert.equal(focusStrategyForBundle(null), null);
+});
+
+// Regression guard for the "wrong terminal comes forward" bug (2026-07-25):
+// `activate` must precede the window raise, and the raise must use
+// `set frontmost of w to true` — NOT `set index of w to 1` followed by a
+// trailing `activate`, which silently targets the last-used window whenever
+// Terminal is in the background (i.e. every Stream Deck key press).
+test("terminalFocusScript activates first and raises via frontmost", () => {
+  const s = terminalFocusScript("ttys002");
+  const joined = s.join("\n");
+  const iActivate = s.findIndex((l) => l.trim() === "activate");
+  const iRaise = s.findIndex((l) => l.includes("set frontmost of w to true"));
+  assert.ok(iActivate >= 0, "must activate the app");
+  assert.ok(iRaise >= 0, "must raise the matched window via frontmost");
+  assert.ok(iActivate < iRaise, "activate must come BEFORE the window raise");
+  assert.ok(!joined.includes("set index of w to 1"), "must not use the index+activate pattern");
+  assert.match(joined, /ends with "ttys002"/);
+  assert.equal(s.filter((l) => l.trim() === "activate").length, 1, "exactly one activate");
+});
+
+test("terminalFocusScript escapes the tty into the script", () => {
+  assert.match(terminalFocusScript('x"y').join("\n"), /ends with "x\\"y"/);
 });
