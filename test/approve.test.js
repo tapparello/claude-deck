@@ -204,7 +204,12 @@ test("describeRequest collapses whitespace and control chars in EVERY branch", (
   assert.equal(describeRequest(req({ toolName: "WebSearch", toolInput: { query: "a\nb" } })).target, "a b");
   // hyphens must SURVIVE - `claude-deck` and `--admin` are not whitespace
   assert.equal(describeRequest(req({ cwd: "/a/claude-deck" })).name, "claude-deck");
-  assert.equal(describeRequest(req({ toolName: "Task", toolInput: { subagent_type: "ab" } })).target, "a b");
+  assert.equal(describeRequest(req({ toolName: "Task", toolInput: { subagent_type: "a" + String.fromCharCode(1) + "b" } })).target, "a b");
+});
+
+test("describeRequest preserves hyphens in names and targets", () => {
+  assert.equal(describeRequest(req({ cwd: "/a/claude-deck" })).name, "claude-deck");
+  assert.equal(describeRequest(req({ toolName: "Bash", toolInput: { command: "x --flag" } })).target, "x --flag");
 });
 
 test("describeRequest truncates the target with an ellipsis", () => {
