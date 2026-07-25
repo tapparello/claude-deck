@@ -353,6 +353,27 @@ function scheduleResetPoll() {
   resetTimer = setTimeout(pollUsage, Math.min(...deltas) + 8000);
 }
 
+// The models a Model key can rotate through: subscription buckets, or the local
+// per-family split. One shape for both so the render/press paths agree.
+function modelList(mode) {
+  if (mode === "local") return state.usageMeterModels ?? [];
+  return state.usage?.models ?? [];
+}
+// Index this key is showing: an explicit press wins, else the configured model
+// (matched by family, since a name saved from API days won't equal "opus"), else
+// the first (priciest / highest) entry.
+function modelListIndex(context, list, want, mode) {
+  const pressed = modelIdx.get(context);
+  if (pressed != null && list.length) return pressed % list.length;
+  if (!want || !list.length) return 0;
+  const w = String(want).toLowerCase();
+  const byName = list.findIndex((e) => String(e.name ?? e.model).toLowerCase() === w);
+  if (byName >= 0) return byName;
+  const fam = familyOf(w) ?? w;
+  const byFam = list.findIndex((e) => String(e.model ?? e.name).toLowerCase() === fam);
+  return byFam >= 0 ? byFam : 0;
+}
+
 // Which local window each gauge key needs when it falls back.
 const GAUGE_WINDOW = { "usage-session": "5h", "usage-weekly": "7day", "usage-model": "7day" };
 
@@ -618,6 +639,7 @@ const views = new Map(); // context -> { kind, settings }
 const cycle = new Map(); // context -> { idx, timer }
 const focusIdx = new Map(); // context -> { i, sig } (sig = the pool it indexes)
 const usageView = new Map(); // context -> "cost" | "tokens" (Usage key toggle)
+const modelIdx = new Map(); // context -> index into the model list (Model key: press to rotate)
 let ws = null;
 let animPhase = 0;
 let lastSessionSig = ""; // previous tick's session signature (see pollSessions)
@@ -627,7 +649,6 @@ function send(obj) {
 }
 const setImage = (context, image) => send({ event: "setImage", context, payload: { image, target: 0 } });
 const setTitle = (context) => send({ event: "setTitle", context, payload: { title: "", target: 0 } });
-const showOk = (context) => send({ event: "showOk", context });
 const showAlert = (context) => send({ event: "showAlert", context });
 
 const kindOf = (action) => action.replace("dev.tapparello.claude-deck.", "");
@@ -655,25 +676,20 @@ function render(context, kind) {
     }
     case "usage-model": {
       const mmode = gaugeMode("usage-model");
-      if (mmode === "local") {
-        const list = state.usageMeterModels ?? [];
-        const want = String(views.get(context)?.settings?.model ?? "").toLowerCase();
-        // A model saved from API days ("Opus") won't equal a local family
-        // ("opus"), so match on family and fall back to the priciest.
-        const pick = list.find((e) => e.model === (familyOf(want) ?? want)) ?? list[0];
-        const head = (pick?.model ?? want ?? "MODEL").toUpperCase().slice(0, 8) + " 7D";
-        if (!list.length) return setImage(context, usageMeterKey(head, "--", "no data yet", true));
-        if (!pick) return setImage(context, usageMeterKey(head, "--", "no local data", true));
-        return setImage(context, localGauge(head, pick, views.get(context)?.settings?.budget));
-      }
-      if (mmode !== "subscription") {
+      if (mmode !== "subscription" && mmode !== "local") {
         return setImage(context, gaugeKey("MODEL 7D", null, mmode === "throttled" ? "throttled" : mmode === "error" ? "sign in?" : "no data"));
       }
-      const models = state.usage?.models ?? [];
+      const list = modelList(mmode);
       const want = views.get(context)?.settings?.model;
-      const m = models.find((x) => x.name === want) ?? models[0];
-      const name = (m?.name ?? want ?? "MODEL").toUpperCase().slice(0, 8);
-      return setImage(context, gaugeKey(`${name} 7D`, m?.pct ?? null, m?.resetsAt ? fmtReset(m.resetsAt) : ((IS_MAC && state.usageErr?.includes("no OAuth token")) ? "n/a" : "no data"), m?.pct >= 90 ? animPhase : null));
+      const i = modelListIndex(context, list, want, mmode);
+      const pick = list[i];
+      const head = ((pick?.name ?? pick?.model ?? want ?? "MODEL") + "").toUpperCase().slice(0, 8) + " 7D";
+      const more = list.length > 1 ? ` ${i + 1}/${list.length}` : "";
+      if (!pick) return setImage(context, usageMeterKey(head, "--", mmode === "local" ? "no data yet" : "no data", true));
+      if (mmode === "local") {
+        return setImage(context, localGauge(head + more, pick, views.get(context)?.settings?.budget));
+      }
+      return setImage(context, gaugeKey(head + more, pick.pct ?? null, pick.resetsAt ? fmtReset(pick.resetsAt) : "no data", pick.pct >= 90 ? animPhase : null));
     }
     case "burn-rate":
       return setImage(context, burnKey(state.burn?.tokensHour ?? null, sessionEta()));
@@ -825,8 +841,7 @@ const OSA_TIMEOUT_MS = 8000;
 const PULSE_MS = 120_000;
 
 // Resolve on successful spawn, reject if the process can't be launched.
-// Matches the old optimistic "showOk right after spawn" behavior, but now
-// surfaces spawn failures as a single showAlert (see spec §5.8).
+// Resolves once the child is spawned; a spawn failure surfaces as showAlert.
 function spawnDetached(cmd, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
@@ -1078,16 +1093,17 @@ const macPlatform = {
 const platform = IS_MAC ? macPlatform : winPlatform;
 
 // Uniform Stream Deck feedback: OK on resolve, Alert on reject.
+// Nothing here needs a thumbs-up: either the world visibly changed (an app came
+// forward, a terminal opened) or the key itself re-renders. The checkmark only
+// covered the key image. Failures still alert, which IS information.
 function act(context, p) {
-  p.then(() => showOk(context)).catch(() => showAlert(context));
+  p.catch(() => showAlert(context));
 }
 
 // Same, but silent on success: for "take me to that window" presses, the window
 // coming forward IS the feedback, and the checkmark overlay just hides the key's
 // state (which is the thing you pressed it to act on). Failures still alert.
-function actQuiet(context, p) {
-  p.catch(() => showAlert(context));
-}
+
 
 // ---------- key actions ----------
 function onKeyDown(context, kind) {
@@ -1096,10 +1112,10 @@ function onKeyDown(context, kind) {
     case "usage-weekly":
       if (gaugeMode(kind) === "local") pollUsageMeter();
       else if (Date.now() - lastUsageAttempt > 30_000) pollUsage();
-      return showOk(context);
+      return;
     case "today":
       pollToday();
-      return showOk(context);
+      return;
     case "sessions": {
       const n = state.sessions.length;
       if (n === 0) return showAlert(context);
@@ -1110,13 +1126,21 @@ function onKeyDown(context, kind) {
       cycle.set(context, cy);
       return render(context, "sessions");
     }
-    case "usage-model":
-      if (gaugeMode("usage-model") === "local") pollUsageMeter();
+    case "usage-model": {
+      // Press rotates through the models rather than nudging a refresh — the
+      // poller already keeps them current, and one key can then cover them all.
+      const mode = gaugeMode("usage-model");
+      const list = modelList(mode);
+      if (list.length > 1) {
+        const cur = modelListIndex(context, list, views.get(context)?.settings?.model, mode);
+        modelIdx.set(context, (cur + 1) % list.length);
+      } else if (mode === "local") pollUsageMeter();
       else if (Date.now() - lastUsageAttempt > 30_000) pollUsage();
-      return showOk(context);
+      return render(context, "usage-model");
+    }
     case "burn-rate":
       pollBurn();
-      return showOk(context);
+      return;
     case "project": {
       const s = views.get(context)?.settings ?? {};
       if (!s.path) return showAlert(context);
@@ -1135,7 +1159,7 @@ function onKeyDown(context, kind) {
       const prev = focusIdx.get(context);
       const i = prev?.sig === poolSig ? (prev.i + 1) % n : 0;
       focusIdx.set(context, { i, sig: poolSig });
-      actQuiet(context, platform.focusWindow(pool[i]));
+      act(context, platform.focusWindow(pool[i]));
       return render(context, "focus-session");
     }
     case "quick-prompt": {
@@ -1181,7 +1205,7 @@ function onKeyDown(context, kind) {
       }
       const entry = statusEntry(resolved, cycling ? idx : null);
       render(context, "approver-status");
-      return actQuiet(context, platform.focusWindow(sessionByPid(entry.pid)));
+      return act(context, platform.focusWindow(sessionByPid(entry.pid)));
     }
     case "approver-waiting": {
       // Dedicated "who needs me" key: press focuses the front blocked session,
@@ -1194,7 +1218,7 @@ function onKeyDown(context, kind) {
       cy.timer = setTimeout(() => { cycle.set(context, { idx: -1, timer: null }); render(context, "approver-waiting"); }, 4000);
       cycle.set(context, cy);
       render(context, "approver-waiting");
-      return actQuiet(context, platform.focusWindow(blocked[cy.idx]));
+      return act(context, platform.focusWindow(blocked[cy.idx]));
     }
   }
 }
@@ -1265,6 +1289,7 @@ if (process.argv.includes("--selftest")) {
       cycle.delete(context);
       focusIdx.delete(context);
       usageView.delete(context);
+      modelIdx.delete(context);
     } else if (event === "didReceiveSettings" && action) {
       const v = views.get(context);
       if (v) { v.settings = msg.payload?.settings ?? {}; render(context, v.kind); if (v.kind === "usage-meter" || GAUGE_WINDOW[v.kind]) pollUsageMeter(); }

@@ -18,7 +18,7 @@ The usage gauges show the **same session/weekly percentages Claude Desktop and C
 | **Quick Chat** | Fires Claude's global quick-chat hotkey (Ctrl+Alt+Space). |
 | **Open claude.ai** | New chat in your browser. |
 | **Claude Code Terminal** | Opens a terminal running `claude` in `Documents\GitHub` (falls back to your home folder). |
-| **Model Usage (weekly)** | On a subscription: per-model weekly limit %. Otherwise: **local 7-day spend for that model family** (opus / sonnet / haiku / fable), with an optional **Budget $** ring. |
+| **Model Usage (weekly)** | On a subscription: per-model weekly limit %. Otherwise: **local 7-day spend for that model family** (opus / sonnet / haiku / fable), with an optional **Budget $** ring. **Press to rotate through the models** (`2/3` shows where you are); the settings field just picks the starting one. |
 | **Burn Rate** | Tokens/hour over the last hour. On a subscription, plus the estimated time to the 5h cap ("cap in ~1h 20m" / "steady"); otherwise your local spend over the last 5 hours. |
 | **Usage** | Local Claude Code token volume + estimated cost over a window (Today / Month-to-date / 7-day, set per key). Press to toggle cost ↔ tokens. Cost is an estimate (`est`). Especially useful on enterprise/Foundry accounts, which have no subscription percentages. For accurate cost, enter your exact per-model input/output $/M-token rates in the key's settings (shared across all Usage keys; blank = standard-rate default). |
 | **Project Terminal** | Configurable: opens Claude Code in a specific project folder (label + path in key settings). |

@@ -4386,6 +4386,21 @@ function scheduleResetPoll() {
   clearTimeout(resetTimer);
   resetTimer = setTimeout(pollUsage, Math.min(...deltas) + 8e3);
 }
+function modelList(mode) {
+  if (mode === "local") return state.usageMeterModels ?? [];
+  return state.usage?.models ?? [];
+}
+function modelListIndex(context, list, want, mode) {
+  const pressed = modelIdx.get(context);
+  if (pressed != null && list.length) return pressed % list.length;
+  if (!want || !list.length) return 0;
+  const w = String(want).toLowerCase();
+  const byName = list.findIndex((e) => String(e.name ?? e.model).toLowerCase() === w);
+  if (byName >= 0) return byName;
+  const fam = familyOf(w) ?? w;
+  const byFam = list.findIndex((e) => String(e.model ?? e.name).toLowerCase() === fam);
+  return byFam >= 0 ? byFam : 0;
+}
 var GAUGE_WINDOW = { "usage-session": "5h", "usage-weekly": "7day", "usage-model": "7day" };
 function gaugeMode(kind) {
   const win = GAUGE_WINDOW[kind];
@@ -4653,6 +4668,7 @@ var views = /* @__PURE__ */ new Map();
 var cycle = /* @__PURE__ */ new Map();
 var focusIdx = /* @__PURE__ */ new Map();
 var usageView = /* @__PURE__ */ new Map();
+var modelIdx = /* @__PURE__ */ new Map();
 var ws = null;
 var animPhase = 0;
 var lastSessionSig = "";
@@ -4661,7 +4677,6 @@ function send(obj) {
 }
 var setImage = (context, image) => send({ event: "setImage", context, payload: { image, target: 0 } });
 var setTitle = (context) => send({ event: "setTitle", context, payload: { title: "", target: 0 } });
-var showOk = (context) => send({ event: "showOk", context });
 var showAlert = (context) => send({ event: "showAlert", context });
 var kindOf = (action) => action.replace("dev.tapparello.claude-deck.", "");
 function render(context, kind) {
@@ -4684,23 +4699,20 @@ function render(context, kind) {
     }
     case "usage-model": {
       const mmode = gaugeMode("usage-model");
-      if (mmode === "local") {
-        const list = state.usageMeterModels ?? [];
-        const want2 = String(views.get(context)?.settings?.model ?? "").toLowerCase();
-        const pick = list.find((e) => e.model === (familyOf(want2) ?? want2)) ?? list[0];
-        const head = (pick?.model ?? want2 ?? "MODEL").toUpperCase().slice(0, 8) + " 7D";
-        if (!list.length) return setImage(context, usageMeterKey(head, "--", "no data yet", true));
-        if (!pick) return setImage(context, usageMeterKey(head, "--", "no local data", true));
-        return setImage(context, localGauge(head, pick, views.get(context)?.settings?.budget));
-      }
-      if (mmode !== "subscription") {
+      if (mmode !== "subscription" && mmode !== "local") {
         return setImage(context, gaugeKey("MODEL 7D", null, mmode === "throttled" ? "throttled" : mmode === "error" ? "sign in?" : "no data"));
       }
-      const models = state.usage?.models ?? [];
+      const list = modelList(mmode);
       const want = views.get(context)?.settings?.model;
-      const m = models.find((x) => x.name === want) ?? models[0];
-      const name = (m?.name ?? want ?? "MODEL").toUpperCase().slice(0, 8);
-      return setImage(context, gaugeKey(`${name} 7D`, m?.pct ?? null, m?.resetsAt ? fmtReset(m.resetsAt) : IS_MAC && state.usageErr?.includes("no OAuth token") ? "n/a" : "no data", m?.pct >= 90 ? animPhase : null));
+      const i = modelListIndex(context, list, want, mmode);
+      const pick = list[i];
+      const head = ((pick?.name ?? pick?.model ?? want ?? "MODEL") + "").toUpperCase().slice(0, 8) + " 7D";
+      const more = list.length > 1 ? ` ${i + 1}/${list.length}` : "";
+      if (!pick) return setImage(context, usageMeterKey(head, "--", mmode === "local" ? "no data yet" : "no data", true));
+      if (mmode === "local") {
+        return setImage(context, localGauge(head + more, pick, views.get(context)?.settings?.budget));
+      }
+      return setImage(context, gaugeKey(head + more, pick.pct ?? null, pick.resetsAt ? fmtReset(pick.resetsAt) : "no data", pick.pct >= 90 ? animPhase : null));
     }
     case "burn-rate":
       return setImage(context, burnKey(state.burn?.tokensHour ?? null, sessionEta()));
@@ -5071,9 +5083,6 @@ var macPlatform = {
 };
 var platform = IS_MAC ? macPlatform : winPlatform;
 function act(context, p) {
-  p.then(() => showOk(context)).catch(() => showAlert(context));
-}
-function actQuiet(context, p) {
   p.catch(() => showAlert(context));
 }
 function onKeyDown(context, kind) {
@@ -5082,10 +5091,10 @@ function onKeyDown(context, kind) {
     case "usage-weekly":
       if (gaugeMode(kind) === "local") pollUsageMeter();
       else if (Date.now() - lastUsageAttempt > 3e4) pollUsage();
-      return showOk(context);
+      return;
     case "today":
       pollToday();
-      return showOk(context);
+      return;
     case "sessions": {
       const n = state.sessions.length;
       if (n === 0) return showAlert(context);
@@ -5099,13 +5108,19 @@ function onKeyDown(context, kind) {
       cycle.set(context, cy);
       return render(context, "sessions");
     }
-    case "usage-model":
-      if (gaugeMode("usage-model") === "local") pollUsageMeter();
+    case "usage-model": {
+      const mode = gaugeMode("usage-model");
+      const list = modelList(mode);
+      if (list.length > 1) {
+        const cur = modelListIndex(context, list, views.get(context)?.settings?.model, mode);
+        modelIdx.set(context, (cur + 1) % list.length);
+      } else if (mode === "local") pollUsageMeter();
       else if (Date.now() - lastUsageAttempt > 3e4) pollUsage();
-      return showOk(context);
+      return render(context, "usage-model");
+    }
     case "burn-rate":
       pollBurn();
-      return showOk(context);
+      return;
     case "project": {
       const s = views.get(context)?.settings ?? {};
       if (!s.path) return showAlert(context);
@@ -5120,7 +5135,7 @@ function onKeyDown(context, kind) {
       const prev = focusIdx.get(context);
       const i = prev?.sig === poolSig ? (prev.i + 1) % n : 0;
       focusIdx.set(context, { i, sig: poolSig });
-      actQuiet(context, platform.focusWindow(pool[i]));
+      act(context, platform.focusWindow(pool[i]));
       return render(context, "focus-session");
     }
     case "quick-prompt": {
@@ -5167,7 +5182,7 @@ function onKeyDown(context, kind) {
       }
       const entry = statusEntry(resolved, cycling ? idx : null);
       render(context, "approver-status");
-      return actQuiet(context, platform.focusWindow(sessionByPid(entry.pid)));
+      return act(context, platform.focusWindow(sessionByPid(entry.pid)));
     }
     case "approver-waiting": {
       const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
@@ -5181,7 +5196,7 @@ function onKeyDown(context, kind) {
       }, 4e3);
       cycle.set(context, cy);
       render(context, "approver-waiting");
-      return actQuiet(context, platform.focusWindow(blocked[cy.idx]));
+      return act(context, platform.focusWindow(blocked[cy.idx]));
     }
   }
 }
@@ -5258,6 +5273,7 @@ if (process.argv.includes("--selftest")) {
       cycle.delete(context);
       focusIdx.delete(context);
       usageView.delete(context);
+      modelIdx.delete(context);
     } else if (event === "didReceiveSettings" && action) {
       const v = views.get(context);
       if (v) {
