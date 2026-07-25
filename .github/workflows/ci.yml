@@ -1,0 +1,74 @@
+name: CI
+
+# Runs on Windows as well as macOS/Linux on purpose: the plugin ships Windows
+# support but is developed on a Mac, so platform bugs (path separators, the
+# slugified transcript paths, anything assuming POSIX) are otherwise invisible
+# until a Windows user hits them.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 20 is what Stream Deck's bundled runtime provides (manifest
+          # Nodejs.Version), so that is the version that actually matters.
+          node-version: "20"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build the bundle
+        run: npm run build
+
+      - name: Committed bundle is in sync with src
+        # Stream Deck loads bin/plugin.mjs, not src/, so a stale committed bundle
+        # ships old behaviour while the source looks correct. Rebuilding above and
+        # then finding a diff means someone changed src without rebuilding.
+        run: git diff --exit-code -- dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs
+
+      - name: Selftest (loads and runs the real bundle)
+        # The closest thing to running the plugin without a Stream Deck: it boots
+        # the bundle under this OS's Node and exercises every poller. On a bare
+        # runner there is no ~/.claude, so this also proves the "no data
+        # anywhere" paths degrade instead of throwing.
+        run: npm run selftest
+
+      - name: Manifest and Property Inspector are valid
+        run: |
+          node -e "
+            const fs = require('fs');
+            const m = JSON.parse(fs.readFileSync('dev.tapparello.claude-deck.sdPlugin/manifest.json', 'utf8'));
+            if (!/^\d+\.\d+\.\d+\.\d+$/.test(m.Version)) throw new Error('Version must be 4-part: ' + m.Version);
+            const uuids = m.Actions.map(a => a.UUID);
+            if (new Set(uuids).size !== uuids.length) throw new Error('duplicate action UUID');
+            for (const a of m.Actions) {
+              if (!a.UUID.startsWith(m.UUID + '.')) throw new Error('action outside the plugin namespace: ' + a.UUID);
+              for (const icon of [a.Icon, ...(a.States || []).map(s => s.Image)]) {
+                if (icon && !fs.existsSync('dev.tapparello.claude-deck.sdPlugin/' + icon + '.svg')) {
+                  throw new Error('missing icon: ' + icon);
+                }
+              }
+              if (a.PropertyInspectorPath && !fs.existsSync('dev.tapparello.claude-deck.sdPlugin/' + a.PropertyInspectorPath)) {
+                throw new Error('missing PI: ' + a.PropertyInspectorPath);
+              }
+            }
+            const pi = fs.readFileSync('dev.tapparello.claude-deck.sdPlugin/pi/pi.html', 'utf8');
+            new Function(pi.split('<script>')[1].split('</script>')[0]);
+            console.log('manifest OK: v' + m.Version + ', ' + m.Actions.length + ' actions, PI parses');
+          "
