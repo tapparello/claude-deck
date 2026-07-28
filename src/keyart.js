@@ -32,6 +32,17 @@ const C = {
   // once composited, above the 3:1 non-text target. The old solid-orange launch key
   // WAS findable — it was just shouting; this keeps the findability.
   rail: "#807b8d",
+  // Identity hues, one per action: WHICH key is this, never what is happening. Hue
+  // alone could not carry identity — every candidate collided with a state colour —
+  // but CHROMA can. These sit at chroma ~20 against a state palette whose lowest is
+  // 49 (info blue), a 2.5x-4.6x separation, so vivid reads as signal and muted reads
+  // as identity. All land at 8.4:1 on the background. They colour the BAND and GLYPH
+  // only; the frame tint stays exclusively for state, so a working FOCUS key still
+  // cannot be mistaken for the vivid-blue ALWAYS key beside it.
+  ident: {
+    code: "#96b99e", launch: "#cbab8f", chat: "#b8abce", web: "#cda5bd",
+    focus: "#7fbbbf", project: "#bbb08c", prompt: "#d7a4a6", custom: "#94b4d4",
+  },
   ok: "#4ade80",
   warn: "#fbbf24",
   bad: "#f87171",
@@ -260,9 +271,10 @@ function fmtNum(n) {
 // The four actions that had no renderer at all and shipped as flat icon art, which is
 // what ran two visual languages on one deck.
 function actionKey(glyphName, title, label, sub) {
+  const id = C.ident[glyphName] ?? C.rail;
   return svgWrap(`
-    ${band.rule(C.rail)}
-    ${actionHead(glyphName, title)}
+    ${band.rule(id)}
+    ${actionHead(glyphName, title, id)}
     ${line(72, 92, 128, 24, 700, C.text, label)}
     ${foot(sub)}`);
 }
@@ -284,10 +296,15 @@ function labelKey(title, label, sub, tint = null, strong = false) {
   const use = lines.slice(0, 2).filter(Boolean);
   const body = use.map((l, i) =>
     line(72, use.length > 1 ? 76 + i * 26 : 92, 128, 23, 700, C.text, l)).join("");
+  // The band carries this key's fixed IDENTITY hue and never varies with state; the
+  // frame tint carries state alone. Colouring the band BY state is what made a working
+  // FOCUS key impersonate the vivid-blue ALWAYS key sitting next to it in the profile.
+  const g = GLYPH_FOR[String(title).toUpperCase()] ?? "custom";
+  const id = C.ident[g] ?? C.rail;
   return svgWrap(`
     ${tintFrame(tint, strong)}
-    ${band.rule(C.rail)}
-    ${actionHead(GLYPH_FOR[String(title).toUpperCase()] ?? "custom", title)}
+    ${band.rule(id)}
+    ${actionHead(g, title, id)}
     ${body}
     ${foot(sub)}`);
 }
