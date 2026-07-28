@@ -221,4 +221,4 @@ Every one of those figures is **local to this machine** and cost is an **estimat
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE). Originally forked from [technicallybrantley/claude-deck](https://github.com/technicallybrantley/claude-deck) and extended (per-session Claude Status key, macOS support, local cost/usage). Not affiliated with or endorsed by Anthropic.
+MIT — see [`LICENSE`](LICENSE), which carries both copyright lines. This project began as a fork of [technicallybrantley/claude-deck](https://github.com/technicallybrantley/claude-deck) and has since been rewritten; the two have diverged substantially and are now developed independently. Not affiliated with or endorsed by Anthropic.
