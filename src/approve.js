@@ -12,8 +12,9 @@ export const PORT_DEFAULT = 45623;
 export function sanitizeSuggestions(suggestions, toolName, sessionOnly = false) {
   if (!Array.isArray(suggestions)) return [];
   // MCP tools are refused outright: their suggestions are frequently whole-tool grants
-  // that Claude Code's own dialog declines to offer, and on this machine the MCP server
-  // in question holds an Azure DevOps PAT.
+  // that Claude Code's own dialog declines to offer, and an MCP server is exactly the
+  // kind of thing configured with a long-lived credential — so a whole-tool grant is
+  // the worst thing to hand to a single key press.
   if (String(toolName ?? "").startsWith("mcp__")) return [];
   const out = [];
   for (const e of suggestions) {
@@ -26,7 +27,8 @@ export function sanitizeSuggestions(suggestions, toolName, sessionOnly = false) 
     ).map((r) => ({ toolName: r.toolName, ruleContent: r.ruleContent }));
     if (!rules.length) continue;
     // `session` is a floor we never widen; anything else becomes localSettings —
-    // the project's .claude/settings.local.json, never the cloud-synced user file.
+    // the project's .claude/settings.local.json, never the user-level settings file
+    // (which commonly holds credentials and may be synced between machines).
     const destination = sessionOnly || e.destination === "session" ? "session" : "localSettings";
     out.push({ type: "addRules", behavior: "allow", destination, rules });
   }

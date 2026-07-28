@@ -743,9 +743,9 @@ async function ensureHookServerOnce() {
 }
 
 // A FRAGMENT, not a whole document. `~/.claude/settings.json` already exists on any
-// real install - and on this machine it holds an Azure DevOps PAT - so telling the user
-// to paste `{"hooks":{...}}` over it would produce invalid JSON at best and destroy
-// their settings at worst. The returned text is pure JSON with NO comments: it goes
+// real install, and commonly holds credentials, so telling the user to paste
+// `{"hooks":{...}}` over it would produce invalid JSON at best and destroy their
+// settings at worst. The returned text is pure JSON with NO comments: it goes
 // straight into a copy-button textarea and then straight into that file, and JSON has
 // no comment syntax. The merge instructions live in the Property Inspector note instead
 // (see pi/pi.html's "install" field), not in this string.

@@ -448,8 +448,8 @@ test("pressDecision alerts when the key painted nothing but a request now exists
 
 // Regression guard for the Task 9 review finding: installSnippet()/hookFragment() must
 // return pure JSON with no `//` comments, because the Property Inspector's Copy button
-// puts this string verbatim into ~/.claude/settings.json, which has a live Azure DevOps
-// PAT on this machine and no tolerance for comment syntax.
+// puts this string verbatim into ~/.claude/settings.json — a live, credential-bearing
+// file with no tolerance for comment syntax.
 test("hookFragment contains no comment lines", () => {
   // Check for a `//` comment TOKEN (line starting with it, once trimmed), not merely
   // the substring "//" — the URL itself legitimately contains "//" (http://...).
