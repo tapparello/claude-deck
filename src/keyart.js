@@ -15,9 +15,13 @@
 //  2. A BAND MEANS THE PRESS LEAVES THE DECK. Actions with an external side effect
 //     (launch an app, focus a window, answer a permission prompt) get a top band and
 //     a glyph; keys that only cycle or refresh what they already display get neither.
-//     The band is ACHROMATIC so action class and state tint never compete — colouring
-//     it by state is what let a working FOCUS key impersonate the blue ALWAYS key
-//     sitting next to it in the bundled profile.
+//     The band carries the key's own fixed IDENTITY hue and never varies with state,
+//     while the frame tint carries state alone — different place on the key, and a
+//     2.5x-4.6x chroma gap. Colouring the band BY state is what let a working FOCUS
+//     key impersonate the vivid-blue ALWAYS key beside it in the bundled profile.
+//     Band WEIGHT is a separate channel: rule / double / fill is what separates the
+//     three approve keys in greyscale, which is why the identity cap must stay far
+//     darker than DENY's fill (see WASH).
 //
 //  3. ONE SKELETON on every key, both classes: header 0-34, value, sub at y=127.
 import { describeRequest, alwaysRule } from "./approve.js";
@@ -166,16 +170,27 @@ const badge = (n, col) =>
 
 // The action-class marker. Weight differs by consequence so the three approve keys
 // stay distinct in greyscale, where hue tells you nothing.
+// WASH is the ceiling, not a preference. As the cap brightens it climbs toward DENY's
+// filled band, and once the two land in the same lightness class "filled cap" stops
+// identifying DENY — which is the channel that makes the approve trio separable in
+// greyscale. At 0.24 the cap is 3.4x darker than DENY's fill and identity text still
+// measures 5.17:1 on it. 0.30 sits exactly on AA (4.50:1) with no margin left, and
+// 0.38 drops the text to 3.69:1, below AA.
+const WASH = 0.24;
 const band = {
   rule: (col, m = 1) => `<rect x="0" y="33" width="144" height="2.5" fill="${col}" opacity="${(0.85 * m).toFixed(2)}"/>`,
+  // Identity cap for an action key: a tinted header zone closed by a bright rule.
+  cap: (col, m = 1) =>
+    `<rect x="0" y="0" width="144" height="37" fill="${col}" opacity="${(WASH * m).toFixed(3)}"/>` +
+    `<rect x="0" y="34" width="144" height="3" fill="${col}" opacity="${(0.95 * m).toFixed(2)}"/>`,
   double: (col, m = 1) => `<rect x="0" y="33" width="144" height="2.5" fill="${col}" opacity="${(0.85 * m).toFixed(2)}"/><rect x="0" y="38" width="144" height="1.5" fill="${col}" opacity="${(0.55 * m).toFixed(2)}"/>`,
   fill: (col, m = 1) => `<rect x="0" y="0" width="144" height="35" fill="${col}" opacity="${(0.9 * m).toFixed(2)}"/>`,
 };
 // Header row for an action key: glyph + title. Both in dim so they clear AA — drawing
 // them in the rail colour measured 1.99:1, worse than what it replaced.
 const actionHead = (glyphName, title, fg = C.dim) =>
-  glyph(glyphName, 10, 8, 20, fg) +
-  line(36, 25, 84, 15, 800, fg, String(title).toUpperCase(), "start", ' letter-spacing="0.5"');
+  glyph(glyphName, 10, 8, 22, fg) +
+  line(38, 25, 82, 16, 800, fg, String(title).toUpperCase(), "start", ' letter-spacing="0.5"');
 
 // ================= REPORT KEYS — no band, no glyph, value in bone =================
 // A press only cycles or refreshes what is already on screen, so nothing warns you.
@@ -273,7 +288,7 @@ function fmtNum(n) {
 function actionKey(glyphName, title, label, sub) {
   const id = C.ident[glyphName] ?? C.rail;
   return svgWrap(`
-    ${band.rule(id)}
+    ${band.cap(id)}
     ${actionHead(glyphName, title, id)}
     ${line(72, 92, 128, 24, 700, C.text, label)}
     ${foot(sub)}`);
@@ -303,7 +318,7 @@ function labelKey(title, label, sub, tint = null, strong = false) {
   const id = C.ident[g] ?? C.rail;
   return svgWrap(`
     ${tintFrame(tint, strong)}
-    ${band.rule(id)}
+    ${band.cap(id)}
     ${actionHead(g, title, id)}
     ${body}
     ${foot(sub)}`);

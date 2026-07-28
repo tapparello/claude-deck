@@ -4358,12 +4358,15 @@ var header = (s) => line(12, 25, 106, 15, 700, C.dim, String(s).toUpperCase(), "
 var foot = (s, col = C.dim) => s ? line(72, 127, 130, 14, 400, col, s) : "";
 var corner = (tag, col = C.dim) => tag ? txt(132, 25, 12, 600, col, String(tag).slice(0, 8), "end") : "";
 var badge = (n, col) => `<circle cx="121" cy="20" r="11.5" fill="${C.panel}" stroke="${col}" stroke-width="1.5"/>` + txt(121, 25, 14, 700, C.text, n);
+var WASH = 0.24;
 var band = {
   rule: (col, m = 1) => `<rect x="0" y="33" width="144" height="2.5" fill="${col}" opacity="${(0.85 * m).toFixed(2)}"/>`,
+  // Identity cap for an action key: a tinted header zone closed by a bright rule.
+  cap: (col, m = 1) => `<rect x="0" y="0" width="144" height="37" fill="${col}" opacity="${(WASH * m).toFixed(3)}"/><rect x="0" y="34" width="144" height="3" fill="${col}" opacity="${(0.95 * m).toFixed(2)}"/>`,
   double: (col, m = 1) => `<rect x="0" y="33" width="144" height="2.5" fill="${col}" opacity="${(0.85 * m).toFixed(2)}"/><rect x="0" y="38" width="144" height="1.5" fill="${col}" opacity="${(0.55 * m).toFixed(2)}"/>`,
   fill: (col, m = 1) => `<rect x="0" y="0" width="144" height="35" fill="${col}" opacity="${(0.9 * m).toFixed(2)}"/>`
 };
-var actionHead = (glyphName, title, fg = C.dim) => glyph(glyphName, 10, 8, 20, fg) + line(36, 25, 84, 15, 800, fg, String(title).toUpperCase(), "start", ' letter-spacing="0.5"');
+var actionHead = (glyphName, title, fg = C.dim) => glyph(glyphName, 10, 8, 22, fg) + line(38, 25, 82, 16, 800, fg, String(title).toUpperCase(), "start", ' letter-spacing="0.5"');
 function usageMeterKey(head2, big, sub, isCost) {
   const none = String(big) === "--";
   return svgWrap(`
@@ -4439,7 +4442,7 @@ function fmtNum(n) {
 function actionKey(glyphName, title, label, sub) {
   const id = C.ident[glyphName] ?? C.rail;
   return svgWrap(`
-    ${band.rule(id)}
+    ${band.cap(id)}
     ${actionHead(glyphName, title, id)}
     ${line(72, 92, 128, 24, 700, C.text, label)}
     ${foot(sub)}`);
@@ -4465,7 +4468,7 @@ function labelKey(title, label, sub, tint = null, strong = false) {
   const id = C.ident[g] ?? C.rail;
   return svgWrap(`
     ${tintFrame(tint, strong)}
-    ${band.rule(id)}
+    ${band.cap(id)}
     ${actionHead(g, title, id)}
     ${body}
     ${foot(sub)}`);
