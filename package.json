@@ -8,6 +8,7 @@
     "build": "esbuild src/plugin.js --bundle --platform=node --format=esm --outfile=dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs --external:bufferutil --external:utf-8-validate --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\"",
     "selftest": "node dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs --selftest",
     "test": "node --test",
+    "lint": "eslint .",
     "icons": "node tools/gen-icons.mjs",
     "showcase": "node tools/gen-showcase.mjs"
   },
@@ -15,6 +16,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "esbuild": "^0.24.2"
+    "esbuild": "^0.24.2",
+    "eslint": "^9.39.5"
   }
 }

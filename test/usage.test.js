@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { windowStartMs, rateFor, estimateCost, parseRequests, mergeById, aggregate, familyOf, aggregateByModel, budgetPct, gaugeSource, hasSubscriptionData, USAGE_FRESH_MS, localDay, newDayCounts, foldDayChunk, dayCountsTotals } from "../src/usage.js";
+import { windowStartMs, rateFor, estimateCost, parseRequests, mergeById, aggregate, familyOf, aggregateByModel, budgetPct, gaugeSource, hasSubscriptionData, USAGE_FRESH_MS, newDayCounts, foldDayChunk, dayCountsTotals } from "../src/usage.js";
 
 test("windowStartMs 7day is exactly now - 7 days", () => {
   const now = 1_800_000_000_000;
@@ -331,7 +331,6 @@ test("parseRequests defaults cacheCreate1h to 0 when no breakdown is present", (
 });
 
 test("the TTL split does not change token totals", () => {
-  const M = 1_000_000;
   const reqs = [{ t: 10, model: "claude-opus-4-8", tok: { in: 1, out: 2, cacheRead: 3, cacheCreate: 100, cacheCreate1h: 40 } }];
   // cacheCreate is still the whole cache write, counted once.
   assert.equal(aggregate(reqs, 0).tokens, 1 + 2 + 3 + 100);

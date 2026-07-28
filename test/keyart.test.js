@@ -18,6 +18,7 @@ function textExtents(dataUri) {
     const attrs = m[1], body = m[2];
     if (!body.trim()) continue;
     const num = (k) => Number((attrs.match(new RegExp(`${k}="([^"]+)"`)) ?? [])[1]);
+    // eslint-disable-next-line no-sparse-arrays -- default array; only [1] is read
     const anchor = (attrs.match(/text-anchor="([^"]+)"/) ?? [, "start"])[1];
     const w = body.length * ADVANCE * num("font-size");
     const x = num("x");

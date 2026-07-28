@@ -9,19 +9,15 @@ import path from "node:path";
 import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript, parseProcStarts } from "./osa.js";
-import { windowStartMs, parseRequests, mergeById, aggregate, aggregateByModel, budgetPct, gaugeSource, familyOf, localDay, newDayCounts, foldDayChunk, dayCountsTotals } from "./usage.js";
-import { resolveStatusKey, statusEntry, autoSlot, sessionWhere, fmtShort, shortWait, sessionState, blockedSessions, sessionSig, transcriptPathFor, pidLooksRecycled } from "./status.js";
+import { windowStartMs, parseRequests, mergeById, aggregate, aggregateByModel, budgetPct, localDay, newDayCounts, foldDayChunk, dayCountsTotals } from "./usage.js";
+import { resolveStatusKey, statusEntry, autoSlot, sessionState, blockedSessions, sessionSig, transcriptPathFor, pidLooksRecycled } from "./status.js";
 import { randomBytes } from "node:crypto";
 import {
-  decisionBody, describeRequest, alwaysRule, pressDecision,
+  decisionBody, alwaysRule, pressDecision,
   enqueue, head, resolve, expiredIds, staleIds, seedBaselines, hookFragment,
   rememberDeny, denyBlock, pruneDenies,
   PORT_DEFAULT, HOLD_S_DEFAULT, QUEUE_MAX,
 } from "./approve.js";
-import {
-  C, gaugeKey, linesKey, bigCountKey, burnKey, usageMeterKey, labelKey, actionKey,
-  statusKey, approveKey, fmtNum,
-} from "./keyart.js";
 import { startHookServer, BADPATH_WINDOW_MS, BADPATH_MIN_HITS } from "./hookserver.js";
 import {
   viewFor, gaugeMode, GAUGE_WINDOW, modelList, modelListIndex, sessionEta, PULSE_MS,
@@ -35,7 +31,6 @@ const CLAUDE_DIR = path.join(os.homedir(), ".claude");
 const CREDS_FILE = path.join(CLAUDE_DIR, ".credentials.json");
 const SESSIONS_DIR = path.join(CLAUDE_DIR, "sessions");
 const PROJECTS_DIR = path.join(CLAUDE_DIR, "projects");
-const STATS_CACHE = path.join(CLAUDE_DIR, "stats-cache.json");
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const githubDir = path.join(os.homedir(), "Documents", "GitHub");
 const DEFAULT_CODE_DIR = fs.existsSync(githubDir) ? githubDir : os.homedir();

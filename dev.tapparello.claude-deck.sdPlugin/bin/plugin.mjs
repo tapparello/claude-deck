@@ -4325,6 +4325,132 @@ function pressDecision({ queue, shownId, lastHeadChangeAt, now, settleMs = SETTL
   return { action: "resolve", id: h.id, reason: "ok" };
 }
 
+// src/hookserver.js
+import { createServer } from "node:http";
+import { timingSafeEqual } from "node:crypto";
+var BODY_MAX = 1024 * 1024;
+var BADPATH_WINDOW_MS = 5 * 6e4;
+var BADPATH_MIN_HITS = 3;
+var sameSecret = (a, b) => {
+  const A = Buffer.from(String(a)), B = Buffer.from(String(b));
+  return A.length === B.length && timingSafeEqual(A, B);
+};
+function startHookServer({ port, secret, onRequest, onDrop, log: log2 = () => {
+}, retries = 3, retryMs = 500 }) {
+  if (!secret || String(secret).length < 32) {
+    return Promise.reject(new Error("hook secret too short"));
+  }
+  const wantPath = `/permission/${secret}`;
+  const stats = { badPathHits: [] };
+  let boundPort = null;
+  const server = createServer((req, res) => {
+    const deny = (code) => {
+      res.writeHead(code).end();
+    };
+    if (!sameSecret(req.url ?? "", wantPath)) {
+      const now = Date.now();
+      stats.badPathHits.push(now);
+      stats.badPathHits = stats.badPathHits.filter((t) => now - t < BADPATH_WINDOW_MS);
+      return deny(404);
+    }
+    if (stats.badPathHits.length) stats.badPathHits = [];
+    const host = String(req.headers.host ?? "");
+    if (host !== `127.0.0.1:${boundPort}` && host !== `localhost:${boundPort}`) return deny(403);
+    if (req.method !== "POST") return deny(405);
+    req.setEncoding("utf8");
+    let body = "", over = false;
+    req.on("data", (c) => {
+      if (over) return;
+      body += c;
+      if (body.length > BODY_MAX) {
+        over = true;
+        res.writeHead(413);
+        res.end();
+        res.on("finish", () => req.destroy());
+      }
+    });
+    req.on("end", () => {
+      if (over) return;
+      let payload;
+      try {
+        payload = JSON.parse(body || "{}");
+      } catch {
+        return deny(400);
+      }
+      const ticket = {
+        id: null,
+        closed: false,
+        respond(out) {
+          if (ticket.closed || res.writableEnded) return false;
+          ticket.closed = true;
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(out ?? {}));
+          return true;
+        }
+      };
+      res.on("close", () => {
+        if (res.writableEnded || ticket.closed) return;
+        ticket.closed = true;
+        onDrop?.(ticket);
+      });
+      try {
+        onRequest(payload, ticket);
+      } catch (e) {
+        log2("hook onRequest threw:", String(e));
+        ticket.respond(null);
+      }
+    });
+    req.on("error", () => {
+    });
+  });
+  return new Promise((resolve2, reject) => {
+    let left = retries;
+    const attempt = () => {
+      server.once("error", (e) => {
+        if (e.code === "EADDRINUSE" && left-- > 0) {
+          log2(`hook port ${port} busy, retrying (${left} left)`);
+          setTimeout(attempt, retryMs);
+          return;
+        }
+        reject(e);
+      });
+      server.listen(port, "127.0.0.1", () => {
+        boundPort = server.address().port;
+        server.removeAllListeners("error");
+        server.on("error", (err) => log2("hook server error:", String(err)));
+        log2(`hook server on http://127.0.0.1:${boundPort}/permission/<secret>`);
+        resolve2({
+          boundPort,
+          // The secret this server actually bound to, so a caller can tell a genuine
+          // secret CHANGE (which needs a rebind) apart from a same-secret re-assert
+          // (which doesn't) instead of comparing boundPort alone.
+          secret,
+          stats,
+          close: () => new Promise((done) => {
+            let settled = false;
+            const finish = () => {
+              if (!settled) {
+                settled = true;
+                done();
+              }
+            };
+            server.close(finish);
+            server.closeIdleConnections();
+            setTimeout(() => {
+              server.closeAllConnections?.();
+              finish();
+            }, 250).unref();
+          })
+        });
+      });
+    };
+    attempt();
+  });
+}
+
+// src/view.js
+import path2 from "node:path";
+
 // src/keyart.js
 var C = {
   bg: "#16151c",
@@ -4613,131 +4739,7 @@ function approveKey(kind, req, o = {}) {
   return shell(col, mult, lines, name, cornerSvg, word);
 }
 
-// src/hookserver.js
-import { createServer } from "node:http";
-import { timingSafeEqual } from "node:crypto";
-var BODY_MAX = 1024 * 1024;
-var BADPATH_WINDOW_MS = 5 * 6e4;
-var BADPATH_MIN_HITS = 3;
-var sameSecret = (a, b) => {
-  const A = Buffer.from(String(a)), B = Buffer.from(String(b));
-  return A.length === B.length && timingSafeEqual(A, B);
-};
-function startHookServer({ port, secret, onRequest, onDrop, log: log2 = () => {
-}, retries = 3, retryMs = 500 }) {
-  if (!secret || String(secret).length < 32) {
-    return Promise.reject(new Error("hook secret too short"));
-  }
-  const wantPath = `/permission/${secret}`;
-  const stats = { badPathHits: [] };
-  let boundPort = null;
-  const server = createServer((req, res) => {
-    const deny = (code) => {
-      res.writeHead(code).end();
-    };
-    if (!sameSecret(req.url ?? "", wantPath)) {
-      const now = Date.now();
-      stats.badPathHits.push(now);
-      stats.badPathHits = stats.badPathHits.filter((t) => now - t < BADPATH_WINDOW_MS);
-      return deny(404);
-    }
-    if (stats.badPathHits.length) stats.badPathHits = [];
-    const host = String(req.headers.host ?? "");
-    if (host !== `127.0.0.1:${boundPort}` && host !== `localhost:${boundPort}`) return deny(403);
-    if (req.method !== "POST") return deny(405);
-    req.setEncoding("utf8");
-    let body = "", over = false;
-    req.on("data", (c) => {
-      if (over) return;
-      body += c;
-      if (body.length > BODY_MAX) {
-        over = true;
-        res.writeHead(413);
-        res.end();
-        res.on("finish", () => req.destroy());
-      }
-    });
-    req.on("end", () => {
-      if (over) return;
-      let payload;
-      try {
-        payload = JSON.parse(body || "{}");
-      } catch {
-        return deny(400);
-      }
-      const ticket = {
-        id: null,
-        closed: false,
-        respond(out) {
-          if (ticket.closed || res.writableEnded) return false;
-          ticket.closed = true;
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify(out ?? {}));
-          return true;
-        }
-      };
-      res.on("close", () => {
-        if (res.writableEnded || ticket.closed) return;
-        ticket.closed = true;
-        onDrop?.(ticket);
-      });
-      try {
-        onRequest(payload, ticket);
-      } catch (e) {
-        log2("hook onRequest threw:", String(e));
-        ticket.respond(null);
-      }
-    });
-    req.on("error", () => {
-    });
-  });
-  return new Promise((resolve2, reject) => {
-    let left = retries;
-    const attempt = () => {
-      server.once("error", (e) => {
-        if (e.code === "EADDRINUSE" && left-- > 0) {
-          log2(`hook port ${port} busy, retrying (${left} left)`);
-          setTimeout(attempt, retryMs);
-          return;
-        }
-        reject(e);
-      });
-      server.listen(port, "127.0.0.1", () => {
-        boundPort = server.address().port;
-        server.removeAllListeners("error");
-        server.on("error", (err) => log2("hook server error:", String(err)));
-        log2(`hook server on http://127.0.0.1:${boundPort}/permission/<secret>`);
-        resolve2({
-          boundPort,
-          // The secret this server actually bound to, so a caller can tell a genuine
-          // secret CHANGE (which needs a rebind) apart from a same-secret re-assert
-          // (which doesn't) instead of comparing boundPort alone.
-          secret,
-          stats,
-          close: () => new Promise((done) => {
-            let settled = false;
-            const finish = () => {
-              if (!settled) {
-                settled = true;
-                done();
-              }
-            };
-            server.close(finish);
-            server.closeIdleConnections();
-            setTimeout(() => {
-              server.closeAllConnections?.();
-              finish();
-            }, 250).unref();
-          })
-        });
-      });
-    };
-    attempt();
-  });
-}
-
 // src/view.js
-import path2 from "node:path";
 var PULSE_MS = 12e4;
 function fmtReset(iso) {
   if (!iso) return "";
@@ -4991,7 +4993,6 @@ var CLAUDE_DIR = path3.join(os.homedir(), ".claude");
 var CREDS_FILE = path3.join(CLAUDE_DIR, ".credentials.json");
 var SESSIONS_DIR = path3.join(CLAUDE_DIR, "sessions");
 var PROJECTS_DIR = path3.join(CLAUDE_DIR, "projects");
-var STATS_CACHE = path3.join(CLAUDE_DIR, "stats-cache.json");
 var USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 var githubDir = path3.join(os.homedir(), "Documents", "GitHub");
 var DEFAULT_CODE_DIR = fs.existsSync(githubDir) ? githubDir : os.homedir();

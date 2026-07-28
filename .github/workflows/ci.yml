@@ -30,6 +30,12 @@ jobs:
 
       - run: npm ci
 
+      - name: Lint
+        # Correctness rules only, no formatting. Runs before the build so a dead
+        # reference fails here with a file and line rather than as a runtime
+        # ReferenceError inside Stream Deck, where nothing surfaces it.
+        run: npm run lint
+
       - name: Unit tests
         run: npm test
 
