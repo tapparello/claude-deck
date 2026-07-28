@@ -29,25 +29,41 @@ rediscover" doc. Keep it updated when you learn something the hard way.
   with a fresh copy of `dev.tapparello.claude-deck.sdPlugin/`,
   restarts it. This is Windows-only (PowerShell) — use the `PowerShell`
   tool, not `Bash`, to run it.
+- `deploy.sh` — the macOS equivalent, same three steps against
+  `~/Library/Application Support/com.elgato.StreamDeck/Plugins/`. Takes
+  `--no-restart`. **Its relaunch is not reliable:** it has been observed to leave
+  Stream Deck quit, which also leaves the approver's hook server down, so the keys go
+  dead and Claude Code gets `ECONNREFUSED`. Check `pgrep -x "Stream Deck"` after
+  deploying and run `open -a "Elgato Stream Deck"` if it is not up.
 - `docs/*.png` — README screenshots. `local-assets/claude-logo.png` is
-  gitignored (personal-use icon override); `deploy.ps1` copies it over the
+  gitignored (personal-use icon override); both deploy scripts copy it over the
   SVG launcher/category icons if present.
 
 ## Build → deploy → verify loop
 
 ```powershell
+npm test            # 175 unit tests, no Stream Deck and no network needed
 npm run build       # src/plugin.js -> bin/plugin.mjs
 npm run selftest     # runs the plugin's poll functions headless, prints results
 .\deploy.ps1          # installs to %APPDATA%\Elgato\...\Plugins\, restarts Stream Deck
 ```
 
-`selftest` is the fast feedback loop — it calls `pollUsage`/`pollToday`/
-`pollBurn` directly and dumps JSON, no physical Stream Deck needed. Always
-run it before `deploy.ps1` to catch logic errors without a restart cycle.
-The usage-limit endpoint selftest checks can 429 if you just hit it (client
-backs off 240s) — that's expected, not a bug.
+```bash
+npm test && npm run build && npm run selftest && ./deploy.sh   # macOS
+```
 
-Debug log at runtime: `%APPDATA%\Elgato\StreamDeck\Plugins\<plugin>\claude-deck.log`.
+`selftest` is the fast feedback loop — it calls `pollUsage`/`pollToday`/
+`pollBurn` directly and dumps JSON, no physical Stream Deck needed. It also boots the
+hook server and round-trips one request through it, which is the only end-to-end check
+of the approver that needs no deck. Always run it before deploying to catch logic errors
+without a restart cycle. The usage-limit endpoint selftest checks can 429 if you just
+hit it (client backs off 240s) — that's expected, not a bug.
+
+Debug log at runtime, next to the installed plugin: `claude-deck.log` in
+`%APPDATA%\Elgato\StreamDeck\Plugins\<plugin>\` or
+`~/Library/Application Support/com.elgato.StreamDeck/Plugins/<plugin>/`. It never
+contains the hook secret — the startup line prints a literal `<secret>` placeholder, so
+don't try to read the live URL out of it (compare by probing the endpoint instead).
 
 ## The transcript-line dedup gotcha (fixed 2026-07-17/18, commit `ea27c2c`)
 
