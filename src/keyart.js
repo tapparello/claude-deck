@@ -160,8 +160,10 @@ function glyph(name, x, y, size, col, sw = 2.6) {
 }
 
 // ---------- shared skeleton ----------
-const header = (s) =>
-  line(12, 25, 106, 15, 700, C.dim, String(s).toUpperCase(), "start", ' letter-spacing="0.6"');
+// `narrow` reserves room for a corner marker. Without it a long header ran straight
+// into the "est" tag and "THIS MONTH" + "est" read as one word.
+const header = (s, narrow = false) =>
+  line(12, 25, narrow ? 88 : 106, 15, 700, C.dim, String(s).toUpperCase(), "start", ' letter-spacing="0.6"');
 const foot = (s, col = C.dim) => (s ? line(72, 127, 130, 14, 400, col, s) : "");
 const corner = (tag, col = C.dim) => (tag ? txt(132, 25, 12, 600, col, String(tag).slice(0, 8), "end") : "");
 const badge = (n, col) =>
@@ -177,14 +179,21 @@ const badge = (n, col) =>
 // measures 5.17:1 on it. 0.30 sits exactly on AA (4.50:1) with no margin left, and
 // 0.38 drops the text to 3.69:1, below AA.
 const WASH = 0.24;
+// A band that reaches y=0 must follow the key's rounded top corners. A plain rect paints
+// straight over the rx=18 corner and the key reads as square-cornered along its top edge.
+// Authored as a path rather than a clipPath so each key SVG stays self-contained — the
+// showcase composes many of them into one document, where duplicate ids would collide.
+const R = 18;
+const topCap = (h) =>
+  `M0 ${h} V${R} A${R} ${R} 0 0 1 ${R} 0 H${144 - R} A${R} ${R} 0 0 1 144 ${R} V${h} Z`;
 const band = {
   rule: (col, m = 1) => `<rect x="0" y="33" width="144" height="2.5" fill="${col}" opacity="${(0.85 * m).toFixed(2)}"/>`,
   // Identity cap for an action key: a tinted header zone closed by a bright rule.
   cap: (col, m = 1) =>
-    `<rect x="0" y="0" width="144" height="37" fill="${col}" opacity="${(WASH * m).toFixed(3)}"/>` +
+    `<path d="${topCap(37)}" fill="${col}" opacity="${(WASH * m).toFixed(3)}"/>` +
     `<rect x="0" y="34" width="144" height="3" fill="${col}" opacity="${(0.95 * m).toFixed(2)}"/>`,
   double: (col, m = 1) => `<rect x="0" y="33" width="144" height="2.5" fill="${col}" opacity="${(0.85 * m).toFixed(2)}"/><rect x="0" y="38" width="144" height="1.5" fill="${col}" opacity="${(0.55 * m).toFixed(2)}"/>`,
-  fill: (col, m = 1) => `<rect x="0" y="0" width="144" height="35" fill="${col}" opacity="${(0.9 * m).toFixed(2)}"/>`,
+  fill: (col, m = 1) => `<path d="${topCap(35)}" fill="${col}" opacity="${(0.9 * m).toFixed(2)}"/>`,
 };
 // Header row for an action key: glyph + title. Both in dim so they clear AA — drawing
 // them in the rail colour measured 1.99:1, worse than what it replaced.
@@ -197,9 +206,10 @@ const actionHead = (glyphName, title, fg = C.dim) =>
 
 function usageMeterKey(head, big, sub, isCost) {
   const none = String(big) === "--";
+  const est = isCost && !none;
   return svgWrap(`
-    ${header(head)}
-    ${isCost && !none ? corner("est") : ""}
+    ${header(head, est)}
+    ${est ? corner("est") : ""}
     ${line(72, 88, 128, 42, 700, none ? C.dim : C.text, big, "middle", "", 20)}
     ${foot(sub)}`);
 }

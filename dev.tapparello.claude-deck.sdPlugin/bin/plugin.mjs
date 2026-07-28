@@ -4354,24 +4354,27 @@ function glyph(name, x, y, size, col, sw = 2.6) {
   const s = size / 24;
   return `<g transform="translate(${x},${y}) scale(${s.toFixed(4)})" fill="none" stroke="${col}" stroke-width="${(sw / s).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round">` + (GLYPHS[name] ?? []).map((d) => `<path d="${d}"/>`).join("") + "</g>";
 }
-var header = (s) => line(12, 25, 106, 15, 700, C.dim, String(s).toUpperCase(), "start", ' letter-spacing="0.6"');
+var header = (s, narrow = false) => line(12, 25, narrow ? 88 : 106, 15, 700, C.dim, String(s).toUpperCase(), "start", ' letter-spacing="0.6"');
 var foot = (s, col = C.dim) => s ? line(72, 127, 130, 14, 400, col, s) : "";
 var corner = (tag, col = C.dim) => tag ? txt(132, 25, 12, 600, col, String(tag).slice(0, 8), "end") : "";
 var badge = (n, col) => `<circle cx="121" cy="20" r="11.5" fill="${C.panel}" stroke="${col}" stroke-width="1.5"/>` + txt(121, 25, 14, 700, C.text, n);
 var WASH = 0.24;
+var R = 18;
+var topCap = (h) => `M0 ${h} V${R} A${R} ${R} 0 0 1 ${R} 0 H${144 - R} A${R} ${R} 0 0 1 144 ${R} V${h} Z`;
 var band = {
   rule: (col, m = 1) => `<rect x="0" y="33" width="144" height="2.5" fill="${col}" opacity="${(0.85 * m).toFixed(2)}"/>`,
   // Identity cap for an action key: a tinted header zone closed by a bright rule.
-  cap: (col, m = 1) => `<rect x="0" y="0" width="144" height="37" fill="${col}" opacity="${(WASH * m).toFixed(3)}"/><rect x="0" y="34" width="144" height="3" fill="${col}" opacity="${(0.95 * m).toFixed(2)}"/>`,
+  cap: (col, m = 1) => `<path d="${topCap(37)}" fill="${col}" opacity="${(WASH * m).toFixed(3)}"/><rect x="0" y="34" width="144" height="3" fill="${col}" opacity="${(0.95 * m).toFixed(2)}"/>`,
   double: (col, m = 1) => `<rect x="0" y="33" width="144" height="2.5" fill="${col}" opacity="${(0.85 * m).toFixed(2)}"/><rect x="0" y="38" width="144" height="1.5" fill="${col}" opacity="${(0.55 * m).toFixed(2)}"/>`,
-  fill: (col, m = 1) => `<rect x="0" y="0" width="144" height="35" fill="${col}" opacity="${(0.9 * m).toFixed(2)}"/>`
+  fill: (col, m = 1) => `<path d="${topCap(35)}" fill="${col}" opacity="${(0.9 * m).toFixed(2)}"/>`
 };
 var actionHead = (glyphName, title, fg = C.dim) => glyph(glyphName, 10, 8, 22, fg) + line(38, 25, 82, 16, 800, fg, String(title).toUpperCase(), "start", ' letter-spacing="0.5"');
 function usageMeterKey(head2, big, sub, isCost) {
   const none = String(big) === "--";
+  const est = isCost && !none;
   return svgWrap(`
-    ${header(head2)}
-    ${isCost && !none ? corner("est") : ""}
+    ${header(head2, est)}
+    ${est ? corner("est") : ""}
     ${line(72, 88, 128, 42, 700, none ? C.dim : C.text, big, "middle", "", 20)}
     ${foot(sub)}`);
 }

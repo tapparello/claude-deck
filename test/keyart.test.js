@@ -22,7 +22,7 @@ function textExtents(dataUri) {
     const w = body.length * ADVANCE * num("font-size");
     const x = num("x");
     const left = anchor === "middle" ? x - w / 2 : anchor === "end" ? x - w : x;
-    out.push({ body, size: num("font-size"), left, right: left + w });
+    out.push({ body, size: num("font-size"), y: num("y"), left, right: left + w });
   }
   return out;
 }
@@ -76,6 +76,63 @@ test("ruleLines keeps every line legible at the RULE_FIT ceiling of 36 chars", (
     const lines = ruleLines(rule);
     for (const l of lines) assert.ok(fits(l, 132, 13), `"${l}" from "${rule}" is illegible`);
     assert.ok(lines.length <= 4, `"${rule}" split into ${lines.length} lines, more than fit`);
+  }
+});
+
+// Overflow and collision are different failures. The box checks above pass happily
+// while two texts sit on top of each other, which is how "THIS MONTH" and its "est"
+// corner marker ran together into "THIS MONTHest".
+function assertNoCollision(dataUri, label) {
+  const items = textExtents(dataUri);
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      const a = items[i], b = items[j];
+      const sameLine = Math.abs(a.y - b.y) < 6;
+      const overlaps = a.left < b.right - 0.5 && b.left < a.right - 0.5;
+      assert.ok(!(sameLine && overlaps),
+        `${label}: "${a.body}" and "${b.body}" share baseline y=${a.y} and overlap ` +
+        `(${a.left.toFixed(1)}-${a.right.toFixed(1)} vs ${b.left.toFixed(1)}-${b.right.toFixed(1)})`);
+    }
+  }
+}
+
+test("a header and its corner marker never collide", () => {
+  // usageMeterKey is the only renderer that puts a header and a corner tag on the same
+  // baseline. Long window labels plus the "est" tag are the tight case.
+  for (const head of ["today", "this month", "7-day", "opus 7d 1/3", "this month xl"]) {
+    for (const isCost of [true, false]) {
+      assertNoCollision(usageMeterKey(head, "$2420.37", "cost", isCost), `usageMeter "${head}" cost=${isCost}`);
+    }
+  }
+  assertNoCollision(statusKey("claude-deck", "working", 1, "", "code"), "status name+tag");
+  assertNoCollision(statusKey("claude-deck", "working", 4, "", "code"), "status name+badge");
+});
+
+// A fill that reaches the top edge has to follow the key's rx=18 corners. A plain rect
+// paints straight over them and the key reads as square-cornered along its top — which
+// is exactly what the identity cap and DENY's filled band both did.
+test("nothing square-cornered paints over the key's rounded top edge", () => {
+  const cases = [
+    ["allow", approveKey("approve-allow", null, {})],
+    ["deny idle", approveKey("approve-deny", null, {})],
+    ["deny pending", approveKey("approve-deny", { cwd: "/a/b", toolName: "Bash", toolInput: { command: "npm test" }, suggestions: [] }, {})],
+    ["launch", actionKey("launch", "launch", "Desktop", "claude app")],
+    ["focus", labelKey("FOCUS", "claude-deck", "working")],
+    ["status", statusKey("claude-deck", "working", 1, "", "cli")],
+    ["usage", usageMeterKey("today", "$60.33", "cost", true)],
+  ];
+  for (const [label, art] of cases) {
+    const svg = decodeURIComponent(art.replace(/^data:image\/svg\+xml,/, ""));
+    for (const m of svg.matchAll(/<rect([^>]*)\/>/g)) {
+      const a = m[1];
+      const num = (k) => { const v = a.match(new RegExp(`${k}="([^"]+)"`)); return v ? Number(v[1]) : 0; };
+      const touchesTop = num("y") <= 0.5;
+      const fullWidth = num("width") >= 143;
+      const rounded = /\brx="/.test(a);
+      const isFill = /\bfill="(?!none)/.test(a);
+      assert.ok(!(touchesTop && fullWidth && isFill && !rounded),
+        `${label}: <rect${a}> is a square-cornered full-width fill at the top edge`);
+    }
   }
 });
 
