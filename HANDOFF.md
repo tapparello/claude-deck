@@ -7,6 +7,12 @@ rediscover" doc. Keep it updated when you learn something the hard way.
 ## Repo shape
 
 - `src/plugin.js` — the actual source. Edit this, never the bundle.
+- `src/keyart.js` — every key's SVG, and the whole design system. Pure functions of
+  their arguments, which is what lets `tools/gen-showcase.mjs` render the entire deck
+  outside the plugin. Read the header comment before changing anything visual: the three
+  rules there are each backed by a measurement, and two of them exist because the
+  obvious-looking alternative was tried and broke something. `localGauge()` deliberately
+  stayed in `plugin.js` — it reads the `animPhase` ticker, so it is not pure.
 - `src/approve.js` — pure decision logic for the approver (rule sanitising, key text,
   queue, press and deny-window guards). No I/O, so every rule is fixture-testable.
 - `src/hookserver.js` — the loopback listener the `PermissionRequest` hook POSTs to.
@@ -35,14 +41,25 @@ rediscover" doc. Keep it updated when you learn something the hard way.
   Stream Deck quit, which also leaves the approver's hook server down, so the keys go
   dead and Claude Code gets `ECONNREFUSED`. Check `pgrep -x "Stream Deck"` after
   deploying and run `open -a "Elgato Stream Deck"` if it is not up.
-- `docs/*.png` — README screenshots. `local-assets/claude-logo.png` is
-  gitignored (personal-use icon override); both deploy scripts copy it over the
-  SVG launcher/category icons if present.
+- `tools/gen-icons.mjs` (`npm run icons`) — writes all 21 action-list icons from the
+  same glyph table the keys use. Never hand-edit `imgs/*.svg`: they had drifted to FOUR
+  different backgrounds and their own art before this existed. The script refuses to run
+  if a file on disk has no mapping, so a new action can't silently keep a stale icon.
+- `tools/gen-showcase.mjs` (`npm run showcase`) — writes `docs/keys.svg` and
+  `docs/actions.svg` from the real renderers, for the README. Regenerate after ANY
+  visual change; the previous README shots outlived the design they documented by a
+  whole redesign. `docs/*.png` are raster snapshots of those SVGs for hosts that won't
+  render SVG — refresh them by opening the SVG in a browser at natural size and
+  screenshotting, since there is no rasteriser in the toolchain.
+- `local-assets/claude-logo.png` is gitignored (personal-use icon override); both deploy
+  scripts copy it over the launcher/category icons if present. **It no longer reaches the
+  launch KEY:** `launch` now has a renderer, so `setImage` overwrites whatever art the
+  manifest points at. The category icon still honours it.
 
 ## Build → deploy → verify loop
 
 ```powershell
-npm test            # 175 unit tests, no Stream Deck and no network needed
+npm test            # 185 unit tests, no Stream Deck and no network needed
 npm run build       # src/plugin.js -> bin/plugin.mjs
 npm run selftest     # runs the plugin's poll functions headless, prints results
 .\deploy.ps1          # installs to %APPDATA%\Elgato\...\Plugins\, restarts Stream Deck
@@ -232,8 +249,30 @@ command passthrough in Claude Code).
   Truncating at 18 chars used to collapse every WebFetch domain grant to the identical
   `"WebFetch(domain:e…"` — two different domains rendered the same on the one key that
   produces a durable write. It now returns `null` (the existing disabled `ALWAYS n/a`
-  path) only past `RULE_FIT` (36); `src/plugin.js`'s `approveKey` splits anything over
-  `RULE_MAX` (18) across two lines instead of shrinking it into an ellipsis.
+  path) only past `RULE_FIT` (36). `keyart.js`'s `ruleLines()` breaks the rest across up
+  to four lines, measuring each one, so there is no character threshold any more —
+  `RULE_MAX` is gone. **The two-line split it replaced did not actually fit:**
+  `(domain:docs.amplify.aws)` rendered 199 units wide inside a 144 box, clipped on BOTH
+  sides, so the fix for identical-looking domains shipped a second bug that looked the
+  same from the deck. Measure text, don't eyeball it — `test/keyart.test.js` now asserts
+  every string in every key state stays inside the box.
+- **Key art bugs are invisible until you measure or zoom** (learned 2026-07-28). Three
+  shipped or nearly shipped in one session, all of them looking fine in a normal-size
+  render: text 199 units wide in a 144 box (clipped both sides, so two domains looked
+  identical); a header running into its own corner marker so `THIS MONTH` + `est` read as
+  `THIS MONTHest`; and a full-width band at `y=0` painting straight over the key's
+  `rx="18"`, squaring off the top corners of every action key *and* DENY. `fit()` alone
+  never fixes overflow — it stops shrinking at a floor, so `line()` shrinks *then*
+  truncates and every string goes through it. `test/keyart.test.js` covers all three
+  classes: box overflow, same-baseline collision, and square-cornered top fills. Add to
+  it rather than trusting a screenshot.
+- **Colour in this plugin is a scarce resource** (2026-07-28). Five hues are spent on
+  state and three on the approve decisions; there is no room for a decorative accent, and
+  the old Claude orange measured within 1.13:1 of the alarm red. Action-key identity works
+  only because it uses *chroma* (~20 vs the state palette's 49-92) and a different
+  position on the key. Before adding any colour, check it against every entry in `C` — the
+  first attempt at identity hues coloured the band BY state, which made a working FOCUS
+  key indistinguishable from the ALWAYS key sitting next to it in the shipped profile.
 - **The `auth?` signal is windowed, not cumulative** (fixed 2026-07-25).
   `hookserver.js`'s `stats.badPathHits` is a pruned array of recent wrong-path
   timestamps, cleared outright the moment a correctly-pathed request arrives — a single

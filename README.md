@@ -6,7 +6,7 @@ Live Claude usage gauges, running Claude Code sessions, per-session status, and 
 
 The usage gauges show the **same session/weekly percentages Claude Desktop and Claude Code's `/usage` display** — pulled with your local Claude sign-in, refreshed every couple of minutes. No extra login, nothing leaves your machine.
 
-![Claude Deck — live usage, sessions, and launchers on a Stream Deck XL](docs/shot1.png)
+![Every Claude Deck key: usage gauges, shortcuts, session status, and the permission-prompt keys](docs/keys.png)
 
 ## Keys
 
@@ -26,7 +26,7 @@ The usage gauges show the **same session/weekly percentages Claude Desktop and C
 | **Project Terminal** | Configurable: opens Claude Code in a specific project folder (label + path in key settings). |
 | **Focus Session** | Press to cycle running sessions and bring each one's window to the front. When a session is waiting on you it takes priority, so the first press lands on the one that needs an answer. |
 | **Quick Prompt** | Configurable: opens quick chat and pastes a canned prompt (optionally presses Enter). Overwrites the clipboard. |
-| **Claude Custom** | A Claude-styled spare key that opens anything you set: app, URL, or folder. |
+| **Claude Custom** | A spare key that opens anything you set: app, URL, or folder. |
 | **Claude Waiting** | Dark ("all clear") until a Claude Code session is waiting on you, then shows that session's name, why (permission prompt / input needed) and a count if several are waiting. Press to jump straight to that session's window; press again to cycle the rest. |
 | **Claude Status** | Live state of one Claude Code session: **Needs approval** (blocked on a permission prompt) · **Input needed** · **Working** · **Finished** · **Idle**, with the reason or age underneath. Press to jump to that session's window. Two ways to use it: **bind it to a project** (folder name, in the key's settings) so it always tracks that project, or **leave it blank (auto)** — then a row of auto keys covers your busiest sessions, most-urgent first, ordered by key position (top-left = most urgent). Extra auto keys beyond the session count read "no session". Optional **"Press cycles through sessions"** makes a press walk the list instead of keeping the key's own slot — off by default, since Focus Session already cycles. |
 | **Claude Allow** | Dark ("all clear") until a session hits a permission prompt (up to 8 queued, oldest shown first), then lights up with what's pending (see **What the keys show** below). Press to **allow** it for that one turn — the same as answering "Yes" in the terminal. See **Approving from the deck** below for setup. |
@@ -36,9 +36,32 @@ The usage gauges show the **same session/weekly percentages Claude Desktop and C
 Bar colors: green < 60%, amber 60–85%, red ≥ 85%. At 90%+ the gauge pulses red.
 The sessions key shows an animated dot cycle while any session is actively working.
 
-| Limits at a glance | Agents at a glance |
-|---|---|
-| ![Session gauge pulsing red at 94%, burn rate, weekly gauge](docs/shot2.png) | ![Session count with activity dots, focus key, today's stats](docs/shot3.png) |
+## How the keys are designed
+
+Three rules, so a glance at the deck tells you something without reading it.
+
+![The eight shortcut keys, each with its own identity hue](docs/actions.png)
+
+**Colour means something, always.** Values are bone white; colour is reserved for state
+and for the three permission decisions. So any colour on the deck means something is
+happening. There is no decorative accent — five hues are already spent on state
+(working, needs-approval, input-needed, finished, over-budget), and every candidate for
+a sixth landed close enough to one of them to be confusable, especially for the ~8% of
+men with red-green colour blindness.
+
+**A coloured cap means the press leaves the deck.** Keys that launch an app, focus a
+window or answer a permission prompt carry a tinted header cap and a glyph. Keys that
+only cycle or refresh what they already show carry neither. The cap is that key's own
+fixed hue and never changes with state, while state shows up as a glow around the whole
+key — different place, and far more saturated, so the two never get confused.
+
+**Shape carries what colour can't.** ALLOW, ALWAYS and DENY use a single rule, a double
+rule and a filled cap respectively, plus ✓ / ✓✓ / ✗ marks. Green and red are nearly
+identical to a red-green colour-blind eye, so the mark and the silhouette are what tell
+those three apart — the ones where a mis-press matters most.
+
+Both images above are generated from the real renderers with `npm run showcase`, so they
+can't drift from the code. `docs/keys.svg` and `docs/actions.svg` are the crisp versions.
 
 ## Requirements
 
@@ -83,6 +106,11 @@ Allow shows the rule it would save** — Claude Code's suggestions are often wil
 approving `gh pr merge --admin 1234` may save `Bash(gh pr *)`. The key greys out to
 `ALWAYS n/a` when no safe rule is on offer, including for MCP tools, where a suggestion
 is often a whole-tool grant that the terminal itself refuses to offer.
+
+A rule too wide for one line is broken across up to four, each sized to stay readable —
+`WebFetch(domain:docs.amplify.aws)` renders as `WebFetch` / `domain:` / `docs.amplify.aws`
+rather than being cut off. A rule too long even for that is refused rather than shown
+truncated, because a rule you can't fully read is one you shouldn't be able to press.
 
 Because values are shortened to fit, two different requests can look alike at a
 glance — two files with the same name in different folders, two URLs on the same host.
