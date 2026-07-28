@@ -7,6 +7,18 @@ rediscover" doc. Keep it updated when you learn something the hard way.
 ## Repo shape
 
 - `src/plugin.js` — the actual source. Edit this, never the bundle.
+- `src/approve.js` — pure decision logic for the approver (rule sanitising, key text,
+  queue, press and deny-window guards). No I/O, so every rule is fixture-testable.
+- `src/hookserver.js` — the loopback listener the `PermissionRequest` hook POSTs to.
+  Owns the capability URL, idempotent responses and dropped-socket detection.
+- `Claude.streamDeckProfile` — a zip of a `.sdProfile` directory, imported by
+  double-clicking. **Re-export it whenever you add an action**, or importers get a
+  layout missing the new keys: the approver keys were absent from it for 20 commits
+  because nothing in this file said to. Rebuild by zipping the live profile directory
+  from `~/Library/Application Support/com.elgato.StreamDeck/ProfilesV3/<uuid>.sdProfile`
+  (keep that directory as the zip's top-level entry) and strip any per-key settings that
+  differ from the documented defaults — a ticked `sessionOnly` would otherwise ship a
+  different write scope than the README promises.
 - `dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs` — esbuild
   output, checked in because Stream Deck loads directly from the installed
   plugin folder. Regenerate with `npm run build`; don't hand-edit it.
