@@ -2117,7 +2117,7 @@ var require_extension = __commonJS({
       if (dest[name] === void 0) dest[name] = [elem];
       else dest[name].push(elem);
     }
-    function parse(header) {
+    function parse(header2) {
       const offers = /* @__PURE__ */ Object.create(null);
       let params = /* @__PURE__ */ Object.create(null);
       let mustUnescape = false;
@@ -2129,8 +2129,8 @@ var require_extension = __commonJS({
       let code = -1;
       let end = -1;
       let i = 0;
-      for (; i < header.length; i++) {
-        code = header.charCodeAt(i);
+      for (; i < header2.length; i++) {
+        code = header2.charCodeAt(i);
         if (extensionName === void 0) {
           if (end === -1 && tokenChars[code] === 1) {
             if (start === -1) start = i;
@@ -2141,7 +2141,7 @@ var require_extension = __commonJS({
               throw new SyntaxError(`Unexpected character at index ${i}`);
             }
             if (end === -1) end = i;
-            const name = header.slice(start, end);
+            const name = header2.slice(start, end);
             if (code === 44) {
               push(offers, name, params);
               params = /* @__PURE__ */ Object.create(null);
@@ -2162,7 +2162,7 @@ var require_extension = __commonJS({
               throw new SyntaxError(`Unexpected character at index ${i}`);
             }
             if (end === -1) end = i;
-            push(params, header.slice(start, end), true);
+            push(params, header2.slice(start, end), true);
             if (code === 44) {
               push(offers, extensionName, params);
               params = /* @__PURE__ */ Object.create(null);
@@ -2170,7 +2170,7 @@ var require_extension = __commonJS({
             }
             start = end = -1;
           } else if (code === 61 && start !== -1 && end === -1) {
-            paramName = header.slice(start, i);
+            paramName = header2.slice(start, i);
             start = end = -1;
           } else {
             throw new SyntaxError(`Unexpected character at index ${i}`);
@@ -2194,7 +2194,7 @@ var require_extension = __commonJS({
             } else {
               throw new SyntaxError(`Unexpected character at index ${i}`);
             }
-          } else if (code === 34 && header.charCodeAt(i - 1) === 61) {
+          } else if (code === 34 && header2.charCodeAt(i - 1) === 61) {
             inQuotes = true;
           } else if (end === -1 && tokenChars[code] === 1) {
             if (start === -1) start = i;
@@ -2205,7 +2205,7 @@ var require_extension = __commonJS({
               throw new SyntaxError(`Unexpected character at index ${i}`);
             }
             if (end === -1) end = i;
-            let value = header.slice(start, end);
+            let value = header2.slice(start, end);
             if (mustUnescape) {
               value = value.replace(/\\/g, "");
               mustUnescape = false;
@@ -2227,7 +2227,7 @@ var require_extension = __commonJS({
         throw new SyntaxError("Unexpected end of input");
       }
       if (end === -1) end = i;
-      const token = header.slice(start, end);
+      const token = header2.slice(start, end);
       if (extensionName === void 0) {
         push(offers, token, params);
       } else {
@@ -3260,13 +3260,13 @@ var require_subprotocol = __commonJS({
   "node_modules/ws/lib/subprotocol.js"(exports, module) {
     "use strict";
     var { tokenChars } = require_validation();
-    function parse(header) {
+    function parse(header2) {
       const protocols = /* @__PURE__ */ new Set();
       let start = -1;
       let end = -1;
       let i = 0;
-      for (i; i < header.length; i++) {
-        const code = header.charCodeAt(i);
+      for (i; i < header2.length; i++) {
+        const code = header2.charCodeAt(i);
         if (end === -1 && tokenChars[code] === 1) {
           if (start === -1) start = i;
         } else if (i !== 0 && (code === 32 || code === 9)) {
@@ -3276,7 +3276,7 @@ var require_subprotocol = __commonJS({
             throw new SyntaxError(`Unexpected character at index ${i}`);
           }
           if (end === -1) end = i;
-          const protocol2 = header.slice(start, end);
+          const protocol2 = header2.slice(start, end);
           if (protocols.has(protocol2)) {
             throw new SyntaxError(`The "${protocol2}" subprotocol is duplicated`);
           }
@@ -3289,7 +3289,7 @@ var require_subprotocol = __commonJS({
       if (start === -1 || end !== -1) {
         throw new SyntaxError("Unexpected end of input");
       }
-      const protocol = header.slice(start, i);
+      const protocol = header2.slice(start, i);
       if (protocols.has(protocol)) {
         throw new SyntaxError(`The "${protocol}" subprotocol is duplicated`);
       }
@@ -3808,8 +3808,8 @@ function outermostAppBundle(execPath) {
 }
 function parsePsTree(out) {
   const tree = /* @__PURE__ */ new Map();
-  for (const line of String(out ?? "").split("\n")) {
-    const m = /^\s*(\d+)\s+(\d+)\s+(.*\S)\s*$/.exec(line);
+  for (const line2 of String(out ?? "").split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*\S)\s*$/.exec(line2);
     if (m) tree.set(m[1], { ppid: m[2], comm: m[3] });
   }
   return tree;
@@ -3896,11 +3896,11 @@ function totalOf(tok) {
 function parseRequests(text) {
   const byId = /* @__PURE__ */ new Map();
   const noId = [];
-  for (const line of String(text ?? "").split("\n")) {
-    if (!line) continue;
+  for (const line2 of String(text ?? "").split("\n")) {
+    if (!line2) continue;
     let j;
     try {
-      j = JSON.parse(line);
+      j = JSON.parse(line2);
     } catch {
       continue;
     }
@@ -4135,7 +4135,6 @@ function decisionBody(kind, req, opts = {}) {
 }
 var NAME_MAX = 11;
 var TARGET_MAX = 14;
-var RULE_MAX = 18;
 var RULE_FIT = 36;
 var clean = (v) => String(v ?? "").replace(/[\s\p{Cc}]+/gu, " ").trim();
 var cut = (s, max) => s.length > max ? s.slice(0, max - 1) + "\u2026" : s;
@@ -4263,19 +4262,41 @@ var C = {
   panel: "#211f2b",
   text: "#f5f1ea",
   dim: "#9b96a8",
-  accent: "#d97757",
-  // Claude orange
+  // Band rule for an action. Achromatic on purpose: zero hue is zero collision with
+  // any state colour, in any vision type and in greyscale. 3.56:1 as a graphic mark
+  // once composited, above the 3:1 non-text target. The old solid-orange launch key
+  // WAS findable — it was just shouting; this keeps the findability.
+  rail: "#807b8d",
   ok: "#4ade80",
   warn: "#fbbf24",
   bad: "#f87171",
   track: "#3a3745",
   info: "#60a5fa",
-  // status: working (blue)
+  // status: working
   ask: "#a855f7"
-  // status: input needed (purple)
+  // status: input needed
 };
 var pctColor = (p) => p == null ? C.dim : p >= 85 ? C.bad : p >= 60 ? C.warn : C.ok;
 var esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+var FONT = "-apple-system, Segoe UI, system-ui, sans-serif";
+var ADVANCE = 0.6;
+var fit = (s, maxW, ideal, min = 11) => Math.max(min, Math.min(ideal, Math.floor(maxW / (ADVANCE * Math.max(1, String(s).length)))));
+var fits = (s, maxW, size) => String(s).length * ADVANCE * size <= maxW;
+var capacity = (maxW, size) => Math.max(1, Math.floor(maxW / (ADVANCE * size)));
+function fitClip(s, maxW, ideal, min = 11) {
+  const str = String(s);
+  const size = fit(str, maxW, ideal, min);
+  if (fits(str, maxW, size)) return [str, size];
+  return [str.slice(0, Math.max(1, capacity(maxW, size) - 1)) + "\u2026", size];
+}
+var txt = (x, y, size, weight, fill, s, anchor = "middle", extra = "") => `<text x="${x}" y="${y}" text-anchor="${anchor}" font-family="${FONT}" font-size="${size}" font-weight="${weight}" fill="${fill}"${extra}>${esc(s)}</text>`;
+var line = (x, y, maxW, ideal, weight, fill, s, anchor = "middle", extra = "", min = 11) => {
+  const [t, size] = fitClip(s, maxW, ideal, min);
+  return txt(x, y, size, weight, fill, t, anchor, extra);
+};
+var svgWrap = (inner) => "data:image/svg+xml," + encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="144" height="144" viewBox="0 0 144 144"><rect width="144" height="144" rx="18" fill="${C.bg}"/>${inner}</svg>`
+);
 function tintFrame(col, strong = false, phase = null) {
   if (!col) return "";
   const p = phase == null ? 1 : [0.3, 0.65, 1][phase % 3];
@@ -4286,9 +4307,53 @@ function tintFrame(col, strong = false, phase = null) {
     <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="${col}" stroke-width="${strong ? 5 : 3}" opacity="${mainOp.toFixed(3)}"/>
     <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="${col}" stroke-width="1" opacity="${(0.18 * p).toFixed(3)}"/>`;
 }
-function svgWrap(inner) {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="144" height="144" viewBox="0 0 144 144"><rect width="144" height="144" rx="18" fill="${C.bg}"/>${inner}</svg>`;
-  return "data:image/svg+xml," + encodeURIComponent(svg);
+var GLYPHS = {
+  allow: ["M4 13 L9.5 18.5 L20 6"],
+  always: ["M2 13 L7 18 L16.5 6.5", "M10.5 18 L20 6.5"],
+  deny: ["M6.5 6.5 L17.5 17.5", "M17.5 6.5 L6.5 17.5"],
+  launch: ["M14 4 h6 v6", "M20 4 L12.5 11.5", "M17 14 v5 a1 1 0 0 1 -1 1 H5 a1 1 0 0 1 -1 -1 V8 a1 1 0 0 1 1 -1 h5"],
+  chat: ["M3.5 6 h17 v10 h-9 l-5 4 v-4 h-3 z"],
+  web: ["M12 3 a9 9 0 1 0 0.01 0", "M3 12 h18", "M12 3 a13 13 0 0 0 0 18 a13 13 0 0 0 0 -18"],
+  code: ["M6 8 L10.5 12.5 L6 17", "M13 17 h5.5"],
+  project: ["M3 18 V6 h6 l2 2.5 h10 V18 z"],
+  prompt: ["M4 7 h16", "M4 12.5 h11", "M4 18 h7"],
+  custom: ["M4 7.5 h16", "M4 16.5 h16", "M9 7.5 m0 0 a2.4 2.4 0 1 0 0.01 0", "M15 16.5 m0 0 a2.4 2.4 0 1 0 0.01 0"],
+  focus: ["M12 12 m-7 0 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0", "M12 1.5 v4", "M12 18.5 v4", "M1.5 12 h4", "M18.5 12 h4"],
+  // Report-kind marks. Report KEYS carry no glyph — that absence is the action-class
+  // signal — but the Stream Deck action list needs one row icon per action, so these
+  // exist for iconSvg() only.
+  gauge: ["M3.5 18 a8.5 8.5 0 1 1 17 0", "M12 18 L16.5 10.5"],
+  meter: ["M3.5 12.5 h17 a3 3 0 0 1 0 6 h-17 a3 3 0 0 1 0 -6 z", "M7 15.5 h6"],
+  rising: ["M4 16.5 L10 10 L14 14 L20 7", "M20 12 V7 h-5"],
+  layers: ["M12 3 L21 8 L12 13 L3 8 z", "M3 12.5 L12 17.5 L21 12.5", "M3 16.5 L12 21.5 L21 16.5"],
+  list: ["M4 7 h13", "M4 12 h13", "M4 17 h13", "M20 7 m0 0 a1 1 0 1 0 0.01 0", "M20 12 m0 0 a1 1 0 1 0 0.01 0", "M20 17 m0 0 a1 1 0 1 0 0.01 0"],
+  dot: ["M12 12 m-8 0 a8 8 0 1 0 16 0 a8 8 0 1 0 -16 0", "M12 12 m-2.6 0 a2.6 2.6 0 1 0 5.2 0 a2.6 2.6 0 1 0 -5.2 0"],
+  clock: ["M12 12 m-8.5 0 a8.5 8.5 0 1 0 17 0 a8.5 8.5 0 1 0 -17 0", "M12 6.5 V12 l4 2.5"],
+  calendar: ["M4 6.5 h16 v14 H4 z", "M4 11 h16", "M8 3 v4", "M16 3 v4"],
+  week: ["M4 6.5 h16 v14 H4 z", "M4 11 h16", "M8 3 v4", "M16 3 v4", "M7.5 15 h3", "M13.5 15 h3"],
+  grid: ["M4 4.5 h6 v6 H4 z", "M14 4.5 h6 v6 h-6 z", "M4 13.5 h6 v6 H4 z", "M14 13.5 h6 v6 h-6 z"]
+};
+function glyph(name, x, y, size, col, sw = 2.6) {
+  const s = size / 24;
+  return `<g transform="translate(${x},${y}) scale(${s.toFixed(4)})" fill="none" stroke="${col}" stroke-width="${(sw / s).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round">` + (GLYPHS[name] ?? []).map((d) => `<path d="${d}"/>`).join("") + "</g>";
+}
+var header = (s) => line(12, 25, 106, 15, 700, C.dim, String(s).toUpperCase(), "start", ' letter-spacing="0.6"');
+var foot = (s, col = C.dim) => s ? line(72, 127, 130, 14, 400, col, s) : "";
+var corner = (tag, col = C.dim) => tag ? txt(132, 25, 12, 600, col, String(tag).slice(0, 8), "end") : "";
+var badge = (n, col) => `<circle cx="121" cy="20" r="11.5" fill="${C.panel}" stroke="${col}" stroke-width="1.5"/>` + txt(121, 25, 14, 700, C.text, n);
+var band = {
+  rule: (col, m = 1) => `<rect x="0" y="33" width="144" height="2.5" fill="${col}" opacity="${(0.85 * m).toFixed(2)}"/>`,
+  double: (col, m = 1) => `<rect x="0" y="33" width="144" height="2.5" fill="${col}" opacity="${(0.85 * m).toFixed(2)}"/><rect x="0" y="38" width="144" height="1.5" fill="${col}" opacity="${(0.55 * m).toFixed(2)}"/>`,
+  fill: (col, m = 1) => `<rect x="0" y="0" width="144" height="35" fill="${col}" opacity="${(0.9 * m).toFixed(2)}"/>`
+};
+var actionHead = (glyphName, title, fg = C.dim) => glyph(glyphName, 10, 8, 20, fg) + line(36, 25, 84, 15, 800, fg, String(title).toUpperCase(), "start", ' letter-spacing="0.5"');
+function usageMeterKey(head2, big, sub, isCost) {
+  const none = String(big) === "--";
+  return svgWrap(`
+    ${header(head2)}
+    ${isCost && !none ? corner("est") : ""}
+    ${line(72, 88, 128, 42, 700, none ? C.dim : C.text, big, "middle", "", 20)}
+    ${foot(sub)}`);
 }
 function gaugeKey(label, pct, sub, pulsePhase = null) {
   const has = typeof pct === "number" && isFinite(pct);
@@ -4297,49 +4362,72 @@ function gaugeKey(label, pct, sub, pulsePhase = null) {
   const pulse = pulsePhase == null ? "" : `<rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="${C.bad}" stroke-width="6" opacity="${[0.2, 0.55, 0.95][pulsePhase % 3]}"/>`;
   return svgWrap(`
     ${pulse}
-    <text x="14" y="27" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(label)}</text>
-    <text x="72" y="78" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${has ? 46 : 34}" font-weight="700" fill="${has ? col : C.dim}">${has ? Math.round(p) + "%" : "--"}</text>
-    <rect x="14" y="90" width="116" height="12" rx="6" fill="${C.track}"/>
-    ${has ? `<rect x="14" y="90" width="${Math.max(8, 116 * p / 100)}" height="12" rx="6" fill="${col}"/>` : ""}
-    <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="16" fill="${C.dim}">${esc(sub ?? "")}</text>`);
-}
-function linesKey(title, rows, accent = C.accent) {
-  const rowSvg = rows.map((r, i) => {
-    const y = 62 + i * 31;
-    return `<text x="14" y="${y}" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${r.big ? 28 : 20}" font-weight="${r.big ? 700 : 600}" fill="${r.color ?? C.text}">${esc(r.text)}</text>`;
-  }).join("");
-  return svgWrap(`
-    <rect x="0" y="0" width="144" height="34" rx="18" fill="${C.panel}"/>
-    <rect x="0" y="17" width="144" height="17" fill="${C.panel}"/>
-    <text x="14" y="24" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${accent}">${esc(title)}</text>
-    ${rowSvg}`);
-}
-function bigCountKey(title, count, sub, subColor, animPhase2 = null, tint = null, strong = false) {
-  const dots = animPhase2 == null ? "" : [0, 1, 2].map((i) => `<circle cx="122" cy="${56 + i * 16}" r="${i === animPhase2 ? 4.5 : 3}" fill="${i === animPhase2 ? tint ?? C.info : C.track}"/>`).join("");
-  return svgWrap(`
-    ${tintFrame(tint, strong)}
-    <text x="14" y="27" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(title)}</text>
-    ${dots}
-    <text x="72" y="96" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="64" font-weight="700" fill="${count > 0 ? C.text : C.dim}">${count}</text>
-    <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" fill="${subColor ?? C.dim}">${esc(sub ?? "")}</text>`);
+    ${header(label)}
+    ${line(72, 82, 128, has ? 44 : 32, 700, col, has ? Math.round(p) + "%" : "--")}
+    <rect x="12" y="94" width="120" height="10" rx="5" fill="${C.track}"/>
+    ${has ? `<rect x="12" y="94" width="${Math.max(7, 120 * p / 100).toFixed(1)}" height="10" rx="5" fill="${col}"/>` : ""}
+    ${foot(sub)}`);
 }
 function burnKey(tokensHour, sub) {
   const has = tokensHour != null;
   return svgWrap(`
-    <text x="14" y="27" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">BURN RATE</text>
-    <text x="72" y="82" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="40" font-weight="700" fill="${has ? C.accent : C.dim}">${has ? fmtNum(tokensHour) : "--"}</text>
-    <text x="72" y="104" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="16" fill="${C.dim}">tok/hr</text>
-    <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub ?? "")}</text>`);
+    ${header("burn rate")}
+    ${line(72, 84, 128, has ? 42 : 32, 700, has ? C.text : C.dim, has ? fmtNum(tokensHour) : "--")}
+    ${txt(72, 105, 15, 400, C.dim, "tok/hr")}
+    ${foot(sub)}`);
 }
-function usageMeterKey(header, big, sub, isCost) {
-  const dim = String(big) === "--";
+function linesKey(title, rows) {
+  const rowSvg = rows.map((r, i) => line(12, 64 + i * 30, 122, 21, r.big ? 700 : 600, r.color ?? C.text, r.text, "start")).join("");
+  return svgWrap(`${header(title)}${rowSvg}`);
+}
+function bigCountKey(title, count, sub, subColor, animPhase2 = null, tint = null, strong = false) {
+  const dots = animPhase2 == null ? "" : [0, 1, 2].map((i) => `<circle cx="128" cy="${58 + i * 15}" r="${i === animPhase2 ? 4.5 : 3}" fill="${i === animPhase2 ? tint ?? C.info : C.track}"/>`).join("");
   return svgWrap(`
-    <text x="14" y="27" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${C.dim}">${esc(header)}</text>
-    <text x="72" y="84" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${String(big).length > 6 ? 30 : 40}" font-weight="700" fill="${dim ? C.dim : C.accent}">${esc(big)}</text>
-    ${isCost && !dim ? `<text x="130" y="58" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" fill="${C.dim}">est</text>` : ""}
-    <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub)}</text>`);
+    ${tintFrame(tint, strong)}
+    ${header(title)}
+    ${dots}
+    ${line(72, 97, 118, 60, 700, count > 0 ? C.text : C.dim, count)}
+    ${foot(sub, subColor ?? C.dim)}`);
 }
-function labelKey(title, label, sub, accent = C.accent, tint = null, strong = false) {
+var STATUS_LOOK = {
+  "needs-approval": { label: "Needs approval", col: C.warn, strong: true },
+  "input-needed": { label: "Input needed", col: C.ask, strong: true },
+  working: { label: "Working", col: C.info },
+  finished: { label: "Finished", col: C.ok },
+  idle: { label: "Idle", col: C.dim },
+  none: { label: "no session", col: C.dim },
+  quiet: { label: "all clear", col: C.dim },
+  // Waiting key, nothing pending
+  // A session that reports no status (VS Code extension) and whose transcript we
+  // couldn't stat. Saying "no status" beats inventing "Idle".
+  unknown: { label: "no status", col: C.dim }
+};
+function statusKey(name, st, count, detail = "", tag = "", phase = null) {
+  const look = STATUS_LOOK[st] ?? STATUS_LOOK.none;
+  const shown = String(name || "CLAUDE").slice(0, 11);
+  return svgWrap(`
+    ${tintFrame(look.col, !!look.strong, phase)}
+    ${count > 1 ? badge(count, look.col) : corner(tag)}
+    ${line(72, 78, 128, 25, 700, st === "none" ? C.dim : C.text, shown)}
+    ${line(72, 104, 130, 17, 700, look.col, look.label)}
+    ${detail ? line(72, 127, 132, 13, 400, C.dim, detail) : ""}`);
+}
+function fmtNum(n) {
+  if (n == null) return "--";
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
+  return String(n);
+}
+function actionKey(glyphName, title, label, sub) {
+  return svgWrap(`
+    ${band.rule(C.rail)}
+    ${actionHead(glyphName, title)}
+    ${line(72, 92, 128, 24, 700, C.text, label)}
+    ${foot(sub)}`);
+}
+var GLYPH_FOR = { PROJECT: "project", FOCUS: "focus", PROMPT: "prompt", CLAUDE: "custom" };
+function labelKey(title, label, sub, tint = null, strong = false) {
   const text = String(label ?? "").trim() || "\u2014";
   const words = text.split(/\s+/);
   const lines = [];
@@ -4353,84 +4441,81 @@ function labelKey(title, label, sub, accent = C.accent, tint = null, strong = fa
     }
   }
   if (cur && lines.length < 2) lines.push(cur);
-  const lineSvg = lines.slice(0, 2).map((l, i) => `<text x="72" y="${lines.length > 1 ? 68 + i * 27 : 82}" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="22" font-weight="700" fill="${C.text}">${esc(l.slice(0, 12))}</text>`).join("");
+  const use = lines.slice(0, 2).filter(Boolean);
+  const body = use.map((l, i) => line(72, use.length > 1 ? 76 + i * 26 : 92, 128, 23, 700, C.text, l)).join("");
   return svgWrap(`
     ${tintFrame(tint, strong)}
-    <text x="14" y="27" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="600" letter-spacing="0.5" fill="${accent}">${esc(title)}</text>
-    ${lineSvg}
-    <text x="72" y="128" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" fill="${C.dim}">${esc(sub ?? "")}</text>`);
-}
-var STATUS_LOOK = {
-  "needs-approval": { label: "Needs approval", col: C.warn, strong: true },
-  "input-needed": { label: "Input needed", col: C.ask, strong: true },
-  working: { label: "Working", col: C.info },
-  finished: { label: "Finished", col: C.ok },
-  idle: { label: "Idle", col: C.dim },
-  none: { label: "no session", col: C.dim },
-  quiet: { label: "all clear", col: C.dim },
-  // Waiting key, nothing pending
-  // A session that reports no status (VS Code extension) and whose transcript
-  // we couldn't stat. Saying "no status" beats inventing "Idle".
-  unknown: { label: "no status", col: C.dim }
-};
-function statusKey(name, st, count, detail = "", tag = "", phase = null) {
-  const look = STATUS_LOOK[st] ?? STATUS_LOOK.none;
-  const { label, col } = look;
-  const strong = !!look.strong;
-  const shown = name || "CLAUDE";
-  const corner = count > 1 ? `<circle cx="120" cy="26" r="13" fill="${C.panel}" stroke="${col}" stroke-width="1.5"/><text x="120" y="31" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${count}</text>` : tag ? `<text x="132" y="30" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="600" fill="${C.dim}">${esc(tag)}</text>` : "";
-  return svgWrap(`
-    ${tintFrame(col, strong, phase)}
-    ${corner}
-    <text x="72" y="72" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${String(shown).length > 9 ? 22 : 26}" font-weight="700" fill="${st === "none" ? C.dim : C.text}">${esc(String(shown).slice(0, 11))}</text>
-    <text x="72" y="100" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${label.length > 11 ? 15 : 18}" font-weight="700" fill="${col}">${esc(label)}</text>
-    ${detail ? `<text x="72" y="124" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" fill="${C.dim}">${esc(detail)}</text>` : ""}`);
+    ${band.rule(C.rail)}
+    ${actionHead(GLYPH_FOR[String(title).toUpperCase()] ?? "custom", title)}
+    ${body}
+    ${foot(sub)}`);
 }
 var APPROVE_LOOK = {
-  "approve-allow": { word: "ALLOW", col: C.ok },
-  "approve-always": { word: "ALWAYS", col: C.info },
-  "approve-deny": { word: "DENY", col: C.bad }
+  "approve-allow": { word: "ALLOW", col: C.ok, glyphName: "allow", weight: "rule" },
+  "approve-always": { word: "ALWAYS", col: C.info, glyphName: "always", weight: "double" },
+  "approve-deny": { word: "DENY", col: C.bad, glyphName: "deny", weight: "fill" }
 };
+var RULE_W = 132;
+var RULE_IDEAL = 19;
+var RULE_GOOD = 13;
+function ruleLines(rule) {
+  const good = (s) => fit(s, RULE_W, RULE_IDEAL) >= RULE_GOOD;
+  if (good(rule)) return [rule];
+  const at = rule.indexOf("(");
+  let parts = at >= 0 ? [rule.slice(0, at), rule.slice(at)] : [rule];
+  if (!parts.every(good)) {
+    const tail = parts[parts.length - 1];
+    const colon = tail.indexOf(":");
+    if (colon >= 0) {
+      parts = [
+        ...parts.slice(0, -1),
+        tail.slice(0, colon + 1).replace(/^\(/, ""),
+        tail.slice(colon + 1).replace(/\)$/, "")
+      ];
+    }
+  }
+  const out = [];
+  for (const p of parts.filter(Boolean)) {
+    if (good(p)) {
+      out.push(p);
+      continue;
+    }
+    const max = capacity(RULE_W, RULE_GOOD);
+    for (let i = 0; i < p.length; i += max) out.push(p.slice(i, i + max));
+  }
+  return out;
+}
 function approveKey(kind, req, o = {}) {
   const look = APPROVE_LOOK[kind];
-  const t = (y, size, weight, fill, s) => `<text x="72" y="${y}" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${size}" font-weight="${weight}" fill="${fill}">${esc(s)}</text>`;
-  if (o.err) {
-    return svgWrap(`${tintFrame(C.bad, true)}${t(66, 20, 700, C.text, look.word)}${t(96, 15, 600, C.bad, o.err)}`);
-  }
-  if (!req) {
-    return svgWrap(`${tintFrame(C.track, false)}${t(66, 20, 700, C.dim, look.word)}${t(96, 14, 600, C.dim, "all clear")}`);
-  }
+  const shell = (col2, mult2, bodyLines, sub, cornerSvg2 = "", wordOverride = null) => {
+    const onBand = kind === "approve-deny" && mult2 === 1 ? C.bg : col2;
+    const n = Math.min(4, bodyLines.length);
+    const [top, step] = [[92, 0], [78, 26], [68, 22], [62, 18]][n - 1] ?? [92, 0];
+    const body = bodyLines.slice(0, n).map((l, i) => line(72, top + i * step, RULE_W, l.max ?? 22, 700, l.col ?? C.text, l.t)).join("");
+    return svgWrap(`
+      ${tintFrame(col2, mult2 === 1, o.phase ?? null)}
+      ${band[look.weight](col2, mult2)}
+      ${actionHead(look.glyphName, wordOverride ?? look.word, onBand)}
+      ${cornerSvg2}
+      ${body}
+      ${foot(sub)}`);
+  };
+  if (o.err) return shell(C.bad, 1, [], o.err);
+  if (!req) return shell(C.dim, 0.4, [], "all clear");
   const { name, target } = describeRequest(req);
   const rule = kind === "approve-always" ? alwaysRule(req, !!o.sessionOnly) : null;
   const denied = kind === "approve-always" && rule !== null && !!o.denied;
   const disabled = kind === "approve-always" && (rule === null || denied);
   const col = disabled ? C.dim : look.col;
-  const word = kind === "approve-always" ? denied ? String(o.denied) : rule === null ? "ALWAYS n/a" : `ALWAYS \xB7${o.sessionOnly ? "session" : "project"}` : look.word;
-  const corner = o.depth > 1 ? `<circle cx="120" cy="26" r="13" fill="${C.panel}" stroke="${col}" stroke-width="1.5"/><text x="120" y="31" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${o.depth}</text>` : o.label ? `<text x="132" y="30" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="600" fill="${C.dim}">${esc(String(o.label).slice(0, 8))}</text>` : "";
-  const splitRule = kind === "approve-always" && rule != null && rule.length > RULE_MAX;
-  let body;
-  if (splitRule) {
-    const splitAt = rule.indexOf("(");
-    const line1 = splitAt >= 0 ? rule.slice(0, splitAt) : rule;
-    const line2 = splitAt >= 0 ? rule.slice(splitAt) : "";
-    body = `${t(42, 12, 600, C.dim, name)}${t(66, 15, 700, C.text, line1)}${t(88, 15, 700, C.text, line2)}`;
-  } else {
-    const shown = kind === "approve-always" ? rule ?? target : target;
-    const size = kind === "approve-always" && rule != null ? 18 : shown.length > 11 ? 18 : 22;
-    body = `${t(52, 13, 600, C.dim, name)}${t(84, size, 700, C.text, shown)}`;
+  const mult = disabled ? 0.4 : 1;
+  const cornerSvg = o.depth > 1 ? badge(o.depth, col) : corner(o.label);
+  const word = kind === "approve-always" ? denied ? "ALWAYS" : rule === null ? "ALWAYS n/a" : `ALWAYS \xB7${o.sessionOnly ? "ses" : "prj"}` : look.word;
+  if (denied) {
+    return shell(col, mult, ruleLines(rule).map((t) => ({ t, col: C.dim, max: 18 })), String(o.denied), cornerSvg, word);
   }
-  return svgWrap(`
-    ${tintFrame(col, !disabled, disabled ? null : o.phase)}
-    ${corner}
-    ${body}
-    ${t(112, word.length > 11 ? 14 : 18, 700, col, word)}`);
-}
-function fmtNum(n) {
-  if (n == null) return "--";
-  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
-  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
-  return String(n);
+  const shown = kind === "approve-always" ? rule ?? target : target;
+  const lines = kind === "approve-always" && rule != null ? ruleLines(rule).map((t) => ({ t, max: 19 })) : [{ t: shown, max: 24 }];
+  return shell(col, mult, lines, name, cornerSvg, word);
 }
 
 // src/hookserver.js
@@ -4584,22 +4669,22 @@ if (!IS_MAC) {
 }
 var LOG_FILE = path2.join(process.cwd(), "claude-deck.log");
 function log(...args) {
-  const line = `${(/* @__PURE__ */ new Date()).toISOString()} ${args.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(" ")}`;
-  console.log(line);
+  const line2 = `${(/* @__PURE__ */ new Date()).toISOString()} ${args.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(" ")}`;
+  console.log(line2);
   try {
-    fs.appendFileSync(LOG_FILE, line + "\n");
+    fs.appendFileSync(LOG_FILE, line2 + "\n");
   } catch {
   }
 }
-function localGauge(header, agg, budget, view = "cost") {
-  if (!agg) return usageMeterKey(header, "--", "no data yet", true);
+function localGauge(header2, agg, budget, view = "cost") {
+  if (!agg) return usageMeterKey(header2, "--", "no data yet", true);
   if (view === "tokens") {
-    return usageMeterKey(header, fmtNum(agg.tokens), `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out`, false);
+    return usageMeterKey(header2, fmtNum(agg.tokens), `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out`, false);
   }
   const pct = budgetPct(agg.cost, budget);
-  if (pct == null) return usageMeterKey(header, "$" + agg.cost.toFixed(2), "est", true);
+  if (pct == null) return usageMeterKey(header2, "$" + agg.cost.toFixed(2), "est", true);
   const over = pct > 100 ? " \xB7 " + Math.round(pct) + "%" : "";
-  return gaugeKey(header, pct, `$${Math.round(agg.cost)} / $${Math.round(Number(budget))}${over}`, pct >= 90 ? animPhase : null);
+  return gaugeKey(header2, pct, `$${Math.round(agg.cost)} / $${Math.round(Number(budget))}${over}`, pct >= 90 ? animPhase : null);
 }
 function fmtReset(iso) {
   if (!iso) return "";
@@ -5039,11 +5124,11 @@ async function pollToday() {
         const text = await fsp.readFile(fp, "utf8");
         const reqTok = /* @__PURE__ */ new Map();
         const seenMsg = /* @__PURE__ */ new Set();
-        for (const line of text.split("\n")) {
-          if (!line) continue;
+        for (const line2 of text.split("\n")) {
+          if (!line2) continue;
           let j;
           try {
-            j = JSON.parse(line);
+            j = JSON.parse(line2);
           } catch {
             continue;
           }
@@ -5093,11 +5178,11 @@ async function pollBurn() {
           rec.offset = st.size;
           const lines = (rec.rest + buf.toString("utf8")).split("\n");
           rec.rest = lines.pop() ?? "";
-          for (const line of lines) {
-            if (!line) continue;
+          for (const line2 of lines) {
+            if (!line2) continue;
             let j;
             try {
-              j = JSON.parse(line);
+              j = JSON.parse(line2);
             } catch {
               continue;
             }
@@ -5265,11 +5350,10 @@ function render(context, kind) {
       const s = pool.length ? fi && fi.sig === poolSig ? pool[fi.i % pool.length] : pool[0] : null;
       if (blocked.length) {
         const b = s ?? blocked[0];
-        return setImage(context, labelKey("FOCUS", b.name ?? "session", String(b.waitingFor ?? "needs you"), C.warn, C.warn, true));
+        return setImage(context, labelKey("FOCUS", b.name ?? "session", String(b.waitingFor ?? "needs you"), C.warn, true));
       }
       const anyWorking = state.sessions.some((x) => sessionState(x, Date.now(), state.activity.get(x.sessionId) ?? null) === "working");
-      const facc = anyWorking ? C.info : C.dim;
-      return setImage(context, labelKey("FOCUS", s ? s.name : `${state.sessions.length} sessions`, s ? sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) : "press to cycle", facc, anyWorking ? C.info : null));
+      return setImage(context, labelKey("FOCUS", s ? s.name : `${state.sessions.length} sessions`, s ? sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) : "press to cycle", anyWorking ? C.info : null));
     }
     case "quick-prompt": {
       const s = views.get(context)?.settings ?? {};
@@ -5279,6 +5363,18 @@ function render(context, kind) {
       const s = views.get(context)?.settings ?? {};
       return setImage(context, labelKey("CLAUDE", s.label || "custom", s.command ? "" : "set command in settings"));
     }
+    // These four used to have no case at all, so they never called setImage and kept
+    // their manifest icon forever — three flat pieces of icon art next to seventeen
+    // data panels, which is what ran two visual languages on one deck. Rendering them
+    // costs the ability to set a custom image on these keys from the Stream Deck app.
+    case "launch":
+      return setImage(context, actionKey("launch", "launch", "Desktop", "claude app"));
+    case "quick-chat":
+      return setImage(context, actionKey("chat", "chat", "New chat", "claude desktop"));
+    case "open-web":
+      return setImage(context, actionKey("web", "claude.ai", "Open", "in browser"));
+    case "claude-code":
+      return setImage(context, actionKey("code", "code", "Terminal", "~/" + path2.basename(DEFAULT_CODE_DIR)));
     case "sessions": {
       const cy = cycle.get(context);
       const n = state.sessions.length;
@@ -5304,19 +5400,19 @@ function render(context, kind) {
       return setImage(context, linesKey("TODAY", [
         { text: `${t?.chats ?? "--"} chats`, color: C.text },
         { text: `${fmtNum(t?.msgs)} msgs`, color: C.text },
-        { text: `${fmtNum(t?.tokens)} tok`, color: C.accent }
+        { text: `${fmtNum(t?.tokens)} tok`, color: C.text }
       ]));
     }
     case "usage-meter": {
       const s = views.get(context)?.settings ?? {};
       const win = s.window ?? "today";
-      const header = { today: "TODAY", month: "THIS MONTH", "7day": "7-DAY" }[win] ?? "TODAY";
+      const header2 = { today: "TODAY", month: "THIS MONTH", "7day": "7-DAY" }[win] ?? "TODAY";
       const view = usageView.get(context) ?? "cost";
       const agg = state.usageMeter?.[win];
       const suffix = s.label ? " \xB7 " + s.label : "";
-      if (!agg) return setImage(context, usageMeterKey(header, "--", "no data", view === "cost"));
-      if (view === "cost") return setImage(context, usageMeterKey(header, "$" + agg.cost.toFixed(2), "cost" + suffix, true));
-      return setImage(context, usageMeterKey(header, fmtNum(agg.tokens), agg.in != null ? `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out` : "tokens" + suffix, false));
+      if (!agg) return setImage(context, usageMeterKey(header2, "--", "no data", view === "cost"));
+      if (view === "cost") return setImage(context, usageMeterKey(header2, "$" + agg.cost.toFixed(2), "cost" + suffix, true));
+      return setImage(context, usageMeterKey(header2, fmtNum(agg.tokens), agg.in != null ? `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out` : "tokens" + suffix, false));
     }
     case "approver-status": {
       const s = views.get(context)?.settings ?? {};

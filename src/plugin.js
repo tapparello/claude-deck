@@ -16,10 +16,10 @@ import {
   decisionBody, describeRequest, alwaysRule, pressDecision,
   enqueue, head, resolve, expiredIds, staleIds, seedBaselines, hookFragment,
   rememberDeny, denyBlock, pruneDenies,
-  PORT_DEFAULT, HOLD_S_DEFAULT, QUEUE_MAX, RULE_MAX,
+  PORT_DEFAULT, HOLD_S_DEFAULT, QUEUE_MAX,
 } from "./approve.js";
 import {
-  C, gaugeKey, linesKey, bigCountKey, burnKey, usageMeterKey, labelKey,
+  C, gaugeKey, linesKey, bigCountKey, burnKey, usageMeterKey, labelKey, actionKey,
   statusKey, approveKey, fmtNum,
 } from "./keyart.js";
 import { startHookServer, BADPATH_WINDOW_MS, BADPATH_MIN_HITS } from "./hookserver.js";
@@ -804,11 +804,10 @@ function render(context, kind) {
       const s = pool.length ? (fi && fi.sig === poolSig ? pool[fi.i % pool.length] : pool[0]) : null;
       if (blocked.length) {
         const b = s ?? blocked[0];
-        return setImage(context, labelKey("FOCUS", b.name ?? "session", String(b.waitingFor ?? "needs you"), C.warn, C.warn, true));
+        return setImage(context, labelKey("FOCUS", b.name ?? "session", String(b.waitingFor ?? "needs you"), C.warn, true));
       }
       const anyWorking = state.sessions.some((x) => sessionState(x, Date.now(), state.activity.get(x.sessionId) ?? null) === "working");
-      const facc = anyWorking ? C.info : C.dim;
-      return setImage(context, labelKey("FOCUS", s ? s.name : `${state.sessions.length} sessions`, s ? sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) : "press to cycle", facc, anyWorking ? C.info : null));
+      return setImage(context, labelKey("FOCUS", s ? s.name : `${state.sessions.length} sessions`, s ? sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) : "press to cycle", anyWorking ? C.info : null));
     }
     case "quick-prompt": {
       const s = views.get(context)?.settings ?? {};
@@ -818,6 +817,18 @@ function render(context, kind) {
       const s = views.get(context)?.settings ?? {};
       return setImage(context, labelKey("CLAUDE", s.label || "custom", s.command ? "" : "set command in settings"));
     }
+    // These four used to have no case at all, so they never called setImage and kept
+    // their manifest icon forever — three flat pieces of icon art next to seventeen
+    // data panels, which is what ran two visual languages on one deck. Rendering them
+    // costs the ability to set a custom image on these keys from the Stream Deck app.
+    case "launch":
+      return setImage(context, actionKey("launch", "launch", "Desktop", "claude app"));
+    case "quick-chat":
+      return setImage(context, actionKey("chat", "chat", "New chat", "claude desktop"));
+    case "open-web":
+      return setImage(context, actionKey("web", "claude.ai", "Open", "in browser"));
+    case "claude-code":
+      return setImage(context, actionKey("code", "code", "Terminal", "~/" + path.basename(DEFAULT_CODE_DIR)));
     case "sessions": {
       const cy = cycle.get(context);
       const n = state.sessions.length;
@@ -846,7 +857,7 @@ function render(context, kind) {
       return setImage(context, linesKey("TODAY", [
         { text: `${t?.chats ?? "--"} chats`, color: C.text },
         { text: `${fmtNum(t?.msgs)} msgs`, color: C.text },
-        { text: `${fmtNum(t?.tokens)} tok`, color: C.accent },
+        { text: `${fmtNum(t?.tokens)} tok`, color: C.text },
       ]));
     }
     case "usage-meter": {

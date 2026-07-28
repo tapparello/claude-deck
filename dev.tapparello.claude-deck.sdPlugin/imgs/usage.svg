@@ -1,6 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72" width="72" height="72">
-  <rect x="14" y="42" width="9" height="16" rx="2" fill="#9b96a8"/>
-  <rect x="31" y="32" width="9" height="26" rx="2" fill="#d97757"/>
-  <rect x="48" y="22" width="9" height="36" rx="2" fill="#d97757"/>
-  <text x="36" y="18" text-anchor="middle" font-family="-apple-system, Segoe UI, sans-serif" font-size="18" font-weight="700" fill="#f5f1ea">$</text>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72"><rect width="72" height="72" rx="14" fill="#16151c"/><g transform="translate(16,16) scale(1.6667)" fill="none" stroke="#f5f1ea" stroke-width="1.44" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12.5 h17 a3 3 0 0 1 0 6 h-17 a3 3 0 0 1 0 -6 z"/><path d="M7 15.5 h6"/></g></svg>

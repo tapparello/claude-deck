@@ -7,7 +7,8 @@
   "scripts": {
     "build": "esbuild src/plugin.js --bundle --platform=node --format=esm --outfile=dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs --external:bufferutil --external:utf-8-validate --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\"",
     "selftest": "node dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs --selftest",
-    "test": "node --test"
+    "test": "node --test",
+    "icons": "node tools/gen-icons.mjs"
   },
   "dependencies": {
     "ws": "^8.18.0"

@@ -61,7 +61,6 @@ export function decisionBody(kind, req, opts = {}) {
 
 export const NAME_MAX = 11;    // matches the existing statusKey name limit
 export const TARGET_MAX = 14;
-export const RULE_MAX = 18;    // single-line/two-line split threshold for the ALWAYS key (src/plugin.js)
 export const RULE_FIT = 36;    // legibility ceiling: past this, alwaysRule() refuses rather than truncates
 
 // Collapse whitespace AND control characters. Applied to every branch, not just
@@ -101,12 +100,12 @@ export function describeRequest(req) {
 // because decisionBody uses the SAME oneSafeRule, it also refuses.
 //
 // Returned WHOLE, never truncated: `WebFetch(` + `domain:` is already 16 characters,
-// so truncating at RULE_MAX (18) made every WebFetch domain grant paint as
-// "WebFetch(domain:e…" — two different domains rendered IDENTICALLY on the one key
-// that produces a durable write. src/plugin.js splits anything over RULE_MAX across
-// two lines instead. Only past RULE_FIT (36, the point past which even two lines
-// can't show it legibly) does this return null — a rule too long to show honestly
-// must not be pressable, rather than silently hiding the part that matters.
+// so truncating made every WebFetch domain grant paint as "WebFetch(domain:e…" — two
+// different domains rendered IDENTICALLY on the one key that produces a durable write.
+// keyart's ruleLines() breaks it across as many lines as legibility needs, measuring
+// each one, so there is no character threshold here any more. Only past RULE_FIT (36,
+// where even three lines can't show it) does this return null — a rule too long to
+// show honestly must not be pressable, rather than silently hiding what matters.
 export function alwaysRule(req, sessionOnly = false) {
   const entry = oneSafeRule(req, sessionOnly);
   if (!entry) return null;
