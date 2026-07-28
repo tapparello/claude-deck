@@ -16,6 +16,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "esbuild": "^0.24.2",
     "eslint": "^9.39.5"
   }

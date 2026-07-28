@@ -152,6 +152,21 @@ function iconSvg(glyphName, col = C.text) {
     glyph(glyphName, 16, 16, 40, col, 2.4).replace(/^<g /, '<g ') +
     `</svg>\n`;
 }
+// The SAME glyph, drawn for the Stream Deck app's ACTION LIST rather than for a key.
+//
+// That surface has its own rules, and they are the opposite of the key art's:
+// Elgato requires action-list icons to be monochrome white stroke (#FFFFFF) on a
+// TRANSPARENT background at 20x20 (40x40 for high-DPI), with the category icon at
+// 28x28. The key icons are 72x72 with a filled #16151c plate and carry identity
+// hues — a solid background and colour, both of which the list explicitly forbids.
+// One glyph table feeds both so the two surfaces can never drift apart.
+function listIconSvg(glyphName, px = 20) {
+  // 24-unit glyph geometry inset by 2 units on each side, so strokes cannot clip
+  // at the edge once the app scales this down to 20px.
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${px}" viewBox="0 0 24 24">` +
+    glyph(glyphName, 2, 2, 20, "#FFFFFF", 2.0) +
+    `</svg>\n`;
+}
 function glyph(name, x, y, size, col, sw = 2.6) {
   const s = size / 24;
   // stroke-width is pre-divided by the scale so `sw` stays in final key units.
@@ -435,7 +450,7 @@ function approveKey(kind, req, o = {}) {
 }
 
 export {
-  C, pctColor, esc, tintFrame, svgWrap, fit, fits, txt, glyph, iconSvg, ruleLines,
+  C, pctColor, esc, tintFrame, svgWrap, fit, fits, txt, glyph, iconSvg, listIconSvg, ruleLines,
   gaugeKey, linesKey, bigCountKey, burnKey, usageMeterKey, labelKey, actionKey,
   STATUS_LOOK, statusKey, APPROVE_LOOK, approveKey, fmtNum,
 };

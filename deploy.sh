@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploys the plugin to Stream Deck on macOS. Mirrors deploy.ps1.
 # If local-assets/claude-logo.png exists (gitignored — drop in your own copy of
-# the official icon for personal use), it replaces the launcher and category
+# the official icon for personal use), it replaces the launcher and plugin
 # icons in the deployed copy only.
 set -euo pipefail
 
@@ -24,8 +24,12 @@ cp -R "$SRC" "$DST"
 LOGO="$DIR/local-assets/claude-logo.png"
 if [ -f "$LOGO" ]; then
   cp "$LOGO" "$DST/imgs/launch.png"; rm -f "$DST/imgs/launch.svg"
-  cp "$LOGO" "$DST/imgs/plugin.png"; rm -f "$DST/imgs/plugin.svg"
-  echo "applied local claude-logo.png to launch + category icons"
+  # imgs/plugin.svg no longer ships (the plugin icon is PNG-only), so there is
+  # nothing to delete here any more — the copy alone replaces it. The CATEGORY
+  # icon is imgs/list/plugin.svg and is deliberately left alone: action-list art
+  # must stay monochrome white on transparent.
+  cp "$LOGO" "$DST/imgs/plugin.png"
+  echo "applied local claude-logo.png to the launch + plugin icons"
 fi
 
 if [ "$NO_RESTART" -eq 0 ]; then
