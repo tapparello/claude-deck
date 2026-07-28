@@ -9,6 +9,7 @@
     "selftest": "node dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs --selftest",
     "test": "node --test",
     "lint": "eslint .",
+    "pack": "streamdeck pack dev.tapparello.claude-deck.sdPlugin --force --no-update-check",
     "icons": "node tools/gen-icons.mjs",
     "showcase": "node tools/gen-showcase.mjs"
   },
@@ -16,6 +17,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@elgato/cli": "^1.7.4",
     "@resvg/resvg-js": "^2.6.2",
     "esbuild": "^0.24.2",
     "eslint": "^9.39.5"

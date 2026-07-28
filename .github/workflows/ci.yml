@@ -55,6 +55,14 @@ jobs:
         # anywhere" paths degrade instead of throwing.
         run: npm run selftest
 
+      - name: Package validates against Elgato's own schema
+        # A dry-run pack runs Elgato's validator over the manifest — stricter and
+        # more current than the hand-rolled checks below, and it is the same code
+        # path a Marketplace submission goes through, so a listing cannot be
+        # rejected for something CI could have caught. --no-update-check keeps it
+        # from fetching schemas mid-build.
+        run: npx streamdeck pack dev.tapparello.claude-deck.sdPlugin --dry-run --no-update-check
+
       - name: Manifest and Property Inspector are valid
         run: |
           node -e "
