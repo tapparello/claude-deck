@@ -89,6 +89,13 @@ glance — two files with the same name in different folders, two URLs on the sa
 Treat the deck as a nudge to go look, not as proof of what's being approved; the
 terminal prompt is still the authoritative record.
 
+**After a Deny, Always Allow is briefly refused.** Claude retries a denied call within
+about two seconds, and the retry paints a key that looks identical to the one you just
+refused — so an Always press aimed at the *next* prompt would land on the retry and
+permanently allow the thing you denied. For 30 seconds after a Deny, any request whose
+rule matches the denied one reads **`just denied`** and refuses the press. Allow and Deny
+stay live throughout, and the terminal prompt is unaffected.
+
 Always Allow writes to the project's `.claude/settings.local.json` (the git root),
 exactly like the terminal's option 2. Tick *"Remember for this session only"* to keep it
 in memory instead. Nothing is ever written to `~/.claude/settings.json`.

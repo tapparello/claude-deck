@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { sanitizeSuggestions, decisionBody, DENY_MESSAGE, hookFragment } from "../src/approve.js";
+import { rememberDeny, denyBlock, pruneDenies, DENY_WINDOW_MS } from "../src/approve.js";
 
 const addRules = (over = {}) => ({
   type: "addRules",
@@ -473,4 +474,78 @@ test("hookFragment escapes a URL that needs it and still round-trips", () => {
   const frag = hookFragment(url, 20);
   const parsed = JSON.parse(`{"hooks": {${frag}}}`);
   assert.equal(parsed.hooks.PermissionRequest[0].hooks[0].url, url);
+});
+
+// --- deny -> retry hazard (found on-device, 2026-07-28) ------------------------
+// Claude retries a denied call within ~2s with identical input, so the retry paints a
+// key that looks the same. Without a guard, an ALWAYS press moments after a DENY writes
+// a durable allow rule for the very call just refused.
+
+const webReq = (host, over = {}) => ({
+  id: `r-${host}`,
+  toolName: "WebFetch",
+  toolInput: { url: `https://${host}` },
+  cwd: "/tmp/proj",
+  suggestions: [{
+    type: "addRules",
+    destination: "localSettings",
+    behavior: "allow",
+    rules: [{ toolName: "WebFetch", ruleContent: `domain:${host}` }],
+  }],
+  ...over,
+});
+
+test("rememberDeny records the rule the ALWAYS press would have persisted", () => {
+  const d = rememberDeny([], webReq("curl.se"), 1000);
+  assert.deepEqual(d, [{ rule: "WebFetch(domain:curl.se)", at: 1000 }]);
+});
+
+test("denyBlock blocks the retry of a just-denied target, and only that target", () => {
+  const denies = rememberDeny([], webReq("curl.se"), 1000);
+  // the retry: a NEW request id, identical input
+  assert.equal(denyBlock(denies, webReq("curl.se", { id: "retry" }), 2800), "just denied");
+  // an unrelated domain in the same window stays pressable
+  assert.equal(denyBlock(denies, webReq("www.kernel.org"), 2800), null);
+});
+
+test("denyBlock lets go once the window has passed", () => {
+  const denies = rememberDeny([], webReq("curl.se"), 1000);
+  assert.equal(denyBlock(denies, webReq("curl.se"), 1000 + DENY_WINDOW_MS - 1), "just denied");
+  assert.equal(denyBlock(denies, webReq("curl.se"), 1000 + DENY_WINDOW_MS), null);
+});
+
+test("denyBlock stays out of the way when there is no safe rule to block", () => {
+  // an mcp__ request has no persistable rule at all: oneSafeRule already refuses it,
+  // and reporting "just denied" here would mislabel WHY the key is disabled.
+  const mcp = { id: "m", toolName: "mcp__azure-devops__wiki_list_wikis", toolInput: {}, cwd: "/tmp/p", suggestions: [] };
+  assert.equal(denyBlock(rememberDeny([], mcp, 1000), mcp, 1500), null);
+});
+
+test("rememberDeny keeps one entry per rule and forgets expired ones", () => {
+  let d = rememberDeny([], webReq("curl.se"), 1000);
+  d = rememberDeny(d, webReq("curl.se"), 2000);          // same rule again -> replaced
+  assert.equal(d.length, 1);
+  assert.equal(d[0].at, 2000);
+  d = rememberDeny(d, webReq("www.gnu.org"), 2000 + DENY_WINDOW_MS + 1);
+  assert.deepEqual(d.map((x) => x.rule), ["WebFetch(domain:www.gnu.org)"]);
+});
+
+test("pruneDenies drops only the expired entries", () => {
+  const denies = [
+    { rule: "WebFetch(domain:a.example)", at: 1000 },
+    { rule: "WebFetch(domain:b.example)", at: 5000 },
+  ];
+  assert.deepEqual(pruneDenies(denies, 1000 + DENY_WINDOW_MS - 1), denies);
+  assert.deepEqual(pruneDenies(denies, 1000 + DENY_WINDOW_MS + 1).map((d) => d.rule), ["WebFetch(domain:b.example)"]);
+  assert.deepEqual(pruneDenies(undefined, 1), []);
+});
+
+test("the on-device sequence: deny curl.se, retry cannot be ALWAYS'd, kernel.org can", () => {
+  // measured: deny 15:24:06.653, retry 15:24:08.447, ALWAYS pressed 15:24:14.470
+  const t0 = 0, tRetry = 1794, tPress = 7817;
+  const denies = rememberDeny([], webReq("curl.se"), t0);
+  const retry = webReq("curl.se", { id: "retry", receivedAt: tRetry });
+  assert.equal(denyBlock(denies, retry, tPress), "just denied");
+  assert.equal(alwaysRule(retry), "WebFetch(domain:curl.se)"); // still shown, just not pressable
+  assert.equal(denyBlock(denies, webReq("www.kernel.org"), tPress), null);
 });

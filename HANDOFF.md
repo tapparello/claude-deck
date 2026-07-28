@@ -185,6 +185,15 @@ command passthrough in Claude Code).
 - **`oneSafeRule` is the single source of truth for ALWAYS.** The key's label and its
   decision both derive from it, so a key rendering `ALWAYS n/a` is structurally unable to
   write anything. Do not give `decisionBody` its own, looser check.
+- **A DENY blocks ALWAYS for the same rule for 30 s** (`DENY_WINDOW_MS`, found on-device
+  2026-07-28). Claude retries a denied call with identical input ~1.8 s later (measured:
+  deny 15:24:06.653 → retry 15:24:08.447), and the retry paints an identical key — on the
+  first real run this turned a *denied* `curl.se` into `WebFetch(domain:curl.se)` in
+  `settings.local.json`. `state.denies` holds `{rule, at}`, keyed on the **rule** rather
+  than the command, because the rule is what re-permits the denied call (`gh pr list` and
+  `gh pr merge --admin 1` share `Bash(gh pr *)`). The renderer and the press handler call
+  the same `denyBlock()`, so a key that paints `just denied` is exactly the key that
+  refuses; the block is pruned in the session poll so it visibly lifts.
 - **Staleness baselines are seeded on first observation, not at enqueue.** `state.sessions`
   is up to 5 s stale, and the status flip that causes a prompt lands ~simultaneously with
   the hook POST — snapshotting at enqueue makes every request look stale and cuts the real

@@ -15,6 +15,7 @@ import { randomBytes } from "node:crypto";
 import {
   decisionBody, describeRequest, alwaysRule, pressDecision,
   enqueue, head, resolve, expiredIds, staleIds, seedBaselines, hookFragment,
+  rememberDeny, denyBlock, pruneDenies,
   PORT_DEFAULT, HOLD_S_DEFAULT, QUEUE_MAX, RULE_MAX,
 } from "./approve.js";
 import { startHookServer, BADPATH_WINDOW_MS, BADPATH_MIN_HITS } from "./hookserver.js";
@@ -254,10 +255,14 @@ function approveKey(kind, req, o = {}) {
 
   const { name, target } = describeRequest(req);
   const rule = kind === "approve-always" ? alwaysRule(req, !!o.sessionOnly) : null;
-  const disabled = kind === "approve-always" && rule === null;
+  // o.denied is set when this target's rule was DENIED in the last DENY_WINDOW_MS. The
+  // rule still renders above the word, greyed: the user needs to see WHAT is blocked,
+  // and hiding it would make this look like the unrelated "n/a" case.
+  const denied = kind === "approve-always" && rule !== null && !!o.denied;
+  const disabled = kind === "approve-always" && (rule === null || denied);
   const col = disabled ? C.dim : look.col;
   const word = kind === "approve-always"
-    ? (disabled ? "ALWAYS n/a" : `ALWAYS ·${o.sessionOnly ? "session" : "project"}`)
+    ? (denied ? String(o.denied) : rule === null ? "ALWAYS n/a" : `ALWAYS ·${o.sessionOnly ? "session" : "project"}`)
     : look.word;
   // Depth badge wins the corner, else an optional user label. The project name keeps
   // line 1 unconditionally: it is a wrong-request mitigation, so a cosmetic label must
@@ -333,6 +338,7 @@ const state = {
   loggedRaw: false,
   rates: {},
   approveQueue: [],
+  denies: [],   // {rule, at} for ~30s after a DENY, so the retry cannot be ALWAYS'd
   hookSecret: null,
   hookPort: PORT_DEFAULT,
   hookErr: null,
@@ -543,6 +549,13 @@ async function pollSessions() {
       ]);
       state.approveQueue = seedBaselines(state.approveQueue, out, state.activity);
       if (gone.size) answerAndDrop([...gone], "session moved on or hold expired");
+      // A deny block is time-based, so it can expire with nothing else changing. Repaint
+      // when it does, or an ALWAYS key would stay greyed on a request it may now answer.
+      const kept = pruneDenies(state.denies, now);
+      if (kept.length !== state.denies.length) {
+        state.denies = kept;
+        if (!gone.size) renderApproveAll();   // answerAndDrop already repainted
+      }
     }
     // Compare against the signature cached on the PREVIOUS tick. Recomputing
     // both sides with the same `now` would cancel the derived state out, so a
@@ -1148,6 +1161,7 @@ function render(context, kind) {
         err,
         depth: state.approveQueue.length,
         phase: fresh ? animPhase : null,
+        denied: kind === "approve-always" && req ? denyBlock(state.denies, req, Date.now()) : null,
       }));
     }
   }
@@ -1591,8 +1605,13 @@ function onKeyDown(context, kind) {
         // against a value re-derived from the same object - that would be `x === x`.
         const ruleOk = kind !== "approve-always"
           || (shownRule.get(context) != null && alwaysRule(target, !!s.sessionOnly) === shownRule.get(context));
-        if (!body || !ruleOk) {
-          log(`approve: refused ${which} for ${target.toolName} (${!body ? "no single safe rule" : "rule is not what was shown"})`);
+        // Same call as the renderer's, so a key that painted "just denied" is exactly
+        // the key that refuses. Checked here rather than folded into decisionBody
+        // because the block is time-based state, and approve.js stays pure.
+        const denied = which === "always" ? denyBlock(state.denies, target, Date.now()) : null;
+        if (!body || !ruleOk || denied) {
+          const why = denied ?? (!body ? "no single safe rule" : "rule is not what was shown");
+          log(`approve: refused ${which} for ${target.toolName} (${why})`);
           renderApproveAll();
           return showAlert(context);
         }
@@ -1601,6 +1620,9 @@ function onKeyDown(context, kind) {
         if (!req) { renderApproveAll(); return showAlert(context); }
         state.approveQueue = queue;
         req.ticket.respond(body);
+        // Remember the deny BEFORE the retry arrives (~1.8s on-device), so the retry is
+        // already blocked by the time it paints.
+        if (which === "deny") state.denies = rememberDeny(state.denies, req, Date.now());
         log(`approve: ${which} ${req.toolName}${which === "always" ? ` as ${shownRule.get(context)}` : ""}`);
         state.lastHeadChangeAt = Date.now();
         renderApproveAll();

@@ -113,6 +113,41 @@ export function alwaysRule(req, sessionOnly = false) {
   return text.length > RULE_FIT ? null : text;
 }
 
+// A DENY is followed almost immediately by Claude retrying the SAME call. Measured
+// on-device 2026-07-28: deny at 15:24:06.653, retry with identical input at
+// 15:24:08.447 — 1.8s later. The retry is a new request that paints an identical key,
+// so an ALWAYS press meant for the NEXT prompt lands on the retry and writes a durable
+// allow rule for the call just refused. That is exactly what happened on the first real
+// run: a denied curl.se became WebFetch(domain:curl.se) in settings.local.json.
+//
+// Keyed on the RULE the press would persist rather than on the command, because the
+// rule is what re-permits the denied call: `gh pr merge --admin 1` and `gh pr list`
+// share the rule `Bash(gh pr *)`, so allowing that rule after denying either one
+// re-permits both. sessionOnly is not passed: it changes only a suggestion's
+// `destination`, never the rule text, so it cannot affect identity.
+export const DENY_WINDOW_MS = 30_000;
+
+export const pruneDenies = (denies, now) =>
+  (denies ?? []).filter((d) => now - d.at < DENY_WINDOW_MS);
+
+export function rememberDeny(denies, req, now) {
+  const rule = alwaysRule(req);
+  const kept = pruneDenies(denies, now).filter((d) => d.rule !== rule);
+  return rule ? [...kept, { rule, at: now }] : kept;
+}
+
+// null => nothing recently denied covers this request. A non-null result is BOTH the
+// reason the ALWAYS key renders disabled and the reason a press is refused, so the two
+// can never disagree. Returns null when there is no persistable rule: `oneSafeRule`
+// already refuses those, and "just denied" would mislabel why the key is dark.
+export function denyBlock(denies, req, now) {
+  const rule = alwaysRule(req);
+  if (!rule) return null;
+  return (denies ?? []).some((d) => d.rule === rule && now - d.at < DENY_WINDOW_MS)
+    ? "just denied"
+    : null;
+}
+
 export const QUEUE_MAX = 8;
 export const HOLD_S_DEFAULT = 20;
 export const YOUNG_MS = 10_000;

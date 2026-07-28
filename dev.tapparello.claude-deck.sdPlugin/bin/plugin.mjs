@@ -4174,6 +4174,18 @@ function alwaysRule(req, sessionOnly = false) {
   const text = clean(`${toolName}(${ruleContent})`);
   return text.length > RULE_FIT ? null : text;
 }
+var DENY_WINDOW_MS = 3e4;
+var pruneDenies = (denies, now) => (denies ?? []).filter((d) => now - d.at < DENY_WINDOW_MS);
+function rememberDeny(denies, req, now) {
+  const rule = alwaysRule(req);
+  const kept = pruneDenies(denies, now).filter((d) => d.rule !== rule);
+  return rule ? [...kept, { rule, at: now }] : kept;
+}
+function denyBlock(denies, req, now) {
+  const rule = alwaysRule(req);
+  if (!rule) return null;
+  return (denies ?? []).some((d) => d.rule === rule && now - d.at < DENY_WINDOW_MS) ? "just denied" : null;
+}
 var QUEUE_MAX = 8;
 var HOLD_S_DEFAULT = 20;
 var YOUNG_MS = 1e4;
@@ -4557,9 +4569,10 @@ function approveKey(kind, req, o = {}) {
   }
   const { name, target } = describeRequest(req);
   const rule = kind === "approve-always" ? alwaysRule(req, !!o.sessionOnly) : null;
-  const disabled = kind === "approve-always" && rule === null;
+  const denied = kind === "approve-always" && rule !== null && !!o.denied;
+  const disabled = kind === "approve-always" && (rule === null || denied);
   const col = disabled ? C.dim : look.col;
-  const word = kind === "approve-always" ? disabled ? "ALWAYS n/a" : `ALWAYS \xB7${o.sessionOnly ? "session" : "project"}` : look.word;
+  const word = kind === "approve-always" ? denied ? String(o.denied) : rule === null ? "ALWAYS n/a" : `ALWAYS \xB7${o.sessionOnly ? "session" : "project"}` : look.word;
   const corner = o.depth > 1 ? `<circle cx="120" cy="26" r="13" fill="${C.panel}" stroke="${col}" stroke-width="1.5"/><text x="120" y="31" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${o.depth}</text>` : o.label ? `<text x="132" y="30" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="600" fill="${C.dim}">${esc(String(o.label).slice(0, 8))}</text>` : "";
   const splitRule = kind === "approve-always" && rule != null && rule.length > RULE_MAX;
   let body;
@@ -4615,6 +4628,8 @@ var state = {
   loggedRaw: false,
   rates: {},
   approveQueue: [],
+  denies: [],
+  // {rule, at} for ~30s after a DENY, so the retry cannot be ALWAYS'd
   hookSecret: null,
   hookPort: PORT_DEFAULT,
   hookErr: null,
@@ -4814,6 +4829,11 @@ async function pollSessions() {
       ]);
       state.approveQueue = seedBaselines(state.approveQueue, out, state.activity);
       if (gone.size) answerAndDrop([...gone], "session moved on or hold expired");
+      const kept = pruneDenies(state.denies, now);
+      if (kept.length !== state.denies.length) {
+        state.denies = kept;
+        if (!gone.size) renderApproveAll();
+      }
     }
     const nextSig = sessionSig(out, Date.now(), state.activity);
     const changed = nextSig !== lastSessionSig;
@@ -5350,7 +5370,8 @@ function render(context, kind) {
         label: s.label,
         err,
         depth: state.approveQueue.length,
-        phase: fresh ? animPhase : null
+        phase: fresh ? animPhase : null,
+        denied: kind === "approve-always" && req ? denyBlock(state.denies, req, Date.now()) : null
       }));
     }
   }
@@ -5754,8 +5775,10 @@ function onKeyDown(context, kind) {
         const target = head(state.approveQueue);
         const body = decisionBody(which, target, { sessionOnly: !!s.sessionOnly });
         const ruleOk = kind !== "approve-always" || shownRule.get(context) != null && alwaysRule(target, !!s.sessionOnly) === shownRule.get(context);
-        if (!body || !ruleOk) {
-          log(`approve: refused ${which} for ${target.toolName} (${!body ? "no single safe rule" : "rule is not what was shown"})`);
+        const denied = which === "always" ? denyBlock(state.denies, target, Date.now()) : null;
+        if (!body || !ruleOk || denied) {
+          const why = denied ?? (!body ? "no single safe rule" : "rule is not what was shown");
+          log(`approve: refused ${which} for ${target.toolName} (${why})`);
           renderApproveAll();
           return showAlert(context);
         }
@@ -5766,6 +5789,7 @@ function onKeyDown(context, kind) {
         }
         state.approveQueue = queue;
         req.ticket.respond(body);
+        if (which === "deny") state.denies = rememberDeny(state.denies, req, Date.now());
         log(`approve: ${which} ${req.toolName}${which === "always" ? ` as ${shownRule.get(context)}` : ""}`);
         state.lastHeadChangeAt = Date.now();
         renderApproveAll();
