@@ -9,7 +9,7 @@ import path from "node:path";
 import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript, parseProcStarts } from "./osa.js";
-import { windowStartMs, parseRequests, mergeById, aggregate, aggregateByModel, budgetPct, gaugeSource, familyOf } from "./usage.js";
+import { windowStartMs, parseRequests, mergeById, aggregate, aggregateByModel, budgetPct, gaugeSource, familyOf, localDay, newDayCounts, foldDayChunk, dayCountsTotals } from "./usage.js";
 import { resolveStatusKey, statusEntry, autoSlot, sessionWhere, fmtShort, shortWait, sessionState, blockedSessions, sessionSig, transcriptPathFor, pidLooksRecycled } from "./status.js";
 import { randomBytes } from "node:crypto";
 import {
@@ -604,13 +604,46 @@ async function walkTranscripts(dir, cutoffMs) {
   return out;
 }
 
-// ---------- data: today's activity (local JSONL, incremental-ish) ----------
-const fileCache = new Map(); // path -> { size, mtimeMs, day, msgs, tokens }
-const todayKey = () => new Date().toISOString().slice(0, 10);
-const localDay = (ts) => {
-  const d = new Date(ts);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
+// One directory walk shared by every consumer that asks for an overlapping window.
+//
+// pollBurn, pollUsageMeter and pollToday each used to walk ~/.claude/projects and
+// stat every .jsonl independently — pollBurn and pollUsageMeter both on a 60s
+// timer, so on a machine with many projects that was two full traversals a minute
+// doing identical work, plus a third every 5 minutes and one more on every Usage
+// key press.
+//
+// The TTL is deliberately short. It exists to collapse callers that fire at
+// essentially the same moment (the two 60s timers are started together and stay in
+// step), NOT to serve stale data: pollBurn decides how many bytes to tail from
+// each file's size, so a stale size just defers those lines to its next tick.
+const SCAN_TTL_MS = 5_000;
+let transcriptScan = { at: 0, cutoff: Infinity, files: [] };
+
+async function scanTranscripts(cutoffMs) {
+  const now = Date.now();
+  const fresh = now - transcriptScan.at < SCAN_TTL_MS;
+  // A cached scan is usable only if it reaches at least as far back as this
+  // caller needs; the caller then narrows it to its own window.
+  if (fresh && transcriptScan.cutoff <= cutoffMs) {
+    return transcriptScan.files.filter((f) => f.mtimeMs >= cutoffMs);
+  }
+  // Widen to the union while the cache is fresh, so a month-window Usage key and
+  // the 90-minute burn scan take turns paying for one traversal instead of
+  // invalidating each other's.
+  const cutoff = fresh ? Math.min(transcriptScan.cutoff, cutoffMs) : cutoffMs;
+  const files = await walkTranscripts(PROJECTS_DIR, cutoff);
+  transcriptScan = { at: now, cutoff, files };
+  return files.filter((f) => f.mtimeMs >= cutoffMs);
+}
+
+// ---------- data: today's activity (incremental tail of today's transcripts) ----------
+// Tails each file from a saved offset, the same shape pollBurn uses. The previous
+// version re-read every transcript touched today IN FULL whenever its size changed
+// — for an active session that is the whole file, every 5 minutes, and transcripts
+// reach tens of MB. The dedup state that makes a partial read correct (one count
+// per request id, max usage across snapshots) lives in the accumulator, so it
+// survives between chunks; see newDayCounts/foldDayChunk in usage.js.
+const todayTracker = new Map(); // path -> { offset, rest, counts }
 
 async function pollToday() {
   try {
@@ -618,56 +651,45 @@ async function pollToday() {
     const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
     let msgs = 0, tokens = 0;
     const chats = new Set();
-    const files = await walkTranscripts(PROJECTS_DIR, dayStart.getTime());
+    const files = await scanTranscripts(dayStart.getTime());
     const seen = new Set();
     for (const st of files) {
       const fp = st.path;
-        seen.add(fp);
-        if (!fp.split(path.sep).includes("subagents")) chats.add(fp); // conversations only (cross-platform)
-        const cached = fileCache.get(fp);
-        // mtimeMs as well as size: an edit that leaves the byte count unchanged
-        // would otherwise serve a stale count forever (usageFileCache already
-        // keys on both — this cache used to key on size alone).
-        if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs && cached.day === day) {
-          msgs += cached.msgs; tokens += cached.tokens;
-          continue;
-        }
-        let fMsgs = 0, fTokens = 0;
+      seen.add(fp);
+      if (!fp.split(path.sep).includes("subagents")) chats.add(fp); // conversations only (cross-platform)
+      let rec = todayTracker.get(fp);
+      // Restart from scratch on a new local day (the counts are day-scoped) or if
+      // the file shrank, which means it was rewritten and our offset is meaningless.
+      if (!rec || rec.counts.day !== day || st.size < rec.offset) {
+        rec = { offset: 0, rest: "", counts: newDayCounts(day) };
+      }
+      if (st.size > rec.offset) {
         try {
-          const text = await fsp.readFile(fp, "utf8");
-          // One assistant message streams as several snapshot lines, each
-          // stamped with the whole request's usage — count each request once
-          // (max, in case a later snapshot carries the final totals).
-          const reqTok = new Map(); // message.id/requestId -> tokens
-          const seenMsg = new Set();
-          for (const line of text.split("\n")) {
-            if (!line) continue;
-            let j;
-            try { j = JSON.parse(line); } catch { continue; }
-            if (!j.timestamp || localDay(j.timestamp) !== day) continue;
-            const mid = j.message?.id ?? j.requestId;
-            if (j.type === "user") fMsgs++;
-            else if (j.type === "assistant" && (!mid || !seenMsg.has(mid))) {
-              if (mid) seenMsg.add(mid);
-              fMsgs++;
-            }
-            const u = j.message?.usage;
-            if (!u) continue;
-            const tok = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-            if (mid) reqTok.set(mid, Math.max(reqTok.get(mid) ?? 0, tok));
-            else fTokens += tok;
-          }
-          for (const tok of reqTok.values()) fTokens += tok;
+          const fh = await fsp.open(fp, "r");
+          try {
+            const len = st.size - rec.offset;
+            const buf = Buffer.alloc(len);
+            await fh.read(buf, 0, len, rec.offset);
+            rec.offset = st.size;
+            // A read can land mid-line; hold the remainder for the next chunk so
+            // foldDayChunk only ever sees whole lines.
+            const chunk = rec.rest + buf.toString("utf8");
+            const cut = chunk.lastIndexOf("\n");
+            rec.rest = cut < 0 ? chunk : chunk.slice(cut + 1);
+            foldDayChunk(rec.counts, cut < 0 ? "" : chunk.slice(0, cut));
+          } finally { await fh.close(); }
         } catch { continue; }
-        fileCache.set(fp, { size: st.size, mtimeMs: st.mtimeMs, day, msgs: fMsgs, tokens: fTokens });
-        msgs += fMsgs; tokens += fTokens;
+      }
+      todayTracker.set(fp, rec);
+      const t = dayCountsTotals(rec.counts);
+      msgs += t.msgs; tokens += t.tokens;
     }
     // Drop entries for files that left the scan (not touched today). Without this
     // the map only ever grows: the plugin runs for weeks, and at every local
     // midnight the whole previous day's file set becomes unreachable but stays
     // resident. A file outside today's scan contributes nothing to today's totals,
     // so forgetting it cannot change the numbers.
-    for (const fp of fileCache.keys()) if (!seen.has(fp)) fileCache.delete(fp);
+    for (const fp of todayTracker.keys()) if (!seen.has(fp)) todayTracker.delete(fp);
     state.today = { chats: chats.size, msgs, tokens };
     renderAll(["today"]);
   } catch (e) {
@@ -682,7 +704,7 @@ async function pollBurn() {
   try {
     const now = Date.now();
     const scanCutoff = now - 90 * 60_000;
-    const files = await walkTranscripts(PROJECTS_DIR, scanCutoff);
+    const files = await scanTranscripts(scanCutoff);
     const seen = new Set();
     for (const st of files) {
       const fp = st.path;
@@ -754,7 +776,7 @@ async function pollUsageMeter(forceWins) {
   const now = Date.now();
   const cutoff = Math.min(...[...wins].map((w) => windowStartMs(w, now)));
   try {
-    const files = await walkTranscripts(PROJECTS_DIR, cutoff);
+    const files = await scanTranscripts(cutoff);
     const seen = new Set();
     const lists = [];
     for (const { path: fp, size, mtimeMs } of files) {

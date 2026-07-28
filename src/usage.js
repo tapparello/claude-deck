@@ -42,18 +42,32 @@ export function rateFor(model, overrides) {
   return [validNum(o?.in) ?? dIn, validNum(o?.out) ?? dOut];
 }
 
+// Cache multipliers on the input rate. A read is ~0.1x; a write depends on the
+// entry's TTL — 1.25x for the 5-minute default, 2x for a 1-hour entry.
+const CACHE_READ_MULT = 0.1;
+const CACHE_WRITE_5M_MULT = 1.25;
+const CACHE_WRITE_1H_MULT = 2;
+
 // Estimated USD for one request's token usage. Unpriceable model -> 0.
-// tok = {in, out, cacheRead, cacheCreate}. cache-read ≈0.1×input, create ≈1.25×input.
+// tok = {in, out, cacheRead, cacheCreate, cacheCreate1h}, where `cacheCreate` is
+// the WHOLE cache write and `cacheCreate1h` the 1-hour-TTL portion of it (so the
+// remainder is billed at the 5-minute rate). An absent cacheCreate1h means the
+// transcript carried no breakdown and the write is treated as all-5m, which is
+// what Claude Code actually does.
 export function estimateCost(model, tok, overrides) {
   const r = rateFor(model, overrides);
   if (!r) return 0;
   const [inR, outR] = r;
   const t = tok || {};
+  const write = t.cacheCreate || 0;
+  // Clamp: a malformed breakdown must not yield a negative 5-minute remainder.
+  const write1h = Math.min(t.cacheCreate1h || 0, write);
   return (
     (t.in || 0) * inR +
     (t.out || 0) * outR +
-    (t.cacheRead || 0) * 0.1 * inR +
-    (t.cacheCreate || 0) * 1.25 * inR
+    (t.cacheRead || 0) * CACHE_READ_MULT * inR +
+    (write - write1h) * CACHE_WRITE_5M_MULT * inR +
+    write1h * CACHE_WRITE_1H_MULT * inR
   ) / 1e6;
 }
 
@@ -76,7 +90,11 @@ export function parseRequests(text) {
       in: u.input_tokens || 0,
       out: u.output_tokens || 0,
       cacheRead: u.cache_read_input_tokens || 0,
+      // Grand total of the cache write, plus the 1-hour-TTL slice of it. The
+      // breakdown lives in a nested object that older transcripts lack, hence the
+      // 0 default — see estimateCost for why that default is the right one.
       cacheCreate: u.cache_creation_input_tokens || 0,
+      cacheCreate1h: u.cache_creation?.ephemeral_1h_input_tokens || 0,
     };
     const rec = { id: j.message?.id ?? j.requestId ?? null, t: new Date(j.timestamp).getTime(), model: j.message?.model ?? "", tok };
     if (rec.id == null) { noId.push(rec); continue; }
@@ -84,6 +102,60 @@ export function parseRequests(text) {
     if (!prev || totalOf(tok) > totalOf(prev.tok)) byId.set(rec.id, rec);
   }
   return [...byId.values(), ...noId];
+}
+
+// ---------- incremental per-file day accounting (the "Today" key) ----------
+//
+// Local calendar day for a timestamp, as "YYYY-MM-DD". Local, not UTC: "today" on
+// the key has to mean the user's today.
+export function localDay(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Running counts for ONE transcript file on ONE local day. Held across ticks so
+// the file can be tailed from a saved offset instead of re-read whole; that is
+// only sound because the dedup state (`reqTok`, `seenMsg`) lives here rather than
+// being rebuilt per read. `day` is stored so the caller can discard the whole
+// accumulator at local midnight.
+export function newDayCounts(day) {
+  return { day, msgs: 0, looseTokens: 0, reqTok: new Map(), seenMsg: new Set() };
+}
+
+// Fold a chunk of whole transcript lines into `counts`. Safe to call repeatedly
+// with successive chunks; a request whose final snapshot arrives in a later chunk
+// updates its entry in place rather than adding a second one.
+export function foldDayChunk(counts, text) {
+  for (const line of String(text ?? "").split("\n")) {
+    if (!line) continue;
+    let j;
+    try { j = JSON.parse(line); } catch { continue; }
+    if (!j.timestamp || localDay(j.timestamp) !== counts.day) continue;
+    const mid = j.message?.id ?? j.requestId;
+    if (j.type === "user") counts.msgs++;
+    else if (j.type === "assistant" && (!mid || !counts.seenMsg.has(mid))) {
+      // One streamed reply emits several snapshot lines; count the reply once.
+      if (mid) counts.seenMsg.add(mid);
+      counts.msgs++;
+    }
+    const u = j.message?.usage;
+    if (!u) continue;
+    const tok = (u.input_tokens ?? 0) + (u.output_tokens ?? 0)
+      + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+    // Each snapshot restates the whole request's usage, so take the max rather
+    // than accumulating. Without an id there is no dedup key and the line stands
+    // on its own.
+    if (mid) counts.reqTok.set(mid, Math.max(counts.reqTok.get(mid) ?? 0, tok));
+    else counts.looseTokens += tok;
+  }
+  return counts;
+}
+
+// Collapse an accumulator into the two figures the key shows.
+export function dayCountsTotals(counts) {
+  let tokens = counts.looseTokens;
+  for (const t of counts.reqTok.values()) tokens += t;
+  return { msgs: counts.msgs, tokens };
 }
 
 // Merge per-file request lists into a global deduped list (max total per id).

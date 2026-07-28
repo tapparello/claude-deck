@@ -3901,12 +3901,17 @@ function rateFor(model, overrides) {
   const o = overrides?.[fam];
   return [validNum(o?.in) ?? dIn, validNum(o?.out) ?? dOut];
 }
+var CACHE_READ_MULT = 0.1;
+var CACHE_WRITE_5M_MULT = 1.25;
+var CACHE_WRITE_1H_MULT = 2;
 function estimateCost(model, tok, overrides) {
   const r = rateFor(model, overrides);
   if (!r) return 0;
   const [inR, outR] = r;
   const t = tok || {};
-  return ((t.in || 0) * inR + (t.out || 0) * outR + (t.cacheRead || 0) * 0.1 * inR + (t.cacheCreate || 0) * 1.25 * inR) / 1e6;
+  const write = t.cacheCreate || 0;
+  const write1h = Math.min(t.cacheCreate1h || 0, write);
+  return ((t.in || 0) * inR + (t.out || 0) * outR + (t.cacheRead || 0) * CACHE_READ_MULT * inR + (write - write1h) * CACHE_WRITE_5M_MULT * inR + write1h * CACHE_WRITE_1H_MULT * inR) / 1e6;
 }
 function totalOf(tok) {
   return tok.in + tok.out + tok.cacheRead + tok.cacheCreate;
@@ -3929,7 +3934,11 @@ function parseRequests(text) {
       in: u.input_tokens || 0,
       out: u.output_tokens || 0,
       cacheRead: u.cache_read_input_tokens || 0,
-      cacheCreate: u.cache_creation_input_tokens || 0
+      // Grand total of the cache write, plus the 1-hour-TTL slice of it. The
+      // breakdown lives in a nested object that older transcripts lack, hence the
+      // 0 default — see estimateCost for why that default is the right one.
+      cacheCreate: u.cache_creation_input_tokens || 0,
+      cacheCreate1h: u.cache_creation?.ephemeral_1h_input_tokens || 0
     };
     const rec = { id: j.message?.id ?? j.requestId ?? null, t: new Date(j.timestamp).getTime(), model: j.message?.model ?? "", tok };
     if (rec.id == null) {
@@ -3940,6 +3949,42 @@ function parseRequests(text) {
     if (!prev || totalOf(tok) > totalOf(prev.tok)) byId.set(rec.id, rec);
   }
   return [...byId.values(), ...noId];
+}
+function localDay(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function newDayCounts(day) {
+  return { day, msgs: 0, looseTokens: 0, reqTok: /* @__PURE__ */ new Map(), seenMsg: /* @__PURE__ */ new Set() };
+}
+function foldDayChunk(counts, text) {
+  for (const line2 of String(text ?? "").split("\n")) {
+    if (!line2) continue;
+    let j;
+    try {
+      j = JSON.parse(line2);
+    } catch {
+      continue;
+    }
+    if (!j.timestamp || localDay(j.timestamp) !== counts.day) continue;
+    const mid = j.message?.id ?? j.requestId;
+    if (j.type === "user") counts.msgs++;
+    else if (j.type === "assistant" && (!mid || !counts.seenMsg.has(mid))) {
+      if (mid) counts.seenMsg.add(mid);
+      counts.msgs++;
+    }
+    const u = j.message?.usage;
+    if (!u) continue;
+    const tok = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+    if (mid) counts.reqTok.set(mid, Math.max(counts.reqTok.get(mid) ?? 0, tok));
+    else counts.looseTokens += tok;
+  }
+  return counts;
+}
+function dayCountsTotals(counts) {
+  let tokens = counts.looseTokens;
+  for (const t of counts.reqTok.values()) tokens += t;
+  return { msgs: counts.msgs, tokens };
 }
 function mergeById(lists) {
   const byId = /* @__PURE__ */ new Map();
@@ -5191,11 +5236,20 @@ async function walkTranscripts(dir, cutoffMs) {
   await rec(dir);
   return out;
 }
-var fileCache = /* @__PURE__ */ new Map();
-var localDay = (ts) => {
-  const d = new Date(ts);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
+var SCAN_TTL_MS = 5e3;
+var transcriptScan = { at: 0, cutoff: Infinity, files: [] };
+async function scanTranscripts(cutoffMs) {
+  const now = Date.now();
+  const fresh = now - transcriptScan.at < SCAN_TTL_MS;
+  if (fresh && transcriptScan.cutoff <= cutoffMs) {
+    return transcriptScan.files.filter((f) => f.mtimeMs >= cutoffMs);
+  }
+  const cutoff = fresh ? Math.min(transcriptScan.cutoff, cutoffMs) : cutoffMs;
+  const files = await walkTranscripts(PROJECTS_DIR, cutoff);
+  transcriptScan = { at: now, cutoff, files };
+  return files.filter((f) => f.mtimeMs >= cutoffMs);
+}
+var todayTracker = /* @__PURE__ */ new Map();
 async function pollToday() {
   try {
     const day = localDay(Date.now());
@@ -5203,53 +5257,41 @@ async function pollToday() {
     dayStart.setHours(0, 0, 0, 0);
     let msgs = 0, tokens = 0;
     const chats = /* @__PURE__ */ new Set();
-    const files = await walkTranscripts(PROJECTS_DIR, dayStart.getTime());
+    const files = await scanTranscripts(dayStart.getTime());
     const seen = /* @__PURE__ */ new Set();
     for (const st of files) {
       const fp = st.path;
       seen.add(fp);
       if (!fp.split(path2.sep).includes("subagents")) chats.add(fp);
-      const cached = fileCache.get(fp);
-      if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs && cached.day === day) {
-        msgs += cached.msgs;
-        tokens += cached.tokens;
-        continue;
+      let rec = todayTracker.get(fp);
+      if (!rec || rec.counts.day !== day || st.size < rec.offset) {
+        rec = { offset: 0, rest: "", counts: newDayCounts(day) };
       }
-      let fMsgs = 0, fTokens = 0;
-      try {
-        const text = await fsp.readFile(fp, "utf8");
-        const reqTok = /* @__PURE__ */ new Map();
-        const seenMsg = /* @__PURE__ */ new Set();
-        for (const line2 of text.split("\n")) {
-          if (!line2) continue;
-          let j;
+      if (st.size > rec.offset) {
+        try {
+          const fh = await fsp.open(fp, "r");
           try {
-            j = JSON.parse(line2);
-          } catch {
-            continue;
+            const len = st.size - rec.offset;
+            const buf = Buffer.alloc(len);
+            await fh.read(buf, 0, len, rec.offset);
+            rec.offset = st.size;
+            const chunk = rec.rest + buf.toString("utf8");
+            const cut2 = chunk.lastIndexOf("\n");
+            rec.rest = cut2 < 0 ? chunk : chunk.slice(cut2 + 1);
+            foldDayChunk(rec.counts, cut2 < 0 ? "" : chunk.slice(0, cut2));
+          } finally {
+            await fh.close();
           }
-          if (!j.timestamp || localDay(j.timestamp) !== day) continue;
-          const mid = j.message?.id ?? j.requestId;
-          if (j.type === "user") fMsgs++;
-          else if (j.type === "assistant" && (!mid || !seenMsg.has(mid))) {
-            if (mid) seenMsg.add(mid);
-            fMsgs++;
-          }
-          const u = j.message?.usage;
-          if (!u) continue;
-          const tok = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-          if (mid) reqTok.set(mid, Math.max(reqTok.get(mid) ?? 0, tok));
-          else fTokens += tok;
+        } catch {
+          continue;
         }
-        for (const tok of reqTok.values()) fTokens += tok;
-      } catch {
-        continue;
       }
-      fileCache.set(fp, { size: st.size, mtimeMs: st.mtimeMs, day, msgs: fMsgs, tokens: fTokens });
-      msgs += fMsgs;
-      tokens += fTokens;
+      todayTracker.set(fp, rec);
+      const t = dayCountsTotals(rec.counts);
+      msgs += t.msgs;
+      tokens += t.tokens;
     }
-    for (const fp of fileCache.keys()) if (!seen.has(fp)) fileCache.delete(fp);
+    for (const fp of todayTracker.keys()) if (!seen.has(fp)) todayTracker.delete(fp);
     state.today = { chats: chats.size, msgs, tokens };
     renderAll(["today"]);
   } catch (e) {
@@ -5261,7 +5303,7 @@ async function pollBurn() {
   try {
     const now = Date.now();
     const scanCutoff = now - 90 * 6e4;
-    const files = await walkTranscripts(PROJECTS_DIR, scanCutoff);
+    const files = await scanTranscripts(scanCutoff);
     const seen = /* @__PURE__ */ new Set();
     for (const st of files) {
       const fp = st.path;
@@ -5329,7 +5371,7 @@ async function pollUsageMeter(forceWins) {
   const now = Date.now();
   const cutoff = Math.min(...[...wins].map((w) => windowStartMs(w, now)));
   try {
-    const files = await walkTranscripts(PROJECTS_DIR, cutoff);
+    const files = await scanTranscripts(cutoff);
     const seen = /* @__PURE__ */ new Set();
     const lists = [];
     for (const { path: fp, size, mtimeMs } of files) {
