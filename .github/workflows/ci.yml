@@ -63,54 +63,8 @@ jobs:
         # from fetching schemas mid-build.
         run: npx streamdeck pack dev.tapparello.claude-deck.sdPlugin --dry-run --no-update-check
 
-      - name: Manifest and Property Inspector are valid
-        run: |
-          node -e "
-            const fs = require('fs');
-            const m = JSON.parse(fs.readFileSync('dev.tapparello.claude-deck.sdPlugin/manifest.json', 'utf8'));
-            if (!/^\d+\.\d+\.\d+\.\d+$/.test(m.Version)) throw new Error('Version must be 4-part: ' + m.Version);
-            // The manifest is the source of truth (Stream Deck demands 4 parts), but
-            // package.json drifted to 1.0.0 while the plugin shipped 1.8.0.0. Require
-            // the manifest to extend the package version, leaving the 4th part free
-            // to act as a build number.
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            if (!m.Version.startsWith(pkg.version + '.')) {
-              throw new Error('manifest Version ' + m.Version + ' does not extend package.json version ' + pkg.version);
-            }
-            const uuids = m.Actions.map(a => a.UUID);
-            if (new Set(uuids).size !== uuids.length) throw new Error('duplicate action UUID');
-            const dir = 'dev.tapparello.claude-deck.sdPlugin/';
-            // The plugin icon is the one surface Elgato requires as PNG (256, plus a
-            // 512 @2x). It must ALSO not exist as an .svg: manifest icon paths carry
-            // no extension, so shipping both makes the choice a coin toss.
-            if (!fs.existsSync(dir + m.Icon + '.png')) throw new Error('plugin Icon must exist as PNG: ' + m.Icon);
-            if (!fs.existsSync(dir + m.Icon + '@2x.png')) throw new Error('plugin Icon needs a @2x PNG: ' + m.Icon);
-            if (fs.existsSync(dir + m.Icon + '.svg')) throw new Error('plugin Icon exists as both .svg and .png: ' + m.Icon);
-            if (!fs.existsSync(dir + m.CategoryIcon + '.svg')) throw new Error('missing CategoryIcon: ' + m.CategoryIcon);
-            // Action-list icons must be monochrome white on transparent — no fills,
-            // no background plate. That is a marketplace requirement, and it is the
-            // opposite of what the KEY art does, so the two sets cannot be shared.
-            const listIcons = [m.CategoryIcon, ...m.Actions.map(a => a.Icon)];
-            for (const icon of listIcons) {
-              const svg = fs.readFileSync(dir + icon + '.svg', 'utf8');
-              const fills = (svg.match(/fill="(?!none)[^"]+"/g) || []);
-              if (fills.length) throw new Error(icon + ' has a fill (list icons must be stroke-only): ' + fills[0]);
-              for (const stroke of svg.match(/stroke="[^"]+"/g) || []) {
-                if (stroke !== 'stroke="#FFFFFF"') throw new Error(icon + ' is not monochrome white: ' + stroke);
-              }
-            }
-            for (const a of m.Actions) {
-              if (!a.UUID.startsWith(m.UUID + '.')) throw new Error('action outside the plugin namespace: ' + a.UUID);
-              for (const icon of [a.Icon, ...(a.States || []).map(s => s.Image)]) {
-                if (icon && !fs.existsSync(dir + icon + '.svg')) {
-                  throw new Error('missing icon: ' + icon);
-                }
-              }
-              if (a.PropertyInspectorPath && !fs.existsSync('dev.tapparello.claude-deck.sdPlugin/' + a.PropertyInspectorPath)) {
-                throw new Error('missing PI: ' + a.PropertyInspectorPath);
-              }
-            }
-            const pi = fs.readFileSync('dev.tapparello.claude-deck.sdPlugin/pi/pi.html', 'utf8');
-            new Function(pi.split('<script>')[1].split('</script>')[0]);
-            console.log('manifest OK: v' + m.Version + ', ' + m.Actions.length + ' actions, PI parses');
-          "
+      - name: Manifest, icons and Property Inspector are valid
+        # A real file, not an inline `node -e`: the icon rules need literal double
+        # quotes, which terminate the shell string early and broke on all three
+        # runners at once while passing locally.
+        run: npm run check:manifest

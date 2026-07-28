@@ -9,6 +9,7 @@
     "selftest": "node dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs --selftest",
     "test": "node --test",
     "lint": "eslint .",
+    "check:manifest": "node tools/check-manifest.mjs",
     "pack": "streamdeck pack dev.tapparello.claude-deck.sdPlugin --force --no-update-check",
     "icons": "node tools/gen-icons.mjs",
     "showcase": "node tools/gen-showcase.mjs"
