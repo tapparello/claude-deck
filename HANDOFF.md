@@ -160,7 +160,65 @@ command passthrough in Claude Code).
 - `blockedSessions()` returns **full poller records** on purpose: `platform.focusWindow` rejects without `s.pid`.
 - `pollSessions`' change-signature includes the derived state, so time-relative transitions (Finished → Idle at 60s) repaint. Without that, `[pid,status]` alone never changes and the key goes stale.
 - **`entrypoint` matters.** Only `entrypoint: "cli"` sessions carry `status`/`waitingFor`/`statusUpdatedAt`; **`entrypoint: "claude-vscode"` sessions write none of them** (verified — the extension never calls the status writer). For status-less sessions `sessionState()` falls back to the transcript mtime (`transcriptPathFor()` → `<projects>/<cwd with / and _ → ->/<sessionId>.jsonl`), injected as a `Map` so `status.js` stays pure: fresh write → `working`, stale → `idle`, no transcript → `unknown` ("no status"). A real status **always** wins. Don't "simplify" a status-less session to `idle` — that reports Idle for a VS Code session that is mid-turn.
-- This is **~6s faster than the `Notification` hook** (which waits out a user-idle debounce) and needs no hooks at all. A hook-based approver (Allow/Deny keys) was designed and rejected — see the local spec `docs/superpowers/specs/2026-07-24-approver-phase2-design.md` §6 for the disqualifying findings (fail-closed on hook timeout; `ask` rules re-prompt over a hook `allow`; Bash splits compound commands; subagents share `session_id`).
+- This is **~6s faster than the `Notification` hook** (which waits out a user-idle debounce) and needs no hooks at all — that's why **Claude Status** stays hook-free even now that a separate hook-based approver exists (see below). **Superseded (2026-07-25):** this note used to say a hook-based approver (Allow/Deny keys) was designed and rejected as unsafe, citing four disqualifiers (fail-closed on hook timeout, `ask` rules re-prompting over a hook `allow`, Bash splitting compound commands, subagents sharing `session_id`). That verdict didn't hold up — see **Approver (v1.7.0.0)** below for the shipped design. It doesn't eliminate all four so much as make them survivable: the snippet's declared hook `timeout` is padded past the plugin's own 20s hold (`HOLD_S + TIMEOUT_PAD_S`, see `installSnippet()`/`TIMEOUT_PAD_S` in `src/plugin.js`) so the plugin's answer — which can land up to `HOLD_MS + 600ms` after the request arrived — reaches Claude Code before its declared timeout expires, rather than losing that race and letting the call hang; `oneSafeRule` refuses to guess at a single rule for anything but an unambiguous single-rule suggestion; and either channel (deck or terminal) can answer first with no coordination needed — so a double-answer or a mismatched match is a no-op, not a hazard.
+
+## Approver (v1.7.0.0)
+
+- **`sanitizeSuggestions` (`src/approve.js`) is a security boundary.** It whitelists
+  `type:"addRules"` + `behavior:"allow"` + a non-empty `ruleContent`, and clamps
+  `destination` to `localSettings`/`session`. Clamping the destination alone is NOT
+  enough: `setMode` would persist `defaultMode:"acceptEdits"`, `addDirectories` would
+  grant a whole directory. A test asserts no input can emit a forbidden type or
+  destination — do not weaken it.
+- **The hook consumer in Claude Code skips the over-broad-rule filter** that its TUI,
+  bridge and SDK all apply, and the payload does not carry the `showAlwaysAllow`
+  signals. That is why we drop rules with no `ruleContent` and refuse `mcp__*`.
+- **A press answers `shownReq.get(context)`, not `head(queue)`.** They differ whenever a
+  drop or new request lands between paint and press.
+- **Staleness is request-scoped** (`statusUpdatedAt`/transcript-mtime snapshots), never
+  "the session left `waiting`": VS Code sessions write no `status`, and two live pids can
+  share one `sessionId` after a resume.
+- The secret lives in **Stream Deck global settings**, not `PLUGIN_DIR` — `deploy.sh`
+  does `rm -rf "$DST"` and would wipe it. Merge global settings, never clobber (`rates`
+  lives there too), and **never regenerate over a secret already in `state.hookSecret`**
+  or the URL the user pasted stops working silently.
+- **`oneSafeRule` is the single source of truth for ALWAYS.** The key's label and its
+  decision both derive from it, so a key rendering `ALWAYS n/a` is structurally unable to
+  write anything. Do not give `decisionBody` its own, looser check.
+- **A DENY blocks ALWAYS for the same rule for 30 s** (`DENY_WINDOW_MS`, found on-device
+  2026-07-28). Claude retries a denied call with identical input ~1.8 s later (measured:
+  deny 15:24:06.653 → retry 15:24:08.447), and the retry paints an identical key — on the
+  first real run this turned a *denied* `curl.se` into `WebFetch(domain:curl.se)` in
+  `settings.local.json`. `state.denies` holds `{rule, at}`, keyed on the **rule** rather
+  than the command, because the rule is what re-permits the denied call (`gh pr list` and
+  `gh pr merge --admin 1` share `Bash(gh pr *)`). The renderer and the press handler call
+  the same `denyBlock()`, so a key that paints `just denied` is exactly the key that
+  refuses; the block is pruned in the session poll so it visibly lifts.
+- **Staleness baselines are seeded on first observation, not at enqueue.** `state.sessions`
+  is up to 5 s stale, and the status flip that causes a prompt lands ~simultaneously with
+  the hook POST — snapshotting at enqueue makes every request look stale and cuts the real
+  hold to 10-15 s.
+- **Socket tests must carry `{ timeout: … }`.** `node --test` has no default bound, so a
+  test that awaits a held response hangs CI for hours instead of failing.
+- **`alwaysRule()` returns the rule TEXT WHOLE, never truncated** (fixed 2026-07-25).
+  Truncating at 18 chars used to collapse every WebFetch domain grant to the identical
+  `"WebFetch(domain:e…"` — two different domains rendered the same on the one key that
+  produces a durable write. It now returns `null` (the existing disabled `ALWAYS n/a`
+  path) only past `RULE_FIT` (36); `src/plugin.js`'s `approveKey` splits anything over
+  `RULE_MAX` (18) across two lines instead of shrinking it into an ellipsis.
+- **The `auth?` signal is windowed, not cumulative** (fixed 2026-07-25).
+  `hookserver.js`'s `stats.badPathHits` is a pruned array of recent wrong-path
+  timestamps, cleared outright the moment a correctly-pathed request arrives — a single
+  stray 404 (any web page can trigger one with a no-cors POST to the port) must not
+  latch the key red for the life of the process. `authFlagged()` in `plugin.js`
+  re-filters by `BADPATH_WINDOW_MS` at read time too, so the flag also decays if no
+  further bad requests ever arrive to prune it.
+- **`ensureHookServerOnce`'s rebind check compares the bound SECRET too, not just the
+  port** (fixed 2026-07-25). `startHookServer`'s resolved handle now exposes `secret`;
+  without that, global settings handing back a different valid secret would overwrite
+  `state.hookSecret` while the old server kept listening on the old path forever —
+  unrecoverable without a restart. `ensureHookServer()` also now queues one trailing
+  re-run if a call arrives while another is in flight, instead of dropping it.
 
 ## Things NOT to do
 

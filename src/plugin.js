@@ -11,6 +11,14 @@ import { fileURLToPath } from "node:url";
 import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript } from "./osa.js";
 import { windowStartMs, parseRequests, mergeById, aggregate, aggregateByModel, budgetPct, gaugeSource, familyOf } from "./usage.js";
 import { resolveStatusKey, statusEntry, autoSlot, sessionWhere, fmtShort, shortWait, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
+import { randomBytes } from "node:crypto";
+import {
+  decisionBody, describeRequest, alwaysRule, pressDecision,
+  enqueue, head, resolve, expiredIds, staleIds, seedBaselines, hookFragment,
+  rememberDeny, denyBlock, pruneDenies,
+  PORT_DEFAULT, HOLD_S_DEFAULT, QUEUE_MAX, RULE_MAX,
+} from "./approve.js";
+import { startHookServer, BADPATH_WINDOW_MS, BADPATH_MIN_HITS } from "./hookserver.js";
 
 const IS_MAC = process.platform === "darwin";
 
@@ -225,6 +233,75 @@ function statusKey(name, st, count, detail = "", tag = "", phase = null) {
     ${detail ? `<text x="72" y="124" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" fill="${C.dim}">${esc(detail)}</text>` : ""}`);
 }
 
+const APPROVE_LOOK = {
+  "approve-allow": { word: "ALLOW", col: C.ok },
+  "approve-always": { word: "ALWAYS", col: C.info },
+  "approve-deny": { word: "DENY", col: C.bad },
+};
+// Nothing pending -> the same calm dim look the Waiting key uses. A pending request
+// tints the frame and (while fresh) breathes. ALLOW/DENY show the command; ALWAYS
+// shows the RULE it would persist, because Claude Code's suggestions are wildcards.
+function approveKey(kind, req, o = {}) {
+  const look = APPROVE_LOOK[kind];
+  const t = (y, size, weight, fill, s) =>
+    `<text x="72" y="${y}" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="${size}" font-weight="${weight}" fill="${fill}">${esc(s)}</text>`;
+
+  if (o.err) {
+    return svgWrap(`${tintFrame(C.bad, true)}${t(66, 20, 700, C.text, look.word)}${t(96, 15, 600, C.bad, o.err)}`);
+  }
+  if (!req) {
+    return svgWrap(`${tintFrame(C.track, false)}${t(66, 20, 700, C.dim, look.word)}${t(96, 14, 600, C.dim, "all clear")}`);
+  }
+
+  const { name, target } = describeRequest(req);
+  const rule = kind === "approve-always" ? alwaysRule(req, !!o.sessionOnly) : null;
+  // o.denied is set when this target's rule was DENIED in the last DENY_WINDOW_MS. The
+  // rule still renders above the word, greyed: the user needs to see WHAT is blocked,
+  // and hiding it would make this look like the unrelated "n/a" case.
+  const denied = kind === "approve-always" && rule !== null && !!o.denied;
+  const disabled = kind === "approve-always" && (rule === null || denied);
+  const col = disabled ? C.dim : look.col;
+  const word = kind === "approve-always"
+    ? (denied ? String(o.denied) : rule === null ? "ALWAYS n/a" : `ALWAYS ·${o.sessionOnly ? "session" : "project"}`)
+    : look.word;
+  // Depth badge wins the corner, else an optional user label. The project name keeps
+  // line 1 unconditionally: it is a wrong-request mitigation, so a cosmetic label must
+  // not be able to hide it.
+  const corner = o.depth > 1
+    ? `<circle cx="120" cy="26" r="13" fill="${C.panel}" stroke="${col}" stroke-width="1.5"/>` +
+      `<text x="120" y="31" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="${C.text}">${o.depth}</text>`
+    : o.label
+    ? `<text x="132" y="30" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="600" fill="${C.dim}">${esc(String(o.label).slice(0, 8))}</text>`
+    : "";
+
+  // ALWAYS shows the RULE it would persist, in full (alwaysRule() no longer truncates -
+  // see src/approve.js). A rule over RULE_MAX (18) chars - e.g. any WebFetch domain
+  // grant, since "WebFetch(domain:" alone is 16 - is split at "(" across two lines
+  // (tool name, then the (ruleContent) that actually matters) rather than shrunk into a
+  // shared, illegible prefix. A rule too long even for two lines makes alwaysRule()
+  // return null, which is the existing disabled "ALWAYS n/a" path below: a rule that
+  // cannot be shown honestly must not be pressable. ALLOW/DENY keep the original
+  // single-line target rendering untouched.
+  const splitRule = kind === "approve-always" && rule != null && rule.length > RULE_MAX;
+  let body;
+  if (splitRule) {
+    const splitAt = rule.indexOf("(");
+    const line1 = splitAt >= 0 ? rule.slice(0, splitAt) : rule;
+    const line2 = splitAt >= 0 ? rule.slice(splitAt) : "";
+    body = `${t(42, 12, 600, C.dim, name)}${t(66, 15, 700, C.text, line1)}${t(88, 15, 700, C.text, line2)}`;
+  } else {
+    const shown = kind === "approve-always" ? (rule ?? target) : target;
+    const size = kind === "approve-always" && rule != null ? 18 : (shown.length > 11 ? 18 : 22);
+    body = `${t(52, 13, 600, C.dim, name)}${t(84, size, 700, C.text, shown)}`;
+  }
+
+  return svgWrap(`
+    ${tintFrame(col, !disabled, disabled ? null : o.phase)}
+    ${corner}
+    ${body}
+    ${t(112, word.length > 11 ? 14 : 18, 700, col, word)}`);
+}
+
 // ---------- formatting ----------
 function fmtReset(iso) {
   if (!iso) return "";
@@ -260,6 +337,14 @@ const state = {
   pctHistory: [],
   loggedRaw: false,
   rates: {},
+  approveQueue: [],
+  denies: [],   // {rule, at} for ~30s after a DENY, so the retry cannot be ALWAYS'd
+  hookSecret: null,
+  hookPort: PORT_DEFAULT,
+  hookErr: null,
+  lastHeadChangeAt: 0,
+  globalSettings: {},
+  pluginUUID: null,
 };
 
 function pickBucket(o) {
@@ -450,6 +535,28 @@ async function pollSessions() {
     for (const id of [...state.activity.keys()]) {
       if (!out.some((s) => s.sessionId === id)) state.activity.delete(id);
     }
+    // Runs on EVERY tick, deliberately outside the `changed` branch below: two
+    // different prompts in one session are byte-identical to sessionSig, so a drop
+    // gated on `changed` would never fire. `out` is used rather than state.sessions
+    // because state has not been updated yet.
+    if (state.approveQueue.length) {
+      const now = Date.now();
+      // Compare first, THEN baseline the newcomers: a request seeded on this very tick
+      // has nothing to compare against yet and must not be dropped.
+      const gone = new Set([
+        ...staleIds(state.approveQueue, out, state.activity, now),
+        ...expiredIds(state.approveQueue, now, HOLD_MS()),
+      ]);
+      state.approveQueue = seedBaselines(state.approveQueue, out, state.activity);
+      if (gone.size) answerAndDrop([...gone], "session moved on or hold expired");
+      // A deny block is time-based, so it can expire with nothing else changing. Repaint
+      // when it does, or an ALWAYS key would stay greyed on a request it may now answer.
+      const kept = pruneDenies(state.denies, now);
+      if (kept.length !== state.denies.length) {
+        state.denies = kept;
+        if (!gone.size) renderApproveAll();   // answerAndDrop already repainted
+      }
+    }
     // Compare against the signature cached on the PREVIOUS tick. Recomputing
     // both sides with the same `now` would cancel the derived state out, so a
     // time-only transition (finished → idle at 60s) would never repaint.
@@ -461,6 +568,191 @@ async function pollSessions() {
   } catch (e) {
     log("sessions poll failed:", String(e));
   }
+}
+
+// ---------- approver ----------
+const APPROVE_KINDS = ["approve-allow", "approve-always", "approve-deny"];
+const HOLD_MS = () => (Number(state.globalSettings.hookHoldS) || HOLD_S_DEFAULT) * 1000;
+// The snippet's declared hook `timeout` must be longer than HOLD_MS(), or Claude Code's
+// own client-side timeout races our expiry and always loses: expiredIds() only fires
+// AFTER now - receivedAt > holdMs, checked on a 600ms ticker, so the plugin's answer can
+// land up to holdMs + 600ms after receivedAt. Padding the declared timeout by this much
+// gives the client a real margin instead of a bare (and losing) tie.
+const TIMEOUT_PAD_S = 3;
+let approveSeq = 0;
+let hookServer = null;
+
+const renderApproveAll = () => renderAll(APPROVE_KINDS);
+const hasApproveKey = () => [...views.values()].some((v) => APPROVE_KINDS.includes(v.kind));
+
+// "auth?" is for a REPEATED wrong-path signal, never a single stray 404 - any web page
+// can trigger one of those with a no-cors POST to the port, and hookserver.js already
+// clears its own record the moment a correctly-pathed request arrives. Re-filter by the
+// window here too (rather than trust hookserver's own pruning) so the flag also decays
+// on its own if no further bad requests ever arrive to prune it.
+function authFlagged() {
+  const hits = hookServer?.stats.badPathHits;
+  if (!hits || hits.length < BADPATH_MIN_HITS) return false;
+  const now = Date.now();
+  return hits.filter((t) => now - t < BADPATH_WINDOW_MS).length >= BADPATH_MIN_HITS;
+}
+
+function noteHeadChange(prevId) {
+  const now = head(state.approveQueue)?.id ?? null;
+  if (now !== prevId) state.lastHeadChangeAt = Date.now();
+}
+
+// Answering {} frees the socket at once. Safety does not depend on it (the terminal
+// prompt is live and answerable throughout) but the queue's honesty does.
+function answerAndDrop(ids, why) {
+  if (!ids.length) return;
+  const prev = head(state.approveQueue)?.id ?? null;
+  for (const id of ids) {
+    const { queue, req } = resolve(state.approveQueue, id);
+    state.approveQueue = queue;
+    if (req) {
+      req.ticket.respond(null);
+      log(`approve: dropped ${req.toolName} (${why})`);
+    }
+  }
+  noteHeadChange(prev);
+  renderApproveAll();
+}
+
+function onHookRequest(payload, ticket) {
+  // Metadata only. tool_input for a Write is an entire file, and claude-deck.log
+  // lives in the plugin folder that README tells users to open and share.
+  const toolName = String(payload?.tool_name ?? "");
+  log(`approve: ${toolName} from ${path.basename(String(payload?.cwd ?? ""))}`);
+  if (payload?.hook_event_name !== "PermissionRequest" || !toolName) return void ticket.respond(null);
+  if (!hasApproveKey()) return void ticket.respond(null); // zero added latency when unused
+
+  const req = {
+    id: ++approveSeq,
+    receivedAt: Date.now(),
+    sessionId: payload.session_id ?? null,
+    cwd: payload.cwd ?? "",
+    toolName,
+    toolInput: payload.tool_input ?? null,
+    suggestions: payload.permission_suggestions ?? [],
+    // Baselines are seeded by the first pollSessions tick that OBSERVES this request,
+    // never here: state.sessions is up to 5s stale and would predate the status flip
+    // that caused this very prompt, making the request look stale forever.
+    statusSnapshot: null,
+    activitySnapshot: null,
+    baselined: false,
+    ticket,
+  };
+  ticket.id = req.id;
+  const prev = head(state.approveQueue)?.id ?? null;
+  const { queue, evicted } = enqueue(state.approveQueue, req);
+  state.approveQueue = queue;
+  if (evicted) { evicted.ticket.respond(null); log(`approve: evicted ${evicted.toolName} (queue full at ${QUEUE_MAX})`); }
+  noteHeadChange(prev);
+  renderApproveAll();
+}
+
+const onHookDrop = (ticket) => {
+  if (ticket.id == null) return;
+  const prev = head(state.approveQueue)?.id ?? null;
+  const { queue, req } = resolve(state.approveQueue, ticket.id);
+  if (!req) return;
+  state.approveQueue = queue;
+  log(`approve: socket closed for ${req.toolName}`);
+  // Must arm the settle window like answerAndDrop does, or a drop that promotes a new
+  // head lets a double-tap answer a request the user never read.
+  noteHeadChange(prev);
+  renderApproveAll();
+};
+
+let ensuring = null;
+let ensureAgain = false;
+// Serialised: this function's own setGlobalSettings makes Stream Deck broadcast
+// didReceiveGlobalSettings straight back, which would re-enter it while the first
+// startHookServer is still pending - both would then bind the same port and the loser
+// would set "port busy" while a healthy server is listening. A call that arrives while
+// one is already in flight is not simply dropped, though: it sets a trailing flag so
+// exactly one more pass runs once the in-flight one settles - otherwise a settings
+// write that drops the secret during that window would never trigger the re-assert.
+function ensureHookServer() {
+  if (ensuring) { ensureAgain = true; return ensuring; }
+  ensuring = ensureHookServerOnce().finally(() => {
+    ensuring = null;
+    if (ensureAgain) { ensureAgain = false; ensureHookServer(); }
+  });
+  return ensuring;
+}
+
+async function ensureHookServerOnce() {
+  const gs = state.globalSettings;
+  // Never regenerate over a secret we already hold: any global-settings write that
+  // arrives without hookSecret would otherwise silently invalidate the URL the user
+  // already pasted into ~/.claude/settings.json.
+  let secret = typeof gs.hookSecret === "string" && gs.hookSecret.length >= 32 ? gs.hookSecret
+             : state.hookSecret;
+  const port = Number(gs.hookPort) > 0 ? Number(gs.hookPort) : PORT_DEFAULT;
+  if (!secret) {
+    // 24 random bytes -> 32 base64url chars. Stored in Stream Deck GLOBAL SETTINGS,
+    // never in PLUGIN_DIR: deploy.sh does `rm -rf "$DST"`, which would wipe it and
+    // silently break the hook. Merge, never clobber - `rates` lives here too.
+    secret = randomBytes(24).toString("base64url");
+    state.globalSettings = { ...gs, hookSecret: secret, hookPort: port };
+    send({ event: "setGlobalSettings", context: state.pluginUUID, payload: state.globalSettings });
+    log("approve: generated a new hook secret");
+  } else if (gs.hookSecret !== secret) {
+    // A foreign write - e.g. the Property Inspector resending its own stale snapshot -
+    // dropped the secret from the persisted store. Put it back, or the next restart sees
+    // no secret anywhere, mints a fresh one, and the URL the user already pasted into
+    // ~/.claude/settings.json silently stops working.
+    // This must NOT be nested under a `secret !== state.hookSecret` guard: in exactly
+    // this case those two ARE equal, which is what made an earlier version dead code.
+    state.globalSettings = { ...gs, hookSecret: secret, hookPort: port };
+    send({ event: "setGlobalSettings", context: state.pluginUUID, payload: state.globalSettings });
+    log("approve: re-asserted the hook secret after a foreign global-settings write");
+  }
+  state.hookSecret = secret;
+  // Compare against what is actually BOUND - port AND secret, not port alone: if global
+  // settings ever hand back a DIFFERENT valid 32+ char secret, state.hookSecret above is
+  // overwritten, but a port-only check would leave the old server (still listening on
+  // the old path) in place forever, and installSnippet() would hand out a URL that
+  // server can never accept - unrecoverable without a restart. Also clear a stale
+  // error here: gating this on !state.hookErr would wedge us into permanent "port busy"
+  // once it was ever set.
+  if (hookServer && hookServer.boundPort === port && hookServer.secret === secret) {
+    if (state.hookErr) { state.hookErr = null; renderApproveAll(); }
+    return;
+  }
+  const previous = hookServer;
+  try {
+    const next = await startHookServer({
+      port, secret, onRequest: onHookRequest, onDrop: onHookDrop, log,
+    });
+    // Requests held by the old server belong to a socket we are about to drop.
+    if (previous && state.approveQueue.length) {
+      answerAndDrop(state.approveQueue.map((r) => r.id), "hook server rebinding");
+    }
+    hookServer = next;
+    state.hookPort = next.boundPort;
+    state.hookErr = null;
+    if (previous) await previous.close();
+  } catch (e) {
+    state.hookErr = e.code === "EADDRINUSE" ? "port busy" : String(e.message ?? e);
+    log("approve: hook server failed:", state.hookErr);
+  }
+  renderApproveAll();
+}
+
+// A FRAGMENT, not a whole document. `~/.claude/settings.json` already exists on any
+// real install - and on this machine it holds an Azure DevOps PAT - so telling the user
+// to paste `{"hooks":{...}}` over it would produce invalid JSON at best and destroy
+// their settings at worst. The returned text is pure JSON with NO comments: it goes
+// straight into a copy-button textarea and then straight into that file, and JSON has
+// no comment syntax. The merge instructions live in the Property Inspector note instead
+// (see pi/pi.html's "install" field), not in this string.
+function installSnippet() {
+  const url = `http://127.0.0.1:${state.hookPort}/permission/${state.hookSecret ?? "<secret>"}`;
+  // Padded (see TIMEOUT_PAD_S above): the hold itself stays HOLD_MS()/1000.
+  return hookFragment(url, HOLD_MS() / 1000 + TIMEOUT_PAD_S);
 }
 
 // Recursively collect .jsonl transcript files (including <uuid>/subagents/)
@@ -676,6 +968,8 @@ const cycle = new Map(); // context -> { idx, timer }
 const focusIdx = new Map(); // context -> { i, sig } (sig = the pool it indexes)
 const usageView = new Map(); // context -> "cost" | "tokens" (Usage key toggle)
 const modelIdx = new Map(); // context -> index into the model list (Model key: press to rotate)
+const shownReq = new Map();  // context -> the approve request id this key last PAINTED
+const shownRule = new Map(); // context -> the ALWAYS rule text this key last PAINTED
 let ws = null;
 let animPhase = 0;
 let lastSessionSig = ""; // previous tick's session signature (see pollSessions)
@@ -846,6 +1140,29 @@ function render(context, kind) {
       const why = shortWait(b.waitingFor ?? "") || "needs you";
       const fresh = !since || Date.now() - since < PULSE_MS;
       return setImage(context, statusKey(path.basename(b.cwd ?? "") || "claude", st, blocked.length, why + (waited ? " · " + waited : ""), sessionWhere(b), fresh ? animPhase : null));
+    }
+    case "approve-allow":
+    case "approve-always":
+    case "approve-deny": {
+      const s = views.get(context)?.settings ?? {};
+      const req = head(state.approveQueue);
+      // Record what this key is PAINTING. Task 7's press guard compares against it,
+      // so a press can never answer a request the user did not see.
+      shownReq.set(context, req?.id ?? null);
+      shownRule.set(context, kind === "approve-always" && req ? alwaysRule(req, !!s.sessionOnly) : null);
+      const fresh = req && Date.now() - req.receivedAt < PULSE_MS;
+      // A mis-pasted or stale URL 404s inside our own handler, so it IS countable - but
+      // only REPEATED 404s are evidence of that; see authFlagged().
+      const err = state.hookErr
+        ?? (!state.approveQueue.length && authFlagged() ? "auth?" : null);
+      return setImage(context, approveKey(kind, req, {
+        sessionOnly: !!s.sessionOnly,
+        label: s.label,
+        err,
+        depth: state.approveQueue.length,
+        phase: fresh ? animPhase : null,
+        denied: kind === "approve-always" && req ? denyBlock(state.denies, req, Date.now()) : null,
+      }));
     }
   }
 }
@@ -1262,6 +1579,59 @@ function onKeyDown(context, kind) {
       render(context, "approver-waiting");
       return act(context, platform.focusWindow(blocked[cy.idx]));
     }
+    case "approve-allow":
+    case "approve-always":
+    case "approve-deny": {
+      // Wrapped: a double-resolve throws ERR_HTTP_HEADERS_SENT synchronously, and
+      // onKeyDown runs bare off the websocket handler - an escape kills every key.
+      try {
+        if (state.hookErr) return showAlert(context);
+        const s = views.get(context)?.settings ?? {};
+        const d = pressDecision({
+          queue: state.approveQueue,
+          shownId: shownReq.get(context) ?? null,
+          lastHeadChangeAt: state.lastHeadChangeAt,
+          now: Date.now(),
+        });
+        if (d.action === "none") return;
+        if (d.action === "alert") { renderApproveAll(); return showAlert(context); }
+
+        const which = kind.slice("approve-".length); // allow | always | deny
+        // Decide BEFORE resolving: a refusal must not consume the request, or
+        // fat-fingering the greyed ALWAYS key would wipe it off ALLOW and DENY too.
+        const target = head(state.approveQueue);
+        const body = decisionBody(which, target, { sessionOnly: !!s.sessionOnly });
+        // Compare the rule against what this key actually PAINTED (shownRule), not
+        // against a value re-derived from the same object - that would be `x === x`.
+        const ruleOk = kind !== "approve-always"
+          || (shownRule.get(context) != null && alwaysRule(target, !!s.sessionOnly) === shownRule.get(context));
+        // Same call as the renderer's, so a key that painted "just denied" is exactly
+        // the key that refuses. Checked here rather than folded into decisionBody
+        // because the block is time-based state, and approve.js stays pure.
+        const denied = which === "always" ? denyBlock(state.denies, target, Date.now()) : null;
+        if (!body || !ruleOk || denied) {
+          const why = denied ?? (!body ? "no single safe rule" : "rule is not what was shown");
+          log(`approve: refused ${which} for ${target.toolName} (${why})`);
+          renderApproveAll();
+          return showAlert(context);
+        }
+
+        const { queue, req } = resolve(state.approveQueue, d.id);
+        if (!req) { renderApproveAll(); return showAlert(context); }
+        state.approveQueue = queue;
+        req.ticket.respond(body);
+        // Remember the deny BEFORE the retry arrives (~1.8s on-device), so the retry is
+        // already blocked by the time it paints.
+        if (which === "deny") state.denies = rememberDeny(state.denies, req, Date.now());
+        log(`approve: ${which} ${req.toolName}${which === "always" ? ` as ${shownRule.get(context)}` : ""}`);
+        state.lastHeadChangeAt = Date.now();
+        renderApproveAll();
+      } catch (e) {
+        log("approve press failed:", e?.stack ?? String(e));
+        showAlert(context);
+      }
+      return;
+    }
   }
 }
 
@@ -1290,9 +1660,36 @@ if (process.argv.includes("--selftest")) {
     await pollUsageMeter(["5h", "today", "month", "7day"]);
     log("selftest usage-meter:", JSON.stringify(state.usageMeter));
     log("selftest per-model 7d:", JSON.stringify(state.usageMeterModels));
+    // End-to-end hook check on an ephemeral port: this is the only automated
+    // coverage of the intake path, since plugin.js has no unit-test harness.
+    const secret = randomBytes(24).toString("base64url");
+    let got = null;
+    const srv = await startHookServer({
+      port: 0, secret, log, onRequest: (payload, ticket) => { got = payload; ticket.respond(decisionBody("allow", {})); },
+    });
+    const res = await fetch(`http://127.0.0.1:${srv.boundPort}/permission/${secret}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hook_event_name: "PermissionRequest", tool_name: "Bash", tool_input: { command: "npm test" } }),
+    });
+    const body = await res.json();
+    log("selftest hook:", res.status, "payload tool:", got?.tool_name,
+        "decision:", body?.hookSpecificOutput?.decision?.behavior);
+    log("selftest approver config: holdS=", HOLD_S_DEFAULT, "portDefault=", PORT_DEFAULT, "queueMax=", QUEUE_MAX);
+    await srv.close();
+    if (res.status !== 200 || got?.tool_name !== "Bash" || body?.hookSpecificOutput?.decision?.behavior !== "allow") {
+      log("selftest hook FAILED");
+      process.exit(1);
+    }
     process.exit(0);
-  })();
+  })().catch((e) => { log("selftest crashed:", e?.stack ?? String(e)); process.exit(1); });
 } else {
+  // A throw in one key's path must not take the others with it. Scoped to the plugin
+  // branch on purpose: at module scope these handlers also cover the selftest IIFE,
+  // which has no .catch(), so a selftest crash would exit 0 and CI would go green on a
+  // broken build. (Measured.)
+  process.on("uncaughtException", (e) => log("uncaughtException:", e?.stack ?? String(e)));
+  process.on("unhandledRejection", (e) => log("unhandledRejection:", e?.stack ?? String(e)));
+
   const port = argOf("-port");
   const pluginUUID = argOf("-pluginUUID");
   const registerEvent = argOf("-registerEvent");
@@ -1300,6 +1697,7 @@ if (process.argv.includes("--selftest")) {
 
   ws = new WebSocket(`ws://127.0.0.1:${port}`);
   ws.on("open", () => {
+    state.pluginUUID = pluginUUID;
     send({ event: registerEvent, uuid: pluginUUID });
     log("registered with Stream Deck");
     send({ event: "getGlobalSettings", context: pluginUUID });
@@ -1327,20 +1725,41 @@ if (process.argv.includes("--selftest")) {
       render(context, kindOf(action));
       if (kindOf(action) === "usage-meter" || GAUGE_WINDOW[kindOf(action)]) pollUsageMeter();
     } else if (event === "willDisappear") {
+      const wasApproveKey = APPROVE_KINDS.includes(views.get(context)?.kind);
       views.delete(context);
       cycle.delete(context);
       focusIdx.delete(context);
       usageView.delete(context);
       modelIdx.delete(context);
+      // Deferred by a second: Stream Deck emits every willDisappear for the outgoing
+      // page BEFORE any willAppear for the incoming one, so an immediate flush would
+      // destroy a live queue when an identical key reappears milliseconds later. Gated
+      // on the DEPARTING key actually being an Approve kind - hasApproveKey()/
+      // approveQueue can only ever be affected by one of those, so a page switch on a
+      // large deck must not queue one of these timers per key on the page.
+      if (wasApproveKey) {
+        setTimeout(() => {
+          if (!hasApproveKey() && state.approveQueue.length) {
+            answerAndDrop(state.approveQueue.map((r) => r.id), "no Approve key visible");
+          }
+        }, 1000);
+      }
     } else if (event === "didReceiveSettings" && action) {
       const v = views.get(context);
       if (v) { v.settings = msg.payload?.settings ?? {}; render(context, v.kind); if (v.kind === "usage-meter" || GAUGE_WINDOW[v.kind]) pollUsageMeter(); }
     } else if (event === "didReceiveGlobalSettings") {
-      state.rates = msg.payload?.settings?.rates ?? {};
+      state.globalSettings = msg.payload?.settings ?? {};
+      state.rates = state.globalSettings.rates ?? {};
       pollUsageMeter();
+      ensureHookServer();
     } else if (event === "sendToPlugin" && action) {
       if (msg.payload?.cmd === "getModels") {
         send({ event: "sendToPropertyInspector", context, payload: { models: (state.usage?.models ?? []).map((m) => m.name) } });
+      }
+      if (msg.payload?.cmd === "getInstall") {
+        send({ event: "sendToPropertyInspector", context, payload: {
+          install: { port: state.hookPort, holdS: HOLD_MS() / 1000, snippet: installSnippet(), error: state.hookErr },
+        } });
       }
     } else if (event === "keyDown" && action) {
       onKeyDown(context, kindOf(action));
@@ -1374,6 +1793,19 @@ if (process.argv.includes("--selftest")) {
     const freshBlocked = blockedSessions(state.sessions, Date.now(), state.activity)
       .some((b) => !b.statusUpdatedAt || Date.now() - b.statusUpdatedAt < PULSE_MS);
     if (freshBlocked) kinds.push("approver-status", "approver-waiting");
+    // With a 20s hold, PULSE_MS (120s) never bounds anything, so a non-empty queue
+    // is the right gate. Without this the keys would only repaint at 5s/30s and the
+    // breath would be erratic frames instead of a pulse.
+    if (state.approveQueue.length) {
+      // Expire here as well as in pollSessions: this 600ms ticker, not the 5s poll, is
+      // what actually bounds how late our answer can land - up to HOLD_MS + 600ms after
+      // receivedAt. The snippet's declared timeout is padded past HOLD_MS (see
+      // TIMEOUT_PAD_S/installSnippet) specifically so that stays inside Claude Code's own
+      // deadline instead of losing the race against it.
+      const dead = expiredIds(state.approveQueue, Date.now(), HOLD_MS());
+      if (dead.length) answerAndDrop(dead, "hold expired");
+      if (state.approveQueue.length) kinds.push(...APPROVE_KINDS);
+    }
     if (kinds.length && [...views.values()].some((v) => kinds.includes(v.kind))) renderAll(kinds);
     // Safety net: a reset time has passed but we still show pre-reset data (missed timer / resume from sleep)
     const expired = [state.usage?.fiveHour, state.usage?.weekly]
@@ -1381,5 +1813,9 @@ if (process.argv.includes("--selftest")) {
     if (expired && !state.usageErr && Date.now() - lastUsageAttempt > 30_000) pollUsage();
   }, 600);
   // Keep countdowns ("1h 5m left") fresh between polls
-  setInterval(() => renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate", "approver-status", "approver-waiting", "focus-session"]), 30_000);
+  setInterval(() => {
+    renderAll(["usage-session", "usage-weekly", "usage-model", "burn-rate", "approver-status", "approver-waiting", "focus-session", ...APPROVE_KINDS]);
+    // Self-heal a failed bind: nothing else retries after the initial attempts.
+    if (state.hookErr) ensureHookServer();
+  }, 30_000);
 }
