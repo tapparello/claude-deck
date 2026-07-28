@@ -3715,7 +3715,7 @@ var import_websocket_server = __toESM(require_websocket_server(), 1);
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
-import path2 from "node:path";
+import path3 from "node:path";
 import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -3788,10 +3788,10 @@ function classifyCustomCommand(cmd, { home = "", exists = () => false } = {}) {
   const raw = String(cmd ?? "").trim();
   if (!raw) return null;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return { mode: "open", arg: raw };
-  let path3 = raw;
-  if (raw === "~") path3 = home;
-  else if (raw.startsWith("~/")) path3 = home + raw.slice(1);
-  if (exists(path3)) return { mode: "open", arg: path3 };
+  let path4 = raw;
+  if (raw === "~") path4 = home;
+  else if (raw.startsWith("~/")) path4 = home + raw.slice(1);
+  if (exists(path4)) return { mode: "open", arg: path4 };
   return { mode: "app", arg: raw };
 }
 function parseKeychainToken(raw) {
@@ -4736,16 +4736,264 @@ function startHookServer({ port, secret, onRequest, onDrop, log: log2 = () => {
   });
 }
 
+// src/view.js
+import path2 from "node:path";
+var PULSE_MS = 12e4;
+function fmtReset(iso) {
+  if (!iso) return "";
+  const ms = new Date(iso).getTime() - Date.now();
+  if (!isFinite(ms) || ms <= 0) return "resetting\u2026";
+  const h = Math.floor(ms / 36e5), m = Math.round(ms % 36e5 / 6e4);
+  if (h >= 48) return `${Math.round(h / 24)}d left`;
+  return h > 0 ? `${h}h ${m}m left` : `${m}m left`;
+}
+function fmtAgo(ms) {
+  const h = Math.floor(ms / 36e5), m = Math.floor(ms % 36e5 / 6e4);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+var GAUGE_WINDOW = { "usage-session": "5h", "usage-weekly": "7day", "usage-model": "7day" };
+function gaugeMode(state2, kind, now) {
+  const win = GAUGE_WINDOW[kind];
+  const hasLocal = !!(win && state2.usageMeter?.[win]);
+  return gaugeSource({ usage: state2.usage, usageErr: state2.usageErr, usageAt: state2.usageAt, now }, hasLocal);
+}
+function localGauge(header2, agg, budget, view = "cost", animPhase2 = null) {
+  if (!agg) return usageMeterKey(header2, "--", "no data yet", true);
+  if (view === "tokens") {
+    return usageMeterKey(header2, fmtNum(agg.tokens), `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out`, false);
+  }
+  const pct = budgetPct(agg.cost, budget);
+  if (pct == null) return usageMeterKey(header2, "$" + agg.cost.toFixed(2), "est", true);
+  const over = pct > 100 ? " \xB7 " + Math.round(pct) + "%" : "";
+  return gaugeKey(header2, pct, `$${Math.round(agg.cost)} / $${Math.round(Number(budget))}${over}`, pct >= 90 ? animPhase2 : null);
+}
+function modelList(state2, mode) {
+  if (mode === "local") return state2.usageMeterModels ?? [];
+  return state2.usage?.models ?? [];
+}
+function modelListIndex(pressed, list, want) {
+  if (pressed != null && list.length) return pressed % list.length;
+  if (!want || !list.length) return 0;
+  const w = String(want).toLowerCase();
+  const byName = list.findIndex((e) => String(e.name ?? e.model).toLowerCase() === w);
+  if (byName >= 0) return byName;
+  const fam = familyOf(w) ?? w;
+  const byFam = list.findIndex((e) => String(e.model ?? e.name).toLowerCase() === fam);
+  return byFam >= 0 ? byFam : 0;
+}
+function sessionEta(state2, now) {
+  if (gaugeMode(state2, "usage-session", now) !== "subscription") {
+    const b5 = state2.usageMeter?.["5h"];
+    return b5 ? "$" + b5.cost.toFixed(2) + " last 5h" : "no cap";
+  }
+  const h = state2.pctHistory ?? [];
+  if (h.length < 2) return "measuring\u2026";
+  const latest = h[h.length - 1];
+  const past = h.find((s) => latest.t - s.t >= 10 * 6e4) ?? h[0];
+  const dt = latest.t - past.t;
+  if (dt < 4 * 6e4) return "measuring\u2026";
+  const slope = (latest.pct - past.pct) / dt;
+  if (slope <= 5e-8) return "steady";
+  const msLeft = (100 - latest.pct) / slope;
+  const resetMs = state2.usage?.fiveHour?.resetsAt ? new Date(state2.usage.fiveHour.resetsAt).getTime() - latest.t : Infinity;
+  if (msLeft >= resetMs) return "resets first";
+  const hh = Math.floor(msLeft / 36e5), mm = Math.round(msLeft % 36e5 / 6e4);
+  return hh > 0 ? `cap in ~${hh}h ${mm}m` : `cap in ~${mm}m`;
+}
+function viewFor(kind, env) {
+  const {
+    state: state2,
+    settings = {},
+    now,
+    animPhase: animPhase2 = null,
+    usageViewMode = "cost",
+    pressedModelIdx = null,
+    cycleIdx = -1,
+    focus = null,
+    autoSlot: autoSlot2 = 0,
+    authFlagged: authFlagged2 = false,
+    defaultCodeDir = ""
+  } = env;
+  const img = (image) => ({ image });
+  switch (kind) {
+    case "usage-session": {
+      const mode = gaugeMode(state2, "usage-session", now);
+      if (mode === "local") return img(localGauge("LAST 5H", state2.usageMeter?.["5h"], settings.budget, usageViewMode, animPhase2));
+      if (mode !== "subscription") return img(gaugeKey("SESSION 5H", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
+      const b = state2.usage?.fiveHour;
+      return img(gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt) : "no data", b?.pct >= 90 ? animPhase2 : null));
+    }
+    case "usage-weekly": {
+      const mode = gaugeMode(state2, "usage-weekly", now);
+      if (mode === "local") return img(localGauge("LAST 7D", state2.usageMeter?.["7day"], settings.budget, usageViewMode, animPhase2));
+      if (mode !== "subscription") return img(gaugeKey("WEEKLY", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
+      const b = state2.usage?.weekly;
+      const u = state2.usage;
+      const sub = u?.scopedPct != null && u.scopedName ? `${u.scopedName} ${Math.round(u.scopedPct)}%` : u?.weeklyOpus?.pct != null ? `opus ${Math.round(u.weeklyOpus.pct)}%` : b ? fmtReset(b.resetsAt) : "no data";
+      return img(gaugeKey("WEEKLY", b?.pct ?? null, sub, b?.pct >= 90 ? animPhase2 : null));
+    }
+    case "usage-model": {
+      const mmode = gaugeMode(state2, "usage-model", now);
+      if (mmode !== "subscription" && mmode !== "local") {
+        return img(gaugeKey("MODEL 7D", null, mmode === "throttled" ? "throttled" : mmode === "error" ? "sign in?" : "no data"));
+      }
+      const list = modelList(state2, mmode);
+      const want = settings.model;
+      const i = modelListIndex(pressedModelIdx, list, want);
+      const pick = list[i];
+      const head_ = ((pick?.name ?? pick?.model ?? want ?? "MODEL") + "").toUpperCase().slice(0, 8) + " 7D";
+      const more = list.length > 1 ? ` ${i + 1}/${list.length}` : "";
+      if (!pick) return img(usageMeterKey(head_, "--", mmode === "local" ? "no data yet" : "no data", true));
+      if (mmode === "local") {
+        return img(localGauge(head_ + more, pick, settings.budget, usageViewMode, animPhase2));
+      }
+      return img(gaugeKey(head_ + more, pick.pct ?? null, pick.resetsAt ? fmtReset(pick.resetsAt) : "no data", pick.pct >= 90 ? animPhase2 : null));
+    }
+    case "burn-rate":
+      return img(burnKey(state2.burn?.tokensHour ?? null, sessionEta(state2, now)));
+    case "project": {
+      const label = settings.label || (settings.path ? path2.basename(settings.path) : "");
+      return img(labelKey("PROJECT", label || "configure", settings.path ? "" : "set folder in settings"));
+    }
+    case "focus-session": {
+      const blocked = blockedSessions(state2.sessions, now, state2.activity);
+      const pool = blocked.length ? blocked : state2.sessions;
+      const poolSig = pool.map((x) => x.pid).join(",");
+      const s = pool.length ? focus && focus.sig === poolSig ? pool[focus.i % pool.length] : pool[0] : null;
+      if (blocked.length) {
+        const b = s ?? blocked[0];
+        return img(labelKey("FOCUS", b.name ?? "session", String(b.waitingFor ?? "needs you"), C.warn, true));
+      }
+      const anyWorking = state2.sessions.some((x) => sessionState(x, now, state2.activity.get(x.sessionId) ?? null) === "working");
+      return img(labelKey("FOCUS", s ? s.name : `${state2.sessions.length} sessions`, s ? sessionState(s, now, state2.activity.get(s.sessionId) ?? null) : "press to cycle", anyWorking ? C.info : null));
+    }
+    case "quick-prompt":
+      return img(labelKey("PROMPT", settings.label || "configure", settings.prompt ? "" : "set prompt in settings"));
+    case "custom":
+      return img(labelKey("CLAUDE", settings.label || "custom", settings.command ? "" : "set command in settings"));
+    // These four used to have no case at all, so they never called setImage and kept
+    // their manifest icon forever — three flat pieces of icon art next to seventeen
+    // data panels, which is what ran two visual languages on one deck. Rendering them
+    // costs the ability to set a custom image on these keys from the Stream Deck app.
+    case "launch":
+      return img(actionKey("launch", "launch", "Desktop", "claude app"));
+    case "quick-chat":
+      return img(actionKey("chat", "chat", "New chat", "claude desktop"));
+    case "open-web":
+      return img(actionKey("web", "claude.ai", "Open", "in browser"));
+    case "claude-code":
+      return img(actionKey("code", "code", "Terminal", "~/" + path2.basename(defaultCodeDir)));
+    case "sessions": {
+      const n = state2.sessions.length;
+      if (cycleIdx >= 0 && state2.sessions[cycleIdx]) {
+        const s = state2.sessions[cycleIdx];
+        const st = sessionState(s, now, state2.activity.get(s.sessionId) ?? null);
+        const stLabel = { "needs-approval": "needs you", "input-needed": "input needed", working: "working", finished: "done", idle: "idle" }[st] ?? st;
+        const stColor = st === "needs-approval" ? C.warn : st === "input-needed" ? C.ask : st === "working" ? C.info : C.dim;
+        return img(linesKey(`${cycleIdx + 1}/${n}`, [
+          { text: (s.name ?? "session").slice(0, 11), big: false, color: C.text },
+          { text: stLabel, color: stColor },
+          { text: fmtAgo(now - (s.startedAt ?? now)) + " old", color: C.dim }
+        ]));
+      }
+      const blocked = blockedSessions(state2.sessions, now, state2.activity).length;
+      const busy = state2.sessions.filter((s) => sessionState(s, now, state2.activity.get(s.sessionId) ?? null) === "working").length;
+      const sub = blocked > 0 ? `${blocked} needs you` : busy > 0 ? `${busy} working` : n > 0 ? "all idle" : "none running";
+      const subCol = blocked > 0 ? C.warn : busy > 0 ? C.info : C.dim;
+      return img(bigCountKey("CLAUDE CODE", n, sub, subCol, busy > 0 ? animPhase2 : null, blocked > 0 ? C.warn : busy > 0 ? C.info : null, blocked > 0));
+    }
+    case "today": {
+      const t = state2.today;
+      return img(linesKey("TODAY", [
+        { text: `${t?.chats ?? "--"} chats`, color: C.text },
+        { text: `${fmtNum(t?.msgs)} msgs`, color: C.text },
+        { text: `${fmtNum(t?.tokens)} tok`, color: C.text }
+      ]));
+    }
+    case "usage-meter": {
+      const win = settings.window ?? "today";
+      const header2 = { today: "TODAY", month: "THIS MONTH", "7day": "7-DAY" }[win] ?? "TODAY";
+      const agg = state2.usageMeter?.[win];
+      const suffix = settings.label ? " \xB7 " + settings.label : "";
+      if (!agg) return img(usageMeterKey(header2, "--", "no data", usageViewMode === "cost"));
+      if (usageViewMode === "cost") return img(usageMeterKey(header2, "$" + agg.cost.toFixed(2), "cost" + suffix, true));
+      return img(usageMeterKey(header2, fmtNum(agg.tokens), agg.in != null ? `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out` : "tokens" + suffix, false));
+    }
+    case "approver-status": {
+      const resolved = resolveStatusKey(state2.sessions, settings.project ?? "", autoSlot2, now, state2.activity);
+      const cycling = !!settings.cycle && cycleIdx >= 0;
+      const entry = statusEntry(resolved, cycling ? cycleIdx : null);
+      const explicit = !!(settings.project && settings.project.trim());
+      const name = settings.label || entry.name || (settings.project ?? "");
+      let detail = "";
+      if (cycling && resolved.count > 1) {
+        const parent = entry.cwd ? path2.basename(path2.dirname(entry.cwd)) : "";
+        detail = `${cycleIdx + 1}/${resolved.count}${parent ? " \xB7 " + parent : ""}`;
+      } else if (entry.waitingFor) {
+        const waited = entry.waitingSince ? fmtShort(now - entry.waitingSince) : "";
+        detail = shortWait(entry.waitingFor) + (waited ? " \xB7 " + waited : "");
+      } else if (entry.state === "finished") {
+        detail = "just now";
+      } else if (entry.state === "idle" && entry.statusAge != null) {
+        detail = fmtAgo(entry.statusAge) + " idle";
+      }
+      const blockedNow = entry.state === "needs-approval" || entry.state === "input-needed";
+      const fresh = blockedNow && (!entry.waitingSince || now - entry.waitingSince < PULSE_MS);
+      return img(statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where, fresh ? animPhase2 : null));
+    }
+    case "approver-waiting": {
+      const blocked = blockedSessions(state2.sessions, now, state2.activity);
+      if (!blocked.length) {
+        const n = state2.sessions.length;
+        return img(statusKey("WAITING", "quiet", 1, n ? `${n} session${n > 1 ? "s" : ""} ok` : "no sessions"));
+      }
+      const i = cycleIdx >= 0 ? cycleIdx % blocked.length : 0;
+      const b = blocked[i];
+      const st = sessionState(b, now, state2.activity.get(b.sessionId) ?? null);
+      const since = b.status === "waiting" && b.statusUpdatedAt ? b.statusUpdatedAt : null;
+      const waited = since ? fmtShort(now - since) : "";
+      const why = shortWait(b.waitingFor ?? "") || "needs you";
+      const fresh = !since || now - since < PULSE_MS;
+      return img(statusKey(path2.basename(b.cwd ?? "") || "claude", st, blocked.length, why + (waited ? " \xB7 " + waited : ""), sessionWhere(b), fresh ? animPhase2 : null));
+    }
+    case "approve-allow":
+    case "approve-always":
+    case "approve-deny": {
+      const req = head(state2.approveQueue);
+      const fresh = req && now - req.receivedAt < PULSE_MS;
+      const err = state2.hookErr ?? (!state2.approveQueue.length && authFlagged2 ? "auth?" : null);
+      return {
+        image: approveKey(kind, req, {
+          sessionOnly: !!settings.sessionOnly,
+          label: settings.label,
+          err,
+          depth: state2.approveQueue.length,
+          phase: fresh ? animPhase2 : null,
+          denied: kind === "approve-always" && req ? denyBlock(state2.denies, req, now) : null
+        }),
+        // What this key is PAINTING. The press guard compares against it, so a press
+        // can never answer a request the user did not see. Returned rather than
+        // written here so this stays a pure function; the caller records it.
+        painted: {
+          reqId: req?.id ?? null,
+          rule: kind === "approve-always" && req ? alwaysRule(req, !!settings.sessionOnly) : null
+        }
+      };
+    }
+  }
+  return {};
+}
+
 // src/plugin.js
 var IS_MAC = process.platform === "darwin";
-var PLUGIN_DIR = path2.dirname(path2.dirname(fileURLToPath(import.meta.url)));
-var CLAUDE_DIR = path2.join(os.homedir(), ".claude");
-var CREDS_FILE = path2.join(CLAUDE_DIR, ".credentials.json");
-var SESSIONS_DIR = path2.join(CLAUDE_DIR, "sessions");
-var PROJECTS_DIR = path2.join(CLAUDE_DIR, "projects");
-var STATS_CACHE = path2.join(CLAUDE_DIR, "stats-cache.json");
+var PLUGIN_DIR = path3.dirname(path3.dirname(fileURLToPath(import.meta.url)));
+var CLAUDE_DIR = path3.join(os.homedir(), ".claude");
+var CREDS_FILE = path3.join(CLAUDE_DIR, ".credentials.json");
+var SESSIONS_DIR = path3.join(CLAUDE_DIR, "sessions");
+var PROJECTS_DIR = path3.join(CLAUDE_DIR, "projects");
+var STATS_CACHE = path3.join(CLAUDE_DIR, "stats-cache.json");
 var USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
-var githubDir = path2.join(os.homedir(), "Documents", "GitHub");
+var githubDir = path3.join(os.homedir(), "Documents", "GitHub");
 var DEFAULT_CODE_DIR = fs.existsSync(githubDir) ? githubDir : os.homedir();
 var desktopAppId = "shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude";
 if (!IS_MAC) {
@@ -4762,7 +5010,7 @@ if (!IS_MAC) {
     }
   );
 }
-var LOG_FILE = path2.join(process.cwd(), "claude-deck.log");
+var LOG_FILE = path3.join(process.cwd(), "claude-deck.log");
 var LOG_OLD_FILE = LOG_FILE + ".old";
 var LOG_MAX_BYTES = 1e6;
 var logBytes = 0;
@@ -4786,29 +5034,6 @@ function log(...args) {
     logBytes += bytes;
   } catch {
   }
-}
-function localGauge(header2, agg, budget, view = "cost") {
-  if (!agg) return usageMeterKey(header2, "--", "no data yet", true);
-  if (view === "tokens") {
-    return usageMeterKey(header2, fmtNum(agg.tokens), `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out`, false);
-  }
-  const pct = budgetPct(agg.cost, budget);
-  if (pct == null) return usageMeterKey(header2, "$" + agg.cost.toFixed(2), "est", true);
-  const over = pct > 100 ? " \xB7 " + Math.round(pct) + "%" : "";
-  return gaugeKey(header2, pct, `$${Math.round(agg.cost)} / $${Math.round(Number(budget))}${over}`, pct >= 90 ? animPhase : null);
-}
-function fmtReset(iso) {
-  if (!iso) return "";
-  const ms = new Date(iso).getTime() - Date.now();
-  if (!isFinite(ms) || ms <= 0) return "resetting\u2026";
-  const h = Math.floor(ms / 36e5), m = Math.round(ms % 36e5 / 6e4);
-  if (h >= 48) return `${Math.round(h / 24)}d left`;
-  return h > 0 ? `${h}h ${m}m left` : `${m}m left`;
-}
-function fmtAgo(ts) {
-  const ms = Date.now() - ts;
-  const h = Math.floor(ms / 36e5), m = Math.floor(ms % 36e5 / 6e4);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 var state = {
   activity: /* @__PURE__ */ new Map(),
@@ -4847,7 +5072,7 @@ function pickBucket(o) {
 var USAGE_DELAY_BASE = 12e4;
 var usageDelay = USAGE_DELAY_BASE;
 var lastUsageAttempt = 0;
-var CACHE_FILE = path2.join(PLUGIN_DIR, "usage-cache.json");
+var CACHE_FILE = path3.join(PLUGIN_DIR, "usage-cache.json");
 try {
   const c = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
   if (Date.now() - c.at < 30 * 6e4) {
@@ -4929,27 +5154,6 @@ function scheduleResetPoll() {
   clearTimeout(resetTimer);
   resetTimer = setTimeout(pollUsage, Math.min(...deltas) + 8e3);
 }
-function modelList(mode) {
-  if (mode === "local") return state.usageMeterModels ?? [];
-  return state.usage?.models ?? [];
-}
-function modelListIndex(context, list, want, mode) {
-  const pressed = modelIdx.get(context);
-  if (pressed != null && list.length) return pressed % list.length;
-  if (!want || !list.length) return 0;
-  const w = String(want).toLowerCase();
-  const byName = list.findIndex((e) => String(e.name ?? e.model).toLowerCase() === w);
-  if (byName >= 0) return byName;
-  const fam = familyOf(w) ?? w;
-  const byFam = list.findIndex((e) => String(e.model ?? e.name).toLowerCase() === fam);
-  return byFam >= 0 ? byFam : 0;
-}
-var GAUGE_WINDOW = { "usage-session": "5h", "usage-weekly": "7day", "usage-model": "7day" };
-function gaugeMode(kind) {
-  const win = GAUGE_WINDOW[kind];
-  const hasLocal = !!(win && state.usageMeter?.[win]);
-  return gaugeSource({ usage: state.usage, usageErr: state.usageErr, usageAt: state.usageAt, now: Date.now() }, hasLocal);
-}
 var transcriptDirFor = /* @__PURE__ */ new Map();
 async function transcriptMtime(s) {
   if (!s?.sessionId) return null;
@@ -4963,7 +5167,7 @@ async function transcriptMtime(s) {
     }
   };
   if (known) {
-    const mt = await tryPath(path2.join(known, file));
+    const mt = await tryPath(path3.join(known, file));
     if (mt != null) return mt;
     transcriptDirFor.delete(s.sessionId);
   }
@@ -4971,7 +5175,7 @@ async function transcriptMtime(s) {
   if (hint) {
     const mt = await tryPath(hint);
     if (mt != null) {
-      transcriptDirFor.set(s.sessionId, path2.dirname(hint));
+      transcriptDirFor.set(s.sessionId, path3.dirname(hint));
       return mt;
     }
   }
@@ -4983,8 +5187,8 @@ async function transcriptMtime(s) {
   }
   for (const d of dirs) {
     if (!d.isDirectory()) continue;
-    const dir = path2.join(PROJECTS_DIR, d.name);
-    const mt = await tryPath(path2.join(dir, file));
+    const dir = path3.join(PROJECTS_DIR, d.name);
+    const mt = await tryPath(path3.join(dir, file));
     if (mt != null) {
       transcriptDirFor.set(s.sessionId, dir);
       return mt;
@@ -5016,7 +5220,7 @@ async function dropRecycledPids(sessions) {
         const recycled = pidLooksRecycled(s, starts.get(s.pid) ?? null);
         pidVerdict.set(verdictKey(s), !recycled);
         if (recycled) {
-          log(`sessions: ignoring ${path2.basename(s.cwd ?? "")} \u2014 pid ${s.pid} belongs to a process younger than the session (stale session file)`);
+          log(`sessions: ignoring ${path3.basename(s.cwd ?? "")} \u2014 pid ${s.pid} belongs to a process younger than the session (stale session file)`);
         }
       }
     }
@@ -5032,7 +5236,7 @@ async function pollSessions() {
     for (const f of files) {
       if (!f.endsWith(".json")) continue;
       try {
-        const s = JSON.parse(await fsp.readFile(path2.join(SESSIONS_DIR, f), "utf8"));
+        const s = JSON.parse(await fsp.readFile(path3.join(SESSIONS_DIR, f), "utf8"));
         if (s.pid && pidAlive(s.pid)) out.push(s);
       } catch {
       }
@@ -5103,7 +5307,7 @@ function answerAndDrop(ids, why) {
 }
 function onHookRequest(payload, ticket) {
   const toolName = String(payload?.tool_name ?? "");
-  log(`approve: ${toolName} from ${path2.basename(String(payload?.cwd ?? ""))}`);
+  log(`approve: ${toolName} from ${path3.basename(String(payload?.cwd ?? ""))}`);
   if (payload?.hook_event_name !== "PermissionRequest" || !toolName) return void ticket.respond(null);
   if (!hasApproveKey()) return void ticket.respond(null);
   const req = {
@@ -5217,7 +5421,7 @@ async function walkTranscripts(dir, cutoffMs) {
       return;
     }
     for (const e of entries) {
-      const p = path2.join(d, e.name);
+      const p = path3.join(d, e.name);
       if (e.isDirectory()) {
         await rec(p);
         continue;
@@ -5262,7 +5466,7 @@ async function pollToday() {
     for (const st of files) {
       const fp = st.path;
       seen.add(fp);
-      if (!fp.split(path2.sep).includes("subagents")) chats.add(fp);
+      if (!fp.split(path3.sep).includes("subagents")) chats.add(fp);
       let rec = todayTracker.get(fp);
       if (!rec || rec.counts.day !== day || st.size < rec.offset) {
         rec = { offset: 0, rest: "", counts: newDayCounts(day) };
@@ -5364,8 +5568,8 @@ async function pollUsageMeter(forceWins) {
   if (forceWins) for (const w of forceWins) wins.add(w);
   else for (const v of views.values()) {
     if (v.kind === "usage-meter") wins.add(v.settings?.window ?? "today");
-    else if (GAUGE_WINDOW[v.kind] && gaugeMode(v.kind) === "local") wins.add(GAUGE_WINDOW[v.kind]);
-    else if (v.kind === "burn-rate" && gaugeMode("usage-session") === "local") wins.add("5h");
+    else if (GAUGE_WINDOW[v.kind] && gaugeMode(state, v.kind, Date.now()) === "local") wins.add(GAUGE_WINDOW[v.kind]);
+    else if (v.kind === "burn-rate" && gaugeMode(state, "usage-session", Date.now()) === "local") wins.add("5h");
   }
   if (!wins.size) return;
   const now = Date.now();
@@ -5402,25 +5606,6 @@ async function pollUsageMeter(forceWins) {
     log("usage-meter poll failed:", String(e));
   }
 }
-function sessionEta() {
-  if (gaugeMode("usage-session") !== "subscription") {
-    const b5 = state.usageMeter?.["5h"];
-    return b5 ? "$" + b5.cost.toFixed(2) + " last 5h" : "no cap";
-  }
-  const h = state.pctHistory;
-  if (h.length < 2) return "measuring\u2026";
-  const latest = h[h.length - 1];
-  const past = h.find((s) => latest.t - s.t >= 10 * 6e4) ?? h[0];
-  const dt = latest.t - past.t;
-  if (dt < 4 * 6e4) return "measuring\u2026";
-  const slope = (latest.pct - past.pct) / dt;
-  if (slope <= 5e-8) return "steady";
-  const msLeft = (100 - latest.pct) / slope;
-  const resetMs = state.usage?.fiveHour?.resetsAt ? new Date(state.usage.fiveHour.resetsAt).getTime() - latest.t : Infinity;
-  if (msLeft >= resetMs) return "resets first";
-  const hh = Math.floor(msLeft / 36e5), mm = Math.round(msLeft % 36e5 / 6e4);
-  return hh > 0 ? `cap in ~${hh}h ${mm}m` : `cap in ~${mm}m`;
-}
 function argOf(name) {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : void 0;
@@ -5443,178 +5628,26 @@ var setTitle = (context) => send({ event: "setTitle", context, payload: { title:
 var showAlert = (context) => send({ event: "showAlert", context });
 var kindOf = (action) => action.replace("dev.tapparello.claude-deck.", "");
 function render(context, kind) {
-  switch (kind) {
-    case "usage-session": {
-      const mode = gaugeMode("usage-session");
-      if (mode === "local") return setImage(context, localGauge("LAST 5H", state.usageMeter?.["5h"], views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
-      if (mode !== "subscription") return setImage(context, gaugeKey("SESSION 5H", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
-      const b = state.usage?.fiveHour;
-      return setImage(context, gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt) : "no data", b?.pct >= 90 ? animPhase : null));
-    }
-    case "usage-weekly": {
-      const mode = gaugeMode("usage-weekly");
-      if (mode === "local") return setImage(context, localGauge("LAST 7D", state.usageMeter?.["7day"], views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
-      if (mode !== "subscription") return setImage(context, gaugeKey("WEEKLY", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
-      const b = state.usage?.weekly;
-      const u = state.usage;
-      const sub = u?.scopedPct != null && u.scopedName ? `${u.scopedName} ${Math.round(u.scopedPct)}%` : u?.weeklyOpus?.pct != null ? `opus ${Math.round(u.weeklyOpus.pct)}%` : b ? fmtReset(b.resetsAt) : "no data";
-      return setImage(context, gaugeKey("WEEKLY", b?.pct ?? null, sub, b?.pct >= 90 ? animPhase : null));
-    }
-    case "usage-model": {
-      const mmode = gaugeMode("usage-model");
-      if (mmode !== "subscription" && mmode !== "local") {
-        return setImage(context, gaugeKey("MODEL 7D", null, mmode === "throttled" ? "throttled" : mmode === "error" ? "sign in?" : "no data"));
-      }
-      const list = modelList(mmode);
-      const want = views.get(context)?.settings?.model;
-      const i = modelListIndex(context, list, want, mmode);
-      const pick = list[i];
-      const head2 = ((pick?.name ?? pick?.model ?? want ?? "MODEL") + "").toUpperCase().slice(0, 8) + " 7D";
-      const more = list.length > 1 ? ` ${i + 1}/${list.length}` : "";
-      if (!pick) return setImage(context, usageMeterKey(head2, "--", mmode === "local" ? "no data yet" : "no data", true));
-      if (mmode === "local") {
-        return setImage(context, localGauge(head2 + more, pick, views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
-      }
-      return setImage(context, gaugeKey(head2 + more, pick.pct ?? null, pick.resetsAt ? fmtReset(pick.resetsAt) : "no data", pick.pct >= 90 ? animPhase : null));
-    }
-    case "burn-rate":
-      return setImage(context, burnKey(state.burn?.tokensHour ?? null, sessionEta()));
-    case "project": {
-      const s = views.get(context)?.settings ?? {};
-      const label = s.label || (s.path ? path2.basename(s.path) : "");
-      return setImage(context, labelKey("PROJECT", label || "configure", s.path ? "" : "set folder in settings"));
-    }
-    case "focus-session": {
-      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
-      const pool = blocked.length ? blocked : state.sessions;
-      const fi = focusIdx.get(context);
-      const poolSig = pool.map((x) => x.pid).join(",");
-      const s = pool.length ? fi && fi.sig === poolSig ? pool[fi.i % pool.length] : pool[0] : null;
-      if (blocked.length) {
-        const b = s ?? blocked[0];
-        return setImage(context, labelKey("FOCUS", b.name ?? "session", String(b.waitingFor ?? "needs you"), C.warn, true));
-      }
-      const anyWorking = state.sessions.some((x) => sessionState(x, Date.now(), state.activity.get(x.sessionId) ?? null) === "working");
-      return setImage(context, labelKey("FOCUS", s ? s.name : `${state.sessions.length} sessions`, s ? sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) : "press to cycle", anyWorking ? C.info : null));
-    }
-    case "quick-prompt": {
-      const s = views.get(context)?.settings ?? {};
-      return setImage(context, labelKey("PROMPT", s.label || "configure", s.prompt ? "" : "set prompt in settings"));
-    }
-    case "custom": {
-      const s = views.get(context)?.settings ?? {};
-      return setImage(context, labelKey("CLAUDE", s.label || "custom", s.command ? "" : "set command in settings"));
-    }
-    // These four used to have no case at all, so they never called setImage and kept
-    // their manifest icon forever — three flat pieces of icon art next to seventeen
-    // data panels, which is what ran two visual languages on one deck. Rendering them
-    // costs the ability to set a custom image on these keys from the Stream Deck app.
-    case "launch":
-      return setImage(context, actionKey("launch", "launch", "Desktop", "claude app"));
-    case "quick-chat":
-      return setImage(context, actionKey("chat", "chat", "New chat", "claude desktop"));
-    case "open-web":
-      return setImage(context, actionKey("web", "claude.ai", "Open", "in browser"));
-    case "claude-code":
-      return setImage(context, actionKey("code", "code", "Terminal", "~/" + path2.basename(DEFAULT_CODE_DIR)));
-    case "sessions": {
-      const cy = cycle.get(context);
-      const n = state.sessions.length;
-      if (cy && cy.idx >= 0 && state.sessions[cy.idx]) {
-        const s = state.sessions[cy.idx];
-        const st = sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null);
-        const stLabel = { "needs-approval": "needs you", "input-needed": "input needed", working: "working", finished: "done", idle: "idle" }[st] ?? st;
-        const stColor = st === "needs-approval" ? C.warn : st === "input-needed" ? C.ask : st === "working" ? C.info : C.dim;
-        return setImage(context, linesKey(`${cy.idx + 1}/${n}`, [
-          { text: (s.name ?? "session").slice(0, 11), big: false, color: C.text },
-          { text: stLabel, color: stColor },
-          { text: fmtAgo(s.startedAt ?? Date.now()) + " old", color: C.dim }
-        ]));
-      }
-      const blocked = blockedSessions(state.sessions, Date.now(), state.activity).length;
-      const busy = state.sessions.filter((s) => sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) === "working").length;
-      const sub = blocked > 0 ? `${blocked} needs you` : busy > 0 ? `${busy} working` : n > 0 ? "all idle" : "none running";
-      const subCol = blocked > 0 ? C.warn : busy > 0 ? C.info : C.dim;
-      return setImage(context, bigCountKey("CLAUDE CODE", n, sub, subCol, busy > 0 ? animPhase : null, blocked > 0 ? C.warn : busy > 0 ? C.info : null, blocked > 0));
-    }
-    case "today": {
-      const t = state.today;
-      return setImage(context, linesKey("TODAY", [
-        { text: `${t?.chats ?? "--"} chats`, color: C.text },
-        { text: `${fmtNum(t?.msgs)} msgs`, color: C.text },
-        { text: `${fmtNum(t?.tokens)} tok`, color: C.text }
-      ]));
-    }
-    case "usage-meter": {
-      const s = views.get(context)?.settings ?? {};
-      const win = s.window ?? "today";
-      const header2 = { today: "TODAY", month: "THIS MONTH", "7day": "7-DAY" }[win] ?? "TODAY";
-      const view = usageView.get(context) ?? "cost";
-      const agg = state.usageMeter?.[win];
-      const suffix = s.label ? " \xB7 " + s.label : "";
-      if (!agg) return setImage(context, usageMeterKey(header2, "--", "no data", view === "cost"));
-      if (view === "cost") return setImage(context, usageMeterKey(header2, "$" + agg.cost.toFixed(2), "cost" + suffix, true));
-      return setImage(context, usageMeterKey(header2, fmtNum(agg.tokens), agg.in != null ? `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out` : "tokens" + suffix, false));
-    }
-    case "approver-status": {
-      const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoSlotFor(context), Date.now(), state.activity);
-      const cy = cycle.get(context);
-      const cycling = !!s.cycle && !!(cy && cy.idx >= 0);
-      const entry = statusEntry(resolved, cycling ? cy.idx : null);
-      const explicit = !!(s.project && s.project.trim());
-      const name = s.label || entry.name || (s.project ?? "");
-      let detail = "";
-      if (cycling && resolved.count > 1) {
-        const parent = entry.cwd ? path2.basename(path2.dirname(entry.cwd)) : "";
-        detail = `${cy.idx + 1}/${resolved.count}${parent ? " \xB7 " + parent : ""}`;
-      } else if (entry.waitingFor) {
-        const waited = entry.waitingSince ? fmtShort(Date.now() - entry.waitingSince) : "";
-        detail = shortWait(entry.waitingFor) + (waited ? " \xB7 " + waited : "");
-      } else if (entry.state === "finished") {
-        detail = "just now";
-      } else if (entry.state === "idle" && entry.statusAge != null) {
-        detail = fmtAgo(Date.now() - entry.statusAge) + " idle";
-      }
-      const blockedNow = entry.state === "needs-approval" || entry.state === "input-needed";
-      const fresh = blockedNow && (!entry.waitingSince || Date.now() - entry.waitingSince < PULSE_MS);
-      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where, fresh ? animPhase : null));
-    }
-    case "approver-waiting": {
-      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
-      if (!blocked.length) {
-        const n = state.sessions.length;
-        return setImage(context, statusKey("WAITING", "quiet", 1, n ? `${n} session${n > 1 ? "s" : ""} ok` : "no sessions"));
-      }
-      const cy = cycle.get(context);
-      const i = cy && cy.idx >= 0 ? cy.idx % blocked.length : 0;
-      const b = blocked[i];
-      const st = sessionState(b, Date.now(), state.activity.get(b.sessionId) ?? null);
-      const since = b.status === "waiting" && b.statusUpdatedAt ? b.statusUpdatedAt : null;
-      const waited = since ? fmtShort(Date.now() - since) : "";
-      const why = shortWait(b.waitingFor ?? "") || "needs you";
-      const fresh = !since || Date.now() - since < PULSE_MS;
-      return setImage(context, statusKey(path2.basename(b.cwd ?? "") || "claude", st, blocked.length, why + (waited ? " \xB7 " + waited : ""), sessionWhere(b), fresh ? animPhase : null));
-    }
-    case "approve-allow":
-    case "approve-always":
-    case "approve-deny": {
-      const s = views.get(context)?.settings ?? {};
-      const req = head(state.approveQueue);
-      shownReq.set(context, req?.id ?? null);
-      shownRule.set(context, kind === "approve-always" && req ? alwaysRule(req, !!s.sessionOnly) : null);
-      const fresh = req && Date.now() - req.receivedAt < PULSE_MS;
-      const err = state.hookErr ?? (!state.approveQueue.length && authFlagged() ? "auth?" : null);
-      return setImage(context, approveKey(kind, req, {
-        sessionOnly: !!s.sessionOnly,
-        label: s.label,
-        err,
-        depth: state.approveQueue.length,
-        phase: fresh ? animPhase : null,
-        denied: kind === "approve-always" && req ? denyBlock(state.denies, req, Date.now()) : null
-      }));
-    }
+  const v = views.get(context);
+  const cy = cycle.get(context);
+  const { image, painted } = viewFor(kind, {
+    state,
+    settings: v?.settings ?? {},
+    now: Date.now(),
+    animPhase,
+    usageViewMode: usageView.get(context) ?? "cost",
+    pressedModelIdx: modelIdx.get(context) ?? null,
+    cycleIdx: cy && cy.idx >= 0 ? cy.idx : -1,
+    focus: focusIdx.get(context) ?? null,
+    autoSlot: kind === "approver-status" ? autoSlotFor(context) : 0,
+    authFlagged: authFlagged(),
+    defaultCodeDir: DEFAULT_CODE_DIR
+  });
+  if (painted) {
+    shownReq.set(context, painted.reqId);
+    shownRule.set(context, painted.rule);
   }
+  if (image != null) setImage(context, image);
 }
 function renderAll(kinds) {
   for (const [context, v] of views) if (kinds.includes(v.kind)) render(context, v.kind);
@@ -5627,7 +5660,6 @@ function sessionByPid(pid) {
   return state.sessions.find((s) => s.pid === pid) ?? null;
 }
 var OSA_TIMEOUT_MS = 8e3;
-var PULSE_MS = 12e4;
 function spawnDetached(cmd, args) {
   return new Promise((resolve2, reject) => {
     const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
@@ -5663,7 +5695,7 @@ function pbcopy(text) {
 }
 function focusTarget(s) {
   const name = String(s.name ?? "").replace(/["'‘’“”]/g, "").slice(0, 40);
-  return (name || path2.basename(s.cwd ?? "")).toLowerCase();
+  return (name || path3.basename(s.cwd ?? "")).toLowerCase();
 }
 var winPlatform = {
   launchDesktop() {
@@ -5842,7 +5874,7 @@ var macPlatform = {
         }).catch(fallback("tty lookup failed"));
       }
       if (strat === "vscode") {
-        const base2 = path2.basename(s.cwd ?? "");
+        const base2 = path3.basename(s.cwd ?? "");
         if (!base2) return activateApp();
         const esc2 = escapeAppleScript(base2);
         return runOsa([
@@ -5911,7 +5943,7 @@ function onKeyDown(context, kind) {
   switch (kind) {
     case "usage-session":
     case "usage-weekly":
-      if (gaugeMode(kind) === "local") {
+      if (gaugeMode(state, kind, Date.now()) === "local") {
         usageView.set(context, (usageView.get(context) ?? "cost") === "cost" ? "tokens" : "cost");
         pollUsageMeter();
         return render(context, kind);
@@ -5935,10 +5967,10 @@ function onKeyDown(context, kind) {
       return render(context, "sessions");
     }
     case "usage-model": {
-      const mode = gaugeMode("usage-model");
-      const list = modelList(mode);
+      const mode = gaugeMode(state, "usage-model", Date.now());
+      const list = modelList(state, mode);
       if (list.length > 1) {
-        const cur = modelListIndex(context, list, views.get(context)?.settings?.model, mode);
+        const cur = modelListIndex(modelIdx.get(context) ?? null, list, views.get(context)?.settings?.model);
         modelIdx.set(context, (cur + 1) % list.length);
       } else if (mode === "local") pollUsageMeter();
       else if (Date.now() - lastUsageAttempt > 3e4) pollUsage();
@@ -6083,7 +6115,7 @@ if (process.argv.includes("--selftest")) {
     log("selftest status (auto k0):", JSON.stringify(statusEntry(resolveStatusKey(state.sessions, "", 0, Date.now(), state.activity))));
     const demo0 = state.sessions[0];
     if (demo0) {
-      const proj = path2.basename(demo0.cwd ?? "");
+      const proj = path3.basename(demo0.cwd ?? "");
       const r = resolveStatusKey(state.sessions, proj, 0, Date.now(), state.activity);
       log(`selftest status (explicit ${proj}) count=${r.count}:`, JSON.stringify(statusEntry(r)));
     }
@@ -6091,7 +6123,7 @@ if (process.argv.includes("--selftest")) {
     log("selftest today:", JSON.stringify(state.today));
     await pollUsageMeter(["5h"]);
     await pollBurn();
-    log("selftest burn:", JSON.stringify(state.burn), "eta:", sessionEta());
+    log("selftest burn:", JSON.stringify(state.burn), "eta:", sessionEta(state, Date.now()));
     await pollUsageMeter(["5h", "today", "month", "7day"]);
     log("selftest usage-meter:", JSON.stringify(state.usageMeter));
     log("selftest per-model 7d:", JSON.stringify(state.usageMeterModels));
@@ -6234,7 +6266,7 @@ if (process.argv.includes("--selftest")) {
     if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
     if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");
     for (const [k, win] of Object.entries(GAUGE_WINDOW)) {
-      if (gaugeMode(k) !== "local") continue;
+      if (gaugeMode(state, k, Date.now()) !== "local") continue;
       const agg = k === "usage-model" ? (state.usageMeterModels ?? [])[0] : state.usageMeter?.[win];
       const bud = [...views.values()].find((v) => v.kind === k)?.settings?.budget;
       if (agg && (budgetPct(agg.cost, bud) ?? 0) >= 90) kinds.push(k);
