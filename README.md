@@ -100,6 +100,11 @@ Always Allow writes to the project's `.claude/settings.local.json` (the git root
 exactly like the terminal's option 2. Tick *"Remember for this session only"* to keep it
 in memory instead. Nothing is ever written to `~/.claude/settings.json`.
 
+That tick is **per key**, and the key itself tells you which mode it is in —
+`ALWAYS ·project` or `ALWAYS ·session`. If you have Always Allow keys on two decks, tick
+it on each: both keys show the same pending request, so whichever one you press decides
+where the rule goes.
+
 **Notes.** A request stays on the deck for up to 20 seconds. Requests you answer in the
 terminal instead usually clear within 10-15 seconds — but at most the full 20-second hold
 if you answer quickly and the session doesn't change state again right away. Sessions
