@@ -92,6 +92,39 @@ export function parsePsTree(out) {
   return tree;
 }
 
+// Elapsed-time string -> seconds, or null if unparseable.
+//
+// Accepts BSD ps `etime` — "[[dd-]hh:]mm:ss", e.g. "17-23:37:32", "08:24:22",
+// "24:22" — and a bare integer count of seconds. Two forms because macOS has no
+// `etimes` keyword (that is a GNU procps extension: `ps -axo pid=,etimes=` exits
+// with "keyword not found" on BSD ps), while the Windows listing computes whole
+// seconds directly. Elapsed time rather than `lstart` in either case: lstart
+// prints locale-dependent month names, so the same machine would parse
+// differently under another language.
+export function parseElapsed(str) {
+  const s = String(str ?? "").trim();
+  if (/^\d+$/.test(s)) return Number(s);
+  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(s);
+  if (!m) return null;
+  const [, dd, hh, mm, ss] = m;
+  return Number(dd ?? 0) * 86400 + Number(hh ?? 0) * 3600 + Number(mm) * 60 + Number(ss);
+}
+
+// Parse "<pid> <elapsed>" pairs into Map(pid -> absolute start ms).
+// Shared by both platform adapters, which is why it lives beside parsePsTree
+// rather than in a mac-only path. Keys are numbers here (a session file's `pid` is
+// a number), unlike parsePsTree.
+export function parseProcStarts(out, nowMs) {
+  const starts = new Map();
+  for (const line of String(out ?? "").split("\n")) {
+    const m = /^\s*(\d+)\s+(\S+)\s*$/.exec(line);
+    if (!m) continue;
+    const secs = parseElapsed(m[2]);
+    if (secs != null) starts.set(Number(m[1]), nowMs - secs * 1000);
+  }
+  return starts;
+}
+
 // Walk from pid toward the root; return the first ancestor (including pid)
 // whose executable lives inside a .app bundle, else null.
 export function hostAppForPid(tree, pid, maxDepth = 16) {

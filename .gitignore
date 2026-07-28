@@ -1,5 +1,8 @@
 node_modules/
 *.log
+# The rotated generation the logger keeps (see LOG_OLD_FILE in src/plugin.js).
+# `*.log` does not match a name ending in `.old`.
+*.log.old
 local-assets/
 usage-cache.json
 product/

@@ -55,6 +55,14 @@ jobs:
             const fs = require('fs');
             const m = JSON.parse(fs.readFileSync('dev.tapparello.claude-deck.sdPlugin/manifest.json', 'utf8'));
             if (!/^\d+\.\d+\.\d+\.\d+$/.test(m.Version)) throw new Error('Version must be 4-part: ' + m.Version);
+            // The manifest is the source of truth (Stream Deck demands 4 parts), but
+            // package.json drifted to 1.0.0 while the plugin shipped 1.8.0.0. Require
+            // the manifest to extend the package version, leaving the 4th part free
+            // to act as a build number.
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            if (!m.Version.startsWith(pkg.version + '.')) {
+              throw new Error('manifest Version ' + m.Version + ' does not extend package.json version ' + pkg.version);
+            }
             const uuids = m.Actions.map(a => a.UUID);
             if (new Set(uuids).size !== uuids.length) throw new Error('duplicate action UUID');
             for (const a of m.Actions) {

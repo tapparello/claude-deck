@@ -8,9 +8,9 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript } from "./osa.js";
+import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript, parseProcStarts } from "./osa.js";
 import { windowStartMs, parseRequests, mergeById, aggregate, aggregateByModel, budgetPct, gaugeSource, familyOf } from "./usage.js";
-import { resolveStatusKey, statusEntry, autoSlot, sessionWhere, fmtShort, shortWait, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
+import { resolveStatusKey, statusEntry, autoSlot, sessionWhere, fmtShort, shortWait, sessionState, blockedSessions, sessionSig, transcriptPathFor, pidLooksRecycled } from "./status.js";
 import { randomBytes } from "node:crypto";
 import {
   decisionBody, describeRequest, alwaysRule, pressDecision,
@@ -46,11 +46,34 @@ if (!IS_MAC) {
 }
 
 // ---------- logging ----------
+// Size-capped with one generation kept, so the log can never grow without bound:
+// Stream Deck keeps this process alive for weeks, and README tells users to open
+// and share this file. Disk is bounded at 2 * LOG_MAX_BYTES.
+//
+// The running total is tracked in memory rather than stat'ing on every call —
+// every poll failure and every approve decision logs, and this is a sync write on
+// the same thread that renders keys. Seeded from the file already on disk so a
+// restart does not reset the budget and let the old file grow past the cap.
 const LOG_FILE = path.join(process.cwd(), "claude-deck.log");
+const LOG_OLD_FILE = LOG_FILE + ".old";
+const LOG_MAX_BYTES = 1_000_000;
+let logBytes = 0;
+try { logBytes = fs.statSync(LOG_FILE).size; } catch {}
+
 function log(...args) {
   const line = `${new Date().toISOString()} ${args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")}`;
   console.log(line);
-  try { fs.appendFileSync(LOG_FILE, line + "\n"); } catch {}
+  const bytes = Buffer.byteLength(line) + 1; // byteLength, not length: paths and session names are not all ASCII
+  try {
+    if (logBytes + bytes > LOG_MAX_BYTES) {
+      // rename replaces any existing .old, so exactly one generation survives.
+      // Guarded separately: a missing LOG_FILE must not cost us the append below.
+      try { fs.renameSync(LOG_FILE, LOG_OLD_FILE); } catch {}
+      logBytes = 0;
+    }
+    fs.appendFileSync(LOG_FILE, line + "\n");
+    logBytes += bytes;
+  } catch {}
 }
 
 
@@ -93,6 +116,7 @@ const state = {
   activity: new Map(), // sessionId -> transcript mtimeMs (status-less sessions only)
   usage: null,        // { fiveHour, weekly, weeklyOpus } each { pct, resetsAt }
   usageErr: null,
+  usageMeter: null,   // { [window]: {tokens, cost, in, out} } from pollUsageMeter
   usageMeterModels: null, // [{model,tokens,cost}] over 7d, for the model key in local mode
   usageAt: 0,
   sessions: [],
@@ -276,10 +300,47 @@ function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+// Verdicts for the recycled-pid check, keyed by pid AND startedAt so the same pid
+// reused by a genuinely new session is re-verified rather than inheriting the old
+// answer. Pruned every tick against the live set — this map must not become the
+// third unbounded cache.
+const pidVerdict = new Map(); // "pid:startedAt" -> true (genuine) | false (recycled)
+const verdictKey = (s) => `${s.pid}:${s.startedAt ?? 0}`;
+
+// Drop sessions whose file outlived its process and whose pid now belongs to
+// something else (see pidLooksRecycled). The process listing costs one subprocess,
+// so it runs only when an unverified session appears — sessions are long-lived, so
+// in practice that is once per session, not once per 5s tick.
+async function dropRecycledPids(sessions) {
+  const unknown = sessions.filter((s) => !pidVerdict.has(verdictKey(s)));
+  if (unknown.length) {
+    let starts = null;
+    try {
+      starts = parseProcStarts(await platform.listProcStarts(), Date.now());
+    } catch (e) {
+      // Fail open, and deliberately do NOT cache a verdict: a transient failure
+      // must not permanently mark an unverified session as genuine.
+      log("sessions: process-start listing failed, keeping all sessions:", String(e?.message ?? e));
+    }
+    if (starts) {
+      for (const s of unknown) {
+        const recycled = pidLooksRecycled(s, starts.get(s.pid) ?? null);
+        pidVerdict.set(verdictKey(s), !recycled);
+        if (recycled) {
+          log(`sessions: ignoring ${path.basename(s.cwd ?? "")} — pid ${s.pid} belongs to a process younger than the session (stale session file)`);
+        }
+      }
+    }
+  }
+  const live = new Set(sessions.map(verdictKey));
+  for (const k of pidVerdict.keys()) if (!live.has(k)) pidVerdict.delete(k);
+  return sessions.filter((s) => pidVerdict.get(verdictKey(s)) !== false);
+}
+
 async function pollSessions() {
   try {
     const files = await fsp.readdir(SESSIONS_DIR).catch(() => []);
-    const out = [];
+    let out = [];
     for (const f of files) {
       if (!f.endsWith(".json")) continue;
       try {
@@ -287,6 +348,9 @@ async function pollSessions() {
         if (s.pid && pidAlive(s.pid)) out.push(s);
       } catch {}
     }
+    // Before anything derives from this list — including the approver's staleness
+    // baselines below — discard sessions whose pid was recycled after a crash.
+    out = await dropRecycledPids(out);
     out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
     // The VS Code extension writes no status at all, so for those sessions only,
     // stat the transcript to tell "mid-turn" from "idle". One stat per such
@@ -541,7 +605,7 @@ async function walkTranscripts(dir, cutoffMs) {
 }
 
 // ---------- data: today's activity (local JSONL, incremental-ish) ----------
-const fileCache = new Map(); // path -> { size, mtime, msgs, tokens }
+const fileCache = new Map(); // path -> { size, mtimeMs, day, msgs, tokens }
 const todayKey = () => new Date().toISOString().slice(0, 10);
 const localDay = (ts) => {
   const d = new Date(ts);
@@ -555,11 +619,16 @@ async function pollToday() {
     let msgs = 0, tokens = 0;
     const chats = new Set();
     const files = await walkTranscripts(PROJECTS_DIR, dayStart.getTime());
+    const seen = new Set();
     for (const st of files) {
       const fp = st.path;
+        seen.add(fp);
         if (!fp.split(path.sep).includes("subagents")) chats.add(fp); // conversations only (cross-platform)
         const cached = fileCache.get(fp);
-        if (cached && cached.size === st.size && cached.day === day) {
+        // mtimeMs as well as size: an edit that leaves the byte count unchanged
+        // would otherwise serve a stale count forever (usageFileCache already
+        // keys on both — this cache used to key on size alone).
+        if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs && cached.day === day) {
           msgs += cached.msgs; tokens += cached.tokens;
           continue;
         }
@@ -590,9 +659,15 @@ async function pollToday() {
           }
           for (const tok of reqTok.values()) fTokens += tok;
         } catch { continue; }
-        fileCache.set(fp, { size: st.size, day, msgs: fMsgs, tokens: fTokens });
+        fileCache.set(fp, { size: st.size, mtimeMs: st.mtimeMs, day, msgs: fMsgs, tokens: fTokens });
         msgs += fMsgs; tokens += fTokens;
     }
+    // Drop entries for files that left the scan (not touched today). Without this
+    // the map only ever grows: the plugin runs for weeks, and at every local
+    // midnight the whole previous day's file set becomes unreachable but stays
+    // resident. A file outside today's scan contributes nothing to today's totals,
+    // so forgetting it cannot change the numbers.
+    for (const fp of fileCache.keys()) if (!seen.has(fp)) fileCache.delete(fp);
     state.today = { chats: chats.size, msgs, tokens };
     renderAll(["today"]);
   } catch (e) {
@@ -608,8 +683,10 @@ async function pollBurn() {
     const now = Date.now();
     const scanCutoff = now - 90 * 60_000;
     const files = await walkTranscripts(PROJECTS_DIR, scanCutoff);
+    const seen = new Set();
     for (const st of files) {
       const fp = st.path;
+        seen.add(fp);
         let rec = hourTracker.get(fp);
         if (!rec || st.size < rec.offset || !rec.seen) rec = { offset: 0, rest: "", events: [], seen: new Map() };
         if (st.size > rec.offset) {
@@ -644,6 +721,13 @@ async function pollBurn() {
         for (const [mid, ev] of rec.seen) if (now - ev.t >= 65 * 60_000) rec.seen.delete(mid);
         hourTracker.set(fp, rec);
     }
+    // Same leak as fileCache: every project ever touched kept a record (with its
+    // own `seen` Map) for the life of the process. A file that fell out of the
+    // 90-minute scan has no line newer than that, so its newest event is already
+    // outside the 65-minute window below and its contribution to tokensHour is
+    // zero — dropping it is exact, not approximate. If work resumes in that
+    // project the record is rebuilt from offset 0 on the next tick.
+    for (const fp of hourTracker.keys()) if (!seen.has(fp)) hourTracker.delete(fp);
     let tokensHour = 0;
     for (const rec of hourTracker.values()) for (const e of rec.events) if (now - e.t < 3.6e6) tokensHour += e.tok;
     state.burn = { tokensHour, at: now };
@@ -1075,6 +1159,19 @@ if ($found -eq [IntPtr]::Zero) { exit 1 };
     });
   },
 
+  // "<pid> <elapsed-seconds>" per line, for the recycled-pid check. Shaped to
+  // match macOS `ps -axo pid=,etimes=` so one parser serves both platforms.
+  // StartTime throws on some protected system processes — skip those rather than
+  // failing the whole listing, since a pid we cannot read is simply left
+  // unverified (and therefore kept).
+  listProcStarts() {
+    const ps = "Get-Process | ForEach-Object { try { \"$($_.Id) $([int]((Get-Date) - $_.StartTime).TotalSeconds)\" } catch {} }";
+    return new Promise((resolve, reject) => {
+      execFile("powershell.exe", ["-NoProfile", "-Command", ps], { timeout: OSA_TIMEOUT_MS, maxBuffer: 4 << 20 },
+        (err, out) => (err ? reject(err) : resolve(String(out))));
+    });
+  },
+
   // OAuth token from the credentials file (Windows/Linux location).
   async readToken() {
     try {
@@ -1192,6 +1289,17 @@ const macPlatform = {
         ]).catch(fallback("vscode window match failed"));
       }
       return activateApp();
+    });
+  },
+
+  // "<pid> <elapsed>" per line, for the recycled-pid check. `etime`, not `etimes`:
+  // the seconds-valued `etimes` keyword is a GNU procps extension and BSD ps exits
+  // with "keyword not found" (measured). parseElapsed handles etime's
+  // "[[dd-]hh:]mm:ss" shape, which is numeric and so locale-independent.
+  listProcStarts() {
+    return new Promise((resolve, reject) => {
+      execFile("ps", ["-axo", "pid=,etime="], { timeout: OSA_TIMEOUT_MS, maxBuffer: 4 << 20 },
+        (err, out) => (err ? reject(err) : resolve(String(out))));
     });
   },
 

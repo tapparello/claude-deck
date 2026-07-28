@@ -83,6 +83,30 @@ export function sessionState(s, now = Date.now(), activityAt = null) {
   return "idle"; // an unrecognized status value (missing is handled above)
 }
 
+// Slack for the comparison below. The session file is written moments after the
+// process starts, so a genuine pair has procStart <= startedAt; this only
+// absorbs clock and rounding noise, never a real recycle (which is minutes to
+// days later).
+export const PID_START_SLACK_MS = 60_000;
+
+// Does this session's pid look like it belongs to a *different*, later process?
+//
+// `process.kill(pid, 0)` only asks "is some process alive with this pid". A
+// session file outlives a crashed session, so once the OS hands that pid to an
+// unrelated process the session reads as running forever — inflating the Sessions
+// count and adding a dead entry to the Focus/Status cycles. The process that
+// wrote the session file necessarily existed before the session did, so a process
+// younger than its own session cannot be the one that wrote it.
+//
+// Fails OPEN on every uncertainty (no startedAt, pid missing from the process
+// listing, ps unavailable): showing a phantom session is a cosmetic annoyance,
+// while hiding a live one that needs an answer defeats the point of the plugin.
+export function pidLooksRecycled(session, procStartMs, slackMs = PID_START_SLACK_MS) {
+  const startedAt = session?.startedAt;
+  if (!startedAt || procStartMs == null) return false;
+  return procStartMs > startedAt + slackMs;
+}
+
 // Signature of the session list *including* derived state, for change detection.
 // The caller must compare this against the signature it cached on the PREVIOUS
 // tick — recomputing both sides with the same `now` makes time-only transitions

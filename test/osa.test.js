@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, outermostAppBundle, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript } from "../src/osa.js";
+import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, outermostAppBundle, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript, parseProcStarts, parseElapsed } from "../src/osa.js";
 
 test("escapeAppleScript leaves plain text alone", () => {
   assert.equal(escapeAppleScript("hello world"), "hello world");
@@ -195,4 +195,63 @@ test("terminalFocusScript activates first and raises via frontmost", () => {
 
 test("terminalFocusScript escapes the tty into the script", () => {
   assert.match(terminalFocusScript('x"y').join("\n"), /ends with "x\\"y"/);
+});
+
+// ---------- parseProcStarts: "<pid> <elapsed-seconds>" pairs ----------
+// Both platforms are made to emit this shape (macOS `ps -axo pid=,etimes=`,
+// Windows a PowerShell equivalent) so one parser covers both. Elapsed seconds
+// rather than a formatted start date on purpose: `ps -o lstart=` prints
+// locale-dependent month names, which would parse differently per machine.
+
+test("parseProcStarts converts elapsed seconds into an absolute start time", () => {
+  const now = 1_000_000_000;
+  const m = parseProcStarts("  501 3600\n  502 10\n", now);
+  assert.equal(m.get(501), now - 3_600_000);
+  assert.equal(m.get(502), now - 10_000);
+});
+
+test("parseProcStarts ignores headers, blanks and malformed lines", () => {
+  const now = 5_000_000;
+  const m = parseProcStarts("  PID ELAPSED\n\n  77 5\nnot a row\n  88 x\n", now);
+  assert.equal(m.size, 1);
+  assert.equal(m.get(77), now - 5000);
+});
+
+test("parseProcStarts on empty/null input yields an empty map", () => {
+  assert.equal(parseProcStarts("", 1).size, 0);
+  assert.equal(parseProcStarts(null, 1).size, 0);
+  assert.equal(parseProcStarts(undefined, 1).size, 0);
+});
+
+// parseElapsed must cover BSD ps `etime` as well as bare seconds: macOS has no
+// `etimes` keyword (`ps -axo pid=,etimes=` -> "keyword not found"), so the mac
+// adapter feeds the "[[dd-]hh:]mm:ss" form through this same parser.
+test("parseElapsed handles the full dd-hh:mm:ss etime shape", () => {
+  assert.equal(parseElapsed("17-23:37:32"), 17 * 86400 + 23 * 3600 + 37 * 60 + 32);
+});
+
+test("parseElapsed handles hh:mm:ss and mm:ss", () => {
+  assert.equal(parseElapsed("08:24:22"), 8 * 3600 + 24 * 60 + 22);
+  assert.equal(parseElapsed("24:22"), 24 * 60 + 22);
+  assert.equal(parseElapsed("00:05"), 5);
+});
+
+test("parseElapsed handles a bare seconds count (the Windows listing)", () => {
+  assert.equal(parseElapsed("3600"), 3600);
+  assert.equal(parseElapsed("0"), 0);
+});
+
+test("parseElapsed rejects junk", () => {
+  assert.equal(parseElapsed("abc"), null);
+  assert.equal(parseElapsed(""), null);
+  assert.equal(parseElapsed(null), null);
+  assert.equal(parseElapsed("1:2:3:4"), null);
+});
+
+test("parseProcStarts accepts real BSD ps etime output", () => {
+  const now = 2_000_000_000;
+  const m = parseProcStarts("    1 17-23:37:32\n  394 17-08:24:22\n  571 24:22\n", now);
+  assert.equal(m.get(1), now - (17 * 86400 + 23 * 3600 + 37 * 60 + 32) * 1000);
+  assert.equal(m.get(571), now - (24 * 60 + 22) * 1000);
+  assert.equal(m.size, 3);
 });

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveStatusKey, statusEntry, sessionProject, autoSlot, sessionWhere, fmtShort, shortWait, slugifyCwd, sessionState, blockedSessions, sessionSig, FINISHED_MS, transcriptPathFor } from "../src/status.js";
+import { resolveStatusKey, statusEntry, sessionProject, autoSlot, sessionWhere, fmtShort, shortWait, slugifyCwd, sessionState, blockedSessions, sessionSig, FINISHED_MS, transcriptPathFor, pidLooksRecycled } from "../src/status.js";
 
 const S = (over) => ({ sessionId: "x", cwd: "/Users/me/web-app", status: "idle", updatedAt: 1, pid: 100, ...over });
 
@@ -326,4 +326,39 @@ test("waitingSince is statusUpdatedAt only, never the updatedAt fallback", () =>
   assert.equal(statusEntry(resolveStatusKey([noStamp], "", 0, NOW)).waitingSince, null);
   const busy = { pid: 1, cwd: "/a/x", sessionId: "s", status: "busy", statusUpdatedAt: NOW - 5000 };
   assert.equal(statusEntry(resolveStatusKey([busy], "", 0, NOW)).waitingSince, null);
+});
+
+// ---------- pidLooksRecycled ----------
+// A session file survives a crash, so `process.kill(pid, 0)` alone reports a
+// phantom session forever once the OS hands that pid to something else. The
+// process that wrote the session file must have existed before the session did,
+// so a process younger than its own session is a different process.
+// Every uncertain case must return false: hiding a live session is far worse
+// than showing a phantom one.
+
+test("pidLooksRecycled: process much younger than the session => recycled", () => {
+  const started = 1_000_000_000;
+  assert.equal(pidLooksRecycled({ startedAt: started }, started + 3_600_000), true);
+});
+
+test("pidLooksRecycled: process older than the session => genuine", () => {
+  const started = 1_000_000_000;
+  assert.equal(pidLooksRecycled({ startedAt: started }, started - 5_000), false);
+});
+
+test("pidLooksRecycled: small positive skew inside the slack window => genuine", () => {
+  const started = 1_000_000_000;
+  // The session file is written moments after the process starts, so procStart
+  // should precede startedAt; slack absorbs clock/rounding noise only.
+  assert.equal(pidLooksRecycled({ startedAt: started }, started + 1_000), false);
+  assert.equal(pidLooksRecycled({ startedAt: started }, started + 59_000), false);
+  assert.equal(pidLooksRecycled({ startedAt: started }, started + 61_000), true);
+});
+
+test("pidLooksRecycled fails open when either side is unknown", () => {
+  assert.equal(pidLooksRecycled({ startedAt: 0 }, 5_000_000), false);        // no startedAt
+  assert.equal(pidLooksRecycled({}, 5_000_000), false);                      // no startedAt
+  assert.equal(pidLooksRecycled(null, 5_000_000), false);                    // no session
+  assert.equal(pidLooksRecycled({ startedAt: 1 }, null), false);             // pid absent from ps output
+  assert.equal(pidLooksRecycled({ startedAt: 1 }, undefined), false);
 });

@@ -3814,6 +3814,24 @@ function parsePsTree(out) {
   }
   return tree;
 }
+function parseElapsed(str) {
+  const s = String(str ?? "").trim();
+  if (/^\d+$/.test(s)) return Number(s);
+  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(s);
+  if (!m) return null;
+  const [, dd, hh, mm, ss] = m;
+  return Number(dd ?? 0) * 86400 + Number(hh ?? 0) * 3600 + Number(mm) * 60 + Number(ss);
+}
+function parseProcStarts(out, nowMs) {
+  const starts = /* @__PURE__ */ new Map();
+  for (const line2 of String(out ?? "").split("\n")) {
+    const m = /^\s*(\d+)\s+(\S+)\s*$/.exec(line2);
+    if (!m) continue;
+    const secs = parseElapsed(m[2]);
+    if (secs != null) starts.set(Number(m[1]), nowMs - secs * 1e3);
+  }
+  return starts;
+}
 function hostAppForPid(tree, pid, maxDepth = 16) {
   let cur = String(pid);
   const seen = /* @__PURE__ */ new Set();
@@ -4021,6 +4039,12 @@ function sessionState(s, now = Date.now(), activityAt = null) {
     return Math.max(0, now - at) < FINISHED_MS ? "finished" : "idle";
   }
   return "idle";
+}
+var PID_START_SLACK_MS = 6e4;
+function pidLooksRecycled(session, procStartMs, slackMs = PID_START_SLACK_MS) {
+  const startedAt = session?.startedAt;
+  if (!startedAt || procStartMs == null) return false;
+  return procStartMs > startedAt + slackMs;
 }
 function sessionSig(sessions, now = Date.now(), activity = null) {
   return JSON.stringify((sessions ?? []).map((s) => [s.pid, s.status ?? "", s.waitingFor ?? "", sessionState(s, now, actOf(s, activity))]));
@@ -4694,11 +4718,27 @@ if (!IS_MAC) {
   );
 }
 var LOG_FILE = path2.join(process.cwd(), "claude-deck.log");
+var LOG_OLD_FILE = LOG_FILE + ".old";
+var LOG_MAX_BYTES = 1e6;
+var logBytes = 0;
+try {
+  logBytes = fs.statSync(LOG_FILE).size;
+} catch {
+}
 function log(...args) {
   const line2 = `${(/* @__PURE__ */ new Date()).toISOString()} ${args.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(" ")}`;
   console.log(line2);
+  const bytes = Buffer.byteLength(line2) + 1;
   try {
+    if (logBytes + bytes > LOG_MAX_BYTES) {
+      try {
+        fs.renameSync(LOG_FILE, LOG_OLD_FILE);
+      } catch {
+      }
+      logBytes = 0;
+    }
     fs.appendFileSync(LOG_FILE, line2 + "\n");
+    logBytes += bytes;
   } catch {
   }
 }
@@ -4731,6 +4771,8 @@ var state = {
   usage: null,
   // { fiveHour, weekly, weeklyOpus } each { pct, resetsAt }
   usageErr: null,
+  usageMeter: null,
+  // { [window]: {tokens, cost, in, out} } from pollUsageMeter
   usageMeterModels: null,
   // [{model,tokens,cost}] over 7d, for the model key in local mode
   usageAt: 0,
@@ -4913,10 +4955,35 @@ function pidAlive(pid) {
     return false;
   }
 }
+var pidVerdict = /* @__PURE__ */ new Map();
+var verdictKey = (s) => `${s.pid}:${s.startedAt ?? 0}`;
+async function dropRecycledPids(sessions) {
+  const unknown = sessions.filter((s) => !pidVerdict.has(verdictKey(s)));
+  if (unknown.length) {
+    let starts = null;
+    try {
+      starts = parseProcStarts(await platform.listProcStarts(), Date.now());
+    } catch (e) {
+      log("sessions: process-start listing failed, keeping all sessions:", String(e?.message ?? e));
+    }
+    if (starts) {
+      for (const s of unknown) {
+        const recycled = pidLooksRecycled(s, starts.get(s.pid) ?? null);
+        pidVerdict.set(verdictKey(s), !recycled);
+        if (recycled) {
+          log(`sessions: ignoring ${path2.basename(s.cwd ?? "")} \u2014 pid ${s.pid} belongs to a process younger than the session (stale session file)`);
+        }
+      }
+    }
+  }
+  const live = new Set(sessions.map(verdictKey));
+  for (const k of pidVerdict.keys()) if (!live.has(k)) pidVerdict.delete(k);
+  return sessions.filter((s) => pidVerdict.get(verdictKey(s)) !== false);
+}
 async function pollSessions() {
   try {
     const files = await fsp.readdir(SESSIONS_DIR).catch(() => []);
-    const out = [];
+    let out = [];
     for (const f of files) {
       if (!f.endsWith(".json")) continue;
       try {
@@ -4925,6 +4992,7 @@ async function pollSessions() {
       } catch {
       }
     }
+    out = await dropRecycledPids(out);
     out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
     for (const s of out) {
       if (s.status) continue;
@@ -5136,11 +5204,13 @@ async function pollToday() {
     let msgs = 0, tokens = 0;
     const chats = /* @__PURE__ */ new Set();
     const files = await walkTranscripts(PROJECTS_DIR, dayStart.getTime());
+    const seen = /* @__PURE__ */ new Set();
     for (const st of files) {
       const fp = st.path;
+      seen.add(fp);
       if (!fp.split(path2.sep).includes("subagents")) chats.add(fp);
       const cached = fileCache.get(fp);
-      if (cached && cached.size === st.size && cached.day === day) {
+      if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs && cached.day === day) {
         msgs += cached.msgs;
         tokens += cached.tokens;
         continue;
@@ -5175,10 +5245,11 @@ async function pollToday() {
       } catch {
         continue;
       }
-      fileCache.set(fp, { size: st.size, day, msgs: fMsgs, tokens: fTokens });
+      fileCache.set(fp, { size: st.size, mtimeMs: st.mtimeMs, day, msgs: fMsgs, tokens: fTokens });
       msgs += fMsgs;
       tokens += fTokens;
     }
+    for (const fp of fileCache.keys()) if (!seen.has(fp)) fileCache.delete(fp);
     state.today = { chats: chats.size, msgs, tokens };
     renderAll(["today"]);
   } catch (e) {
@@ -5191,8 +5262,10 @@ async function pollBurn() {
     const now = Date.now();
     const scanCutoff = now - 90 * 6e4;
     const files = await walkTranscripts(PROJECTS_DIR, scanCutoff);
+    const seen = /* @__PURE__ */ new Set();
     for (const st of files) {
       const fp = st.path;
+      seen.add(fp);
       let rec = hourTracker.get(fp);
       if (!rec || st.size < rec.offset || !rec.seen) rec = { offset: 0, rest: "", events: [], seen: /* @__PURE__ */ new Map() };
       if (st.size > rec.offset) {
@@ -5234,6 +5307,7 @@ async function pollBurn() {
       for (const [mid, ev] of rec.seen) if (now - ev.t >= 65 * 6e4) rec.seen.delete(mid);
       hourTracker.set(fp, rec);
     }
+    for (const fp of hourTracker.keys()) if (!seen.has(fp)) hourTracker.delete(fp);
     let tokensHour = 0;
     for (const rec of hourTracker.values()) for (const e of rec.events) if (now - e.t < 36e5) tokensHour += e.tok;
     state.burn = { tokensHour, at: now };
@@ -5619,6 +5693,22 @@ if ($found -eq [IntPtr]::Zero) { exit 1 };
       wt.unref();
     });
   },
+  // "<pid> <elapsed-seconds>" per line, for the recycled-pid check. Shaped to
+  // match macOS `ps -axo pid=,etimes=` so one parser serves both platforms.
+  // StartTime throws on some protected system processes — skip those rather than
+  // failing the whole listing, since a pid we cannot read is simply left
+  // unverified (and therefore kept).
+  listProcStarts() {
+    const ps = 'Get-Process | ForEach-Object { try { "$($_.Id) $([int]((Get-Date) - $_.StartTime).TotalSeconds)" } catch {} }';
+    return new Promise((resolve2, reject) => {
+      execFile(
+        "powershell.exe",
+        ["-NoProfile", "-Command", ps],
+        { timeout: OSA_TIMEOUT_MS, maxBuffer: 4 << 20 },
+        (err, out) => err ? reject(err) : resolve2(String(out))
+      );
+    });
+  },
   // OAuth token from the credentials file (Windows/Linux location).
   async readToken() {
     try {
@@ -5733,6 +5823,20 @@ var macPlatform = {
         ]).catch(fallback("vscode window match failed"));
       }
       return activateApp();
+    });
+  },
+  // "<pid> <elapsed>" per line, for the recycled-pid check. `etime`, not `etimes`:
+  // the seconds-valued `etimes` keyword is a GNU procps extension and BSD ps exits
+  // with "keyword not found" (measured). parseElapsed handles etime's
+  // "[[dd-]hh:]mm:ss" shape, which is numeric and so locale-independent.
+  listProcStarts() {
+    return new Promise((resolve2, reject) => {
+      execFile(
+        "ps",
+        ["-axo", "pid=,etime="],
+        { timeout: OSA_TIMEOUT_MS, maxBuffer: 4 << 20 },
+        (err, out) => err ? reject(err) : resolve2(String(out))
+      );
     });
   },
   // OAuth token from the login Keychain (service "Claude Code-credentials"),
