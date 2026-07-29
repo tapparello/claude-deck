@@ -68,3 +68,11 @@ jobs:
         # quotes, which terminate the shell string early and broke on all three
         # runners at once while passing locally.
         run: npm run check:manifest
+
+      - name: Bundled profile matches the manifest
+        # The profile shipped placing 14 of 20 actions once, so importers got a
+        # layout with no usage gauges. HANDOFF said to re-export it whenever an
+        # action is added; nothing enforced that until now. Also catches a profile
+        # left on a previous plugin UUID after a rename, which imports cleanly and
+        # then points at a plugin that is not installed.
+        run: npm run check:profile

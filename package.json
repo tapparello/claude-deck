@@ -10,6 +10,7 @@
     "test": "node --test",
     "lint": "eslint .",
     "check:manifest": "node tools/check-manifest.mjs",
+    "check:profile": "node tools/check-profile.mjs",
     "pack": "streamdeck pack dev.tapparello.agent-vitals.sdPlugin --force --no-update-check",
     "icons": "node tools/gen-icons.mjs",
     "showcase": "node tools/gen-showcase.mjs"

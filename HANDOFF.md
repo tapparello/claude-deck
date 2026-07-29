@@ -38,7 +38,9 @@ rediscover" doc. Keep it updated when you learn something the hard way.
 - `AgentVitals.streamDeckProfile` — a zip of a `.sdProfile` directory, imported by
   double-clicking. **Re-export it whenever you add an action**, or importers get a
   layout missing the new keys: the approver keys were absent from it for 20 commits
-  because nothing in this file said to. Rebuild by zipping the live profile directory
+  because nothing in this file said to, and it later shipped placing only 14 of 20.
+  `npm run check:profile` now enforces both that and the plugin namespace, so CI
+  fails instead of a doc asking nicely. Rebuild by zipping the live profile directory
   from `~/Library/Application Support/com.elgato.StreamDeck/ProfilesV3/<uuid>.sdProfile`
   (keep that directory as the zip's top-level entry) and strip any per-key settings that
   differ from the documented defaults — a ticked `sessionOnly` would otherwise ship a
