@@ -26,9 +26,12 @@ import { head, alwaysRule, denyBlock } from "./approve.js";
 export const PULSE_MS = 120_000;
 
 // ---------- formatting ----------
-export function fmtReset(iso) {
+// `now` is injected for the same reason viewFor injects it: without it the three
+// gauge keys' countdown text depends on the real wall clock, which quietly breaks
+// viewFor's purity contract and makes the countdown impossible to assert on.
+export function fmtReset(iso, now = Date.now()) {
   if (!iso) return "";
-  const ms = new Date(iso).getTime() - Date.now();
+  const ms = new Date(iso).getTime() - now;
   if (!isFinite(ms) || ms <= 0) return "resetting…";
   const h = Math.floor(ms / 3.6e6), m = Math.round((ms % 3.6e6) / 6e4);
   if (h >= 48) return `${Math.round(h / 24)}d left`;
@@ -147,7 +150,7 @@ export function viewFor(kind, env) {
       if (mode === "local") return img(localGauge("LAST 5H", state.usageMeter?.["5h"], settings.budget, usageViewMode, animPhase));
       if (mode !== "subscription") return img(gaugeKey("SESSION 5H", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
       const b = state.usage?.fiveHour;
-      return img(gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt) : "no data", b?.pct >= 90 ? animPhase : null));
+      return img(gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt, now) : "no data", b?.pct >= 90 ? animPhase : null));
     }
     case "usage-weekly": {
       const mode = gaugeMode(state, "usage-weekly", now);
@@ -158,7 +161,7 @@ export function viewFor(kind, env) {
       const sub = u?.scopedPct != null && u.scopedName
         ? `${u.scopedName} ${Math.round(u.scopedPct)}%`
         : u?.weeklyOpus?.pct != null ? `opus ${Math.round(u.weeklyOpus.pct)}%`
-        : b ? fmtReset(b.resetsAt) : "no data";
+        : b ? fmtReset(b.resetsAt, now) : "no data";
       return img(gaugeKey("WEEKLY", b?.pct ?? null, sub, b?.pct >= 90 ? animPhase : null));
     }
     case "usage-model": {
@@ -176,7 +179,7 @@ export function viewFor(kind, env) {
       if (mmode === "local") {
         return img(localGauge(head_ + more, pick, settings.budget, usageViewMode, animPhase));
       }
-      return img(gaugeKey(head_ + more, pick.pct ?? null, pick.resetsAt ? fmtReset(pick.resetsAt) : "no data", pick.pct >= 90 ? animPhase : null));
+      return img(gaugeKey(head_ + more, pick.pct ?? null, pick.resetsAt ? fmtReset(pick.resetsAt, now) : "no data", pick.pct >= 90 ? animPhase : null));
     }
     case "burn-rate":
       return img(burnKey(state.burn?.tokensHour ?? null, sessionEta(state, now)));

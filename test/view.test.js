@@ -195,7 +195,7 @@ test("gauge keys report throttling distinctly from failure", () => {
 test("a subscription 5h gauge shows the percentage and the reset countdown", () => {
   const state = {
     ...emptyState(), usageAt: NOW,
-    usage: { fiveHour: { pct: 42, resetsAt: new Date(Date.now() + 90 * 60_000).toISOString() } },
+    usage: { fiveHour: { pct: 42, resetsAt: new Date(NOW + 90 * 60_000).toISOString() } },
   };
   const t = drawn("usage-session", { state });
   assert.match(t, /42/);
@@ -373,7 +373,11 @@ test("fmtAgo takes a duration and renders hours and minutes", () => {
   assert.equal(fmtAgo(3 * 3.6e6 + 7 * 60_000), "3h 7m");
 });
 
-test("fmtReset says resetting when the window has already lapsed", () => {
-  assert.equal(fmtReset(new Date(Date.now() - 1000).toISOString()), "resetting…");
-  assert.equal(fmtReset(null), "");
+test("fmtReset counts down against the injected clock, not the wall clock", () => {
+  // The injected `now` is what makes this assertable at all: with the real clock
+  // the expected string would change between runs.
+  assert.equal(fmtReset(new Date(NOW + 90 * 60_000).toISOString(), NOW), "1h 30m left");
+  assert.equal(fmtReset(new Date(NOW + 3 * 24 * 3.6e6).toISOString(), NOW), "3d left");
+  assert.equal(fmtReset(new Date(NOW - 1000).toISOString(), NOW), "resetting…");
+  assert.equal(fmtReset(null, NOW), "");
 });

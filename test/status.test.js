@@ -97,7 +97,7 @@ test("a real status always wins over transcript activity", () => {
 });
 
 test("slugifyCwd handles Windows paths too (backslashes and the drive colon)", () => {
-  assert.equal(slugifyCwd("/Users/me/Developer/fmf_connect_flutter"), "-Users-me-Developer-fmf-connect-flutter");
+  assert.equal(slugifyCwd("/Users/me/Developer/my_mobile_app"), "-Users-me-Developer-my-mobile-app");
   // A Windows cwd used to pass through untouched, so the transcript was never
   // found there and every VS Code session read "no status".
   assert.equal(slugifyCwd("C:\\Users\\me\\my_proj"), "C--Users-me-my-proj");
@@ -107,8 +107,8 @@ test("slugifyCwd handles Windows paths too (backslashes and the drive colon)", (
 
 test("transcriptPathFor builds the slugified project path", () => {
   assert.equal(
-    transcriptPathFor("/root", { cwd: "/Users/me/Developer/fmf_connect_flutter", sessionId: "abc" }),
-    "/root/-Users-me-Developer-fmf-connect-flutter/abc.jsonl",
+    transcriptPathFor("/root", { cwd: "/Users/me/Developer/my_mobile_app", sessionId: "abc" }),
+    "/root/-Users-me-Developer-my-mobile-app/abc.jsonl",
   );
   assert.equal(transcriptPathFor("/root", { cwd: "/x", sessionId: null }), null);
   assert.equal(transcriptPathFor("/root", { sessionId: "abc" }), null);

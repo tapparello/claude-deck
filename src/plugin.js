@@ -601,11 +601,14 @@ async function pollToday() {
           try {
             const len = st.size - rec.offset;
             const buf = Buffer.alloc(len);
-            await fh.read(buf, 0, len, rec.offset);
-            rec.offset = st.size;
+            // Trust bytesRead, not st.size: the shared scan's stat can be a few
+            // seconds old, so a file rewritten in between would leave the tail of
+            // `buf` as NUL padding and feed it to the parser.
+            const { bytesRead } = await fh.read(buf, 0, len, rec.offset);
+            rec.offset += bytesRead;
             // A read can land mid-line; hold the remainder for the next chunk so
             // foldDayChunk only ever sees whole lines.
-            const chunk = rec.rest + buf.toString("utf8");
+            const chunk = rec.rest + buf.subarray(0, bytesRead).toString("utf8");
             const cut = chunk.lastIndexOf("\n");
             rec.rest = cut < 0 ? chunk : chunk.slice(cut + 1);
             foldDayChunk(rec.counts, cut < 0 ? "" : chunk.slice(0, cut));
@@ -648,9 +651,10 @@ async function pollBurn() {
           try {
             const len = st.size - rec.offset;
             const buf = Buffer.alloc(len);
-            await fh.read(buf, 0, len, rec.offset);
-            rec.offset = st.size;
-            const lines = (rec.rest + buf.toString("utf8")).split("\n");
+            // See pollToday: bytesRead, not st.size, or NUL padding reaches the parser.
+            const { bytesRead } = await fh.read(buf, 0, len, rec.offset);
+            rec.offset += bytesRead;
+            const lines = (rec.rest + buf.subarray(0, bytesRead).toString("utf8")).split("\n");
             rec.rest = lines.pop() ?? "";
             for (const line of lines) {
               if (!line) continue;

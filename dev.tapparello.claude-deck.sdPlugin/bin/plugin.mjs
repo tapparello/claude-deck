@@ -4741,9 +4741,9 @@ function approveKey(kind, req, o = {}) {
 
 // src/view.js
 var PULSE_MS = 12e4;
-function fmtReset(iso) {
+function fmtReset(iso, now = Date.now()) {
   if (!iso) return "";
-  const ms = new Date(iso).getTime() - Date.now();
+  const ms = new Date(iso).getTime() - now;
   if (!isFinite(ms) || ms <= 0) return "resetting\u2026";
   const h = Math.floor(ms / 36e5), m = Math.round(ms % 36e5 / 6e4);
   if (h >= 48) return `${Math.round(h / 24)}d left`;
@@ -4823,7 +4823,7 @@ function viewFor(kind, env) {
       if (mode === "local") return img(localGauge("LAST 5H", state2.usageMeter?.["5h"], settings.budget, usageViewMode, animPhase2));
       if (mode !== "subscription") return img(gaugeKey("SESSION 5H", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
       const b = state2.usage?.fiveHour;
-      return img(gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt) : "no data", b?.pct >= 90 ? animPhase2 : null));
+      return img(gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt, now) : "no data", b?.pct >= 90 ? animPhase2 : null));
     }
     case "usage-weekly": {
       const mode = gaugeMode(state2, "usage-weekly", now);
@@ -4831,7 +4831,7 @@ function viewFor(kind, env) {
       if (mode !== "subscription") return img(gaugeKey("WEEKLY", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
       const b = state2.usage?.weekly;
       const u = state2.usage;
-      const sub = u?.scopedPct != null && u.scopedName ? `${u.scopedName} ${Math.round(u.scopedPct)}%` : u?.weeklyOpus?.pct != null ? `opus ${Math.round(u.weeklyOpus.pct)}%` : b ? fmtReset(b.resetsAt) : "no data";
+      const sub = u?.scopedPct != null && u.scopedName ? `${u.scopedName} ${Math.round(u.scopedPct)}%` : u?.weeklyOpus?.pct != null ? `opus ${Math.round(u.weeklyOpus.pct)}%` : b ? fmtReset(b.resetsAt, now) : "no data";
       return img(gaugeKey("WEEKLY", b?.pct ?? null, sub, b?.pct >= 90 ? animPhase2 : null));
     }
     case "usage-model": {
@@ -4849,7 +4849,7 @@ function viewFor(kind, env) {
       if (mmode === "local") {
         return img(localGauge(head_ + more, pick, settings.budget, usageViewMode, animPhase2));
       }
-      return img(gaugeKey(head_ + more, pick.pct ?? null, pick.resetsAt ? fmtReset(pick.resetsAt) : "no data", pick.pct >= 90 ? animPhase2 : null));
+      return img(gaugeKey(head_ + more, pick.pct ?? null, pick.resetsAt ? fmtReset(pick.resetsAt, now) : "no data", pick.pct >= 90 ? animPhase2 : null));
     }
     case "burn-rate":
       return img(burnKey(state2.burn?.tokensHour ?? null, sessionEta(state2, now)));
@@ -5478,9 +5478,9 @@ async function pollToday() {
           try {
             const len = st.size - rec.offset;
             const buf = Buffer.alloc(len);
-            await fh.read(buf, 0, len, rec.offset);
-            rec.offset = st.size;
-            const chunk = rec.rest + buf.toString("utf8");
+            const { bytesRead } = await fh.read(buf, 0, len, rec.offset);
+            rec.offset += bytesRead;
+            const chunk = rec.rest + buf.subarray(0, bytesRead).toString("utf8");
             const cut2 = chunk.lastIndexOf("\n");
             rec.rest = cut2 < 0 ? chunk : chunk.slice(cut2 + 1);
             foldDayChunk(rec.counts, cut2 < 0 ? "" : chunk.slice(0, cut2));
@@ -5520,9 +5520,9 @@ async function pollBurn() {
         try {
           const len = st.size - rec.offset;
           const buf = Buffer.alloc(len);
-          await fh.read(buf, 0, len, rec.offset);
-          rec.offset = st.size;
-          const lines = (rec.rest + buf.toString("utf8")).split("\n");
+          const { bytesRead } = await fh.read(buf, 0, len, rec.offset);
+          rec.offset += bytesRead;
+          const lines = (rec.rest + buf.subarray(0, bytesRead).toString("utf8")).split("\n");
           rec.rest = lines.pop() ?? "";
           for (const line2 of lines) {
             if (!line2) continue;
