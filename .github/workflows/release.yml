@@ -32,10 +32,17 @@ jobs:
 
       - run: npm ci
 
-      - name: Lint and test
+      - name: Lint, test and validate the package
+        # The manifest/icon and profile checks belong here too, not just in CI. A
+        # release is the one build that reaches users, and it can be cut from a tag
+        # whose commit never ran CI (or whose CI predates a later force-push), so
+        # re-running them is what makes "the artifact is valid" true at publish time
+        # rather than merely true at some earlier point.
         run: |
           npm run lint
           npm test
+          npm run check:manifest
+          npm run check:profile
 
       - name: Build the bundle
         run: npm run build
