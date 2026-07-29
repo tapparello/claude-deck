@@ -233,6 +233,31 @@ Everything sourced from your **local** Claude Code data works the same regardles
 
 Every one of those figures is **local to this machine** and cost is an **estimate**, so treat a budget ring as a spending signal, not billing truth — nothing is enforced. For accurate numbers, set your real per-model rates in a Usage key's settings.
 
+## Privacy and security
+
+**Nothing leaves your machine except one request to Anthropic's own usage endpoint,
+using the sign-in you already have.** No analytics, no telemetry, no account, no server
+of ours. Full detail in [PRIVACY.md](PRIVACY.md); vulnerability reporting in
+[SECURITY.md](SECURITY.md).
+
+The parts worth knowing before you install:
+
+- **Your Claude token is read** — from the macOS login Keychain (service
+  `Claude Code-credentials`) or `~/.claude/.credentials.json` — and used only as the
+  `Authorization` header on the usage request. On an account with no consumer
+  subscription, no network request is made at all.
+- **Transcripts are parsed for numbers only.** Token counts, model names, timestamps.
+  Message content never reaches the keys.
+- **The approver runs a loopback listener.** 127.0.0.1 only, gated by a 32-character
+  random secret in the URL path, `Host` header checked, never written to the log. It can
+  answer a permission prompt Claude Code is already showing — that is the whole point —
+  so treat it accordingly.
+- **That secret sits in plaintext in `~/.claude/settings.json`**, because that is where
+  hook config has to live. Don't commit that file. Every key except the three approve
+  keys works without the hook, so skipping it costs you nothing else.
+- **The log holds no secrets**: tool names and project folder names only, never tool
+  inputs (a `Write` input is an entire file), capped at 1 MB with one rotation.
+
 ## Notes
 
 - Not affiliated with or endorsed by Anthropic. All key artwork is original; official Anthropic/Claude logos are trademarks and are not included.
