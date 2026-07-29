@@ -5011,7 +5011,7 @@ if (!IS_MAC) {
     }
   );
 }
-var LOG_FILE = path3.join(process.cwd(), "claude-deck.log");
+var LOG_FILE = path3.join(process.cwd(), "agent-vitals.log");
 var LOG_OLD_FILE = LOG_FILE + ".old";
 var LOG_MAX_BYTES = 1e6;
 var logBytes = 0;
@@ -5627,7 +5627,7 @@ function send(obj) {
 var setImage = (context, image) => send({ event: "setImage", context, payload: { image, target: 0 } });
 var setTitle = (context) => send({ event: "setTitle", context, payload: { title: "", target: 0 } });
 var showAlert = (context) => send({ event: "showAlert", context });
-var kindOf = (action) => action.replace("dev.tapparello.claude-deck.", "");
+var kindOf = (action) => action.replace("dev.tapparello.agent-vitals.", "");
 function render(context, kind) {
   const v = views.get(context);
   const cy = cycle.get(context);

@@ -105,8 +105,8 @@ test("a header and its corner marker never collide", () => {
       assertNoCollision(usageMeterKey(head, "$2420.37", "cost", isCost), `usageMeter "${head}" cost=${isCost}`);
     }
   }
-  assertNoCollision(statusKey("claude-deck", "working", 1, "", "code"), "status name+tag");
-  assertNoCollision(statusKey("claude-deck", "working", 4, "", "code"), "status name+badge");
+  assertNoCollision(statusKey("agent-vitals", "working", 1, "", "code"), "status name+tag");
+  assertNoCollision(statusKey("agent-vitals", "working", 4, "", "code"), "status name+badge");
 });
 
 // A fill that reaches the top edge has to follow the key's rx=18 corners. A plain rect
@@ -118,8 +118,8 @@ test("nothing square-cornered paints over the key's rounded top edge", () => {
     ["deny idle", approveKey("approve-deny", null, {})],
     ["deny pending", approveKey("approve-deny", { cwd: "/a/b", toolName: "Bash", toolInput: { command: "npm test" }, suggestions: [] }, {})],
     ["launch", actionKey("launch", "launch", "Desktop", "claude app")],
-    ["focus", labelKey("FOCUS", "claude-deck", "working")],
-    ["status", statusKey("claude-deck", "working", 1, "", "cli")],
+    ["focus", labelKey("FOCUS", "agent-vitals", "working")],
+    ["status", statusKey("agent-vitals", "working", 1, "", "cli")],
     ["usage", usageMeterKey("today", "$60.33", "cost", true)],
   ];
   for (const [label, art] of cases) {
@@ -140,10 +140,10 @@ test("nothing square-cornered paints over the key's rounded top edge", () => {
 test("no approve key overflows its box, in any state", () => {
   const w = (r) => [{ type: "addRules", behavior: "allow", rules: [{ toolName: r.split("(")[0], ruleContent: r.slice(r.indexOf("(") + 1, -1) }] }];
   const reqs = [
-    { label: "bash", req: { cwd: "/a/claude-deck", toolName: "Bash", toolInput: { command: "npm test" }, suggestions: w("Bash(npm test)") } },
-    { label: "webfetch", req: { cwd: "/a/claude-deck", toolName: "WebFetch", toolInput: { url: "https://docs.amplify.aws/x" }, suggestions: w("WebFetch(domain:docs.amplify.aws)") } },
+    { label: "bash", req: { cwd: "/a/agent-vitals", toolName: "Bash", toolInput: { command: "npm test" }, suggestions: w("Bash(npm test)") } },
+    { label: "webfetch", req: { cwd: "/a/agent-vitals", toolName: "WebFetch", toolInput: { url: "https://docs.amplify.aws/x" }, suggestions: w("WebFetch(domain:docs.amplify.aws)") } },
     { label: "long-edit", req: { cwd: "/a/a-very-long-project-name", toolName: "Edit", toolInput: { file_path: "/a/b/an-extremely-long-filename.js" }, suggestions: w("Edit(/a/b/**)") } },
-    { label: "no-rule", req: { cwd: "/a/claude-deck", toolName: "Bash", toolInput: { command: "rm -rf /" }, suggestions: [] } },
+    { label: "no-rule", req: { cwd: "/a/agent-vitals", toolName: "Bash", toolInput: { command: "rm -rf /" }, suggestions: [] } },
   ];
   for (const kind of ["approve-allow", "approve-always", "approve-deny"]) {
     assertInsideBox(approveKey(kind, null, {}), `${kind} idle`);
@@ -168,7 +168,7 @@ test("no report or action key overflows its box on adversarial input", () => {
   assertInsideBox(statusKey("monorepo-ui", "needs-approval", 3, "WebFetch · 4s", "cli", 1), "status");
   assertInsideBox(statusKey(LONG, "working", 1, LONG, "code"), "status long");
   assertInsideBox(labelKey("FOCUS", LONG, LONG), "label long");
-  assertInsideBox(labelKey("PROJECT", "claude-deck", "set folder in settings"), "label");
+  assertInsideBox(labelKey("PROJECT", "agent-vitals", "set folder in settings"), "label");
   assertInsideBox(actionKey("launch", "launch", "Desktop", "claude app"), "action");
   assertInsideBox(actionKey("web", "claude.ai", LONG, LONG), "action long");
 });

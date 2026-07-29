@@ -28,7 +28,7 @@ const rule = (r) => [{
   type: "addRules", behavior: "allow",
   rules: [{ toolName: r.split("(")[0], ruleContent: r.slice(r.indexOf("(") + 1, -1) }],
 }];
-const WEBFETCH = { cwd: "/Users/you/dev/claude-deck", toolName: "WebFetch", toolInput: { url: "https://docs.amplify.aws/x" }, suggestions: rule("WebFetch(domain:docs.amplify.aws)") };
+const WEBFETCH = { cwd: "/Users/you/dev/agent-vitals", toolName: "WebFetch", toolInput: { url: "https://docs.amplify.aws/x" }, suggestions: rule("WebFetch(domain:docs.amplify.aws)") };
 
 const ROWS = [
   ["Usage and activity — a press cycles or refreshes, so no band", [
@@ -46,18 +46,18 @@ const ROWS = [
     ["quick chat", K.actionKey("chat", "chat", "New chat", "claude desktop")],
     ["claude.ai", K.actionKey("web", "claude.ai", "Open", "in browser")],
     ["terminal", K.actionKey("code", "code", "Terminal", "~/Developer")],
-    ["focus", K.labelKey("FOCUS", "claude-deck", "working", C.info)],
-    ["project", K.labelKey("PROJECT", "claude-deck", "")],
+    ["focus", K.labelKey("FOCUS", "agent-vitals", "working", C.info)],
+    ["project", K.labelKey("PROJECT", "agent-vitals", "")],
     ["quick prompt", K.labelKey("PROMPT", "ship it", "")],
     ["custom", K.labelKey("CLAUDE", "custom", "")],
   ]],
   ["Session status — colour is state, and only state", [
-    ["idle", K.statusKey("claude-deck", "idle", 1, "24m idle", "cli")],
-    ["working", K.statusKey("claude-deck", "working", 1, "", "cli", PHASE)],
-    ["finished", K.statusKey("claude-deck", "finished", 1, "", "cli")],
-    ["needs approval", K.statusKey("claude-deck", "needs-approval", 1, "WebFetch · 4s", "cli", PHASE)],
-    ["input needed", K.statusKey("claude-deck", "input-needed", 1, "", "cli", PHASE)],
-    ["two sessions", K.statusKey("claude-deck", "working", 2, "", "", PHASE)],
+    ["idle", K.statusKey("agent-vitals", "idle", 1, "24m idle", "cli")],
+    ["working", K.statusKey("agent-vitals", "working", 1, "", "cli", PHASE)],
+    ["finished", K.statusKey("agent-vitals", "finished", 1, "", "cli")],
+    ["needs approval", K.statusKey("agent-vitals", "needs-approval", 1, "WebFetch · 4s", "cli", PHASE)],
+    ["input needed", K.statusKey("agent-vitals", "input-needed", 1, "", "cli", PHASE)],
+    ["two sessions", K.statusKey("agent-vitals", "working", 2, "", "", PHASE)],
     ["waiting, quiet", K.statusKey("WAITING", "quiet", 1, "7 sessions ok")],
     ["no session", K.statusKey("", "none", 1, "")],
   ]],
@@ -106,7 +106,7 @@ ${out}
 
 fs.mkdirSync(path.join(ROOT, "docs"), { recursive: true });
 const files = [
-  ["keys.svg", sheet(ROWS, "Claude Deck — key art"), ROWS.reduce((n, r) => n + r[1].length, 0)],
+  ["keys.svg", sheet(ROWS, "Agent Vitals — key art"), ROWS.reduce((n, r) => n + r[1].length, 0)],
   // The shortcut strip on its own: one identity hue per action, which is the clearest
   // single view of the design.
   ["actions.svg", sheet([ROWS[1]]), ROWS[1][1].length],

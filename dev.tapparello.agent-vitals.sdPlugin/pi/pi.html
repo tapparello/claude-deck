@@ -24,30 +24,30 @@ const RATE_DEFAULTS = { opus: [5, 25], sonnet: [3, 15], haiku: [1, 5], fable: [1
 const BUDGET_FIELD = { key: "budget", type: "number", label: "Budget $ for this window (optional - turns the key into a % ring)" };
 const INSTALL_FIELD = { key: "_install", type: "install", label: "One-time setup - merge into the \"hooks\" object of ~/.claude/settings.json, then restart Claude Code" };
 const FIELDS = {
-  "dev.tapparello.claude-deck.usage-session": [BUDGET_FIELD],
-  "dev.tapparello.claude-deck.usage-weekly": [BUDGET_FIELD],
-  "dev.tapparello.claude-deck.usage-model": [
+  "dev.tapparello.agent-vitals.usage-session": [BUDGET_FIELD],
+  "dev.tapparello.agent-vitals.usage-weekly": [BUDGET_FIELD],
+  "dev.tapparello.agent-vitals.usage-model": [
     { key: "model", type: "modelselect", label: "Model to display" },
     BUDGET_FIELD,
   ],
-  "dev.tapparello.claude-deck.project": [
+  "dev.tapparello.agent-vitals.project": [
     { key: "label", type: "text", label: "Button label" },
     { key: "path", type: "text", label: "Project folder (full path)" },
   ],
-  "dev.tapparello.claude-deck.quick-prompt": [
+  "dev.tapparello.agent-vitals.quick-prompt": [
     { key: "label", type: "text", label: "Button label" },
     { key: "prompt", type: "textarea", label: "Prompt (pasted into quick chat — overwrites clipboard)" },
     { key: "hotkey", type: "text", label: "Quick-chat hotkey (macOS only, e.g. option+space)" },
     { key: "enter", type: "checkbox", label: "Press Enter automatically" },
   ],
-  "dev.tapparello.claude-deck.quick-chat": [
+  "dev.tapparello.agent-vitals.quick-chat": [
     { key: "hotkey", type: "text", label: "Quick-chat hotkey (macOS only, e.g. option+space)" },
   ],
-  "dev.tapparello.claude-deck.custom": [
+  "dev.tapparello.agent-vitals.custom": [
     { key: "label", type: "text", label: "Button label" },
     { key: "command", type: "text", label: "Open (app path, URL, or folder)" },
   ],
-  "dev.tapparello.claude-deck.usage-meter": [
+  "dev.tapparello.agent-vitals.usage-meter": [
     { key: "window", type: "select", label: "Time window", default: "today", options: [
       { value: "today", label: "Today" },
       { value: "month", label: "Month-to-date" },
@@ -55,21 +55,21 @@ const FIELDS = {
     ] },
     { key: "label", type: "text", label: "Button label (optional)" },
   ],
-  "dev.tapparello.claude-deck.approver-status": [
+  "dev.tapparello.agent-vitals.approver-status": [
     { key: "label", type: "text", label: "Button label (optional)" },
     { key: "project", type: "text", label: "Project to track (folder name, blank = auto)" },
     { key: "cycle", type: "checkbox", label: "Press cycles through sessions (off = this key keeps its own slot)" },
   ],
-  "dev.tapparello.claude-deck.approve-allow": [
+  "dev.tapparello.agent-vitals.approve-allow": [
     { key: "label", type: "text", label: "Button label (optional)" },
     INSTALL_FIELD,
   ],
-  "dev.tapparello.claude-deck.approve-always": [
+  "dev.tapparello.agent-vitals.approve-always": [
     { key: "label", type: "text", label: "Button label (optional)" },
     { key: "sessionOnly", type: "checkbox", label: "Remember for this session only (do not write project settings)" },
     INSTALL_FIELD,
   ],
-  "dev.tapparello.claude-deck.approve-deny": [
+  "dev.tapparello.agent-vitals.approve-deny": [
     { key: "label", type: "text", label: "Button label (optional)" },
     INSTALL_FIELD,
   ],
@@ -171,7 +171,7 @@ function build() {
     }
     form.append(div);
   }
-  if (action === "dev.tapparello.claude-deck.usage-meter") buildRates();
+  if (action === "dev.tapparello.agent-vitals.usage-meter") buildRates();
 }
 function buildRates() {
   let box = document.getElementById("rates");
@@ -213,10 +213,10 @@ function connectElgatoStreamDeckSocket(port, uuid, evt, info, actionInfo) {
   ws.onopen = () => {
     ws.send(JSON.stringify({ event: evt, uuid }));
     build();
-    if (action === "dev.tapparello.claude-deck.usage-model") {
+    if (action === "dev.tapparello.agent-vitals.usage-model") {
       ws.send(JSON.stringify({ event: "sendToPlugin", action, context: piUuid, payload: { cmd: "getModels" } }));
     }
-    if (action === "dev.tapparello.claude-deck.usage-meter") {
+    if (action === "dev.tapparello.agent-vitals.usage-meter") {
       ws.send(JSON.stringify({ event: "getGlobalSettings", context: piUuid }));
     }
   };
@@ -226,7 +226,7 @@ function connectElgatoStreamDeckSocket(port, uuid, evt, info, actionInfo) {
     if (m.event === "didReceiveGlobalSettings") {
       gs = m.payload?.settings ?? {};
       gsReady = true;
-      if (action === "dev.tapparello.claude-deck.usage-meter") buildRates();
+      if (action === "dev.tapparello.agent-vitals.usage-meter") buildRates();
       return;
     }
     if (m.event === "sendToPropertyInspector" && Array.isArray(m.payload?.models)) {

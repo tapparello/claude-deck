@@ -42,14 +42,14 @@ jobs:
 
       - name: Committed bundle is in sync with src
         # A release must never ship a bundle that disagrees with the tagged source.
-        run: git diff --exit-code -- dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs
+        run: git diff --exit-code -- dev.tapparello.agent-vitals.sdPlugin/bin/plugin.mjs
 
       - name: Tag matches the manifest version
         # The manifest is the version of record. Catch a tag that disagrees here,
         # rather than shipping a package whose name and contents differ.
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          MANIFEST=$(node -p "require('./dev.tapparello.claude-deck.sdPlugin/manifest.json').Version")
+          MANIFEST=$(node -p "require('./dev.tapparello.agent-vitals.sdPlugin/manifest.json').Version")
           echo "tag=$TAG manifest=$MANIFEST"
           case "$MANIFEST" in
             "${TAG#v}".*|"${TAG#v}") ;;
@@ -67,4 +67,4 @@ jobs:
           gh release create "$TAG" \
             --title "$TAG" \
             --generate-notes \
-            dev.tapparello.claude-deck.streamDeckPlugin
+            dev.tapparello.agent-vitals.streamDeckPlugin

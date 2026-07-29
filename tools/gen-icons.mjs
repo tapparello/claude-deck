@@ -15,7 +15,7 @@ import { Resvg } from "@resvg/resvg-js";
 import { iconSvg, listIconSvg, C } from "../src/keyart.js";
 
 const OUT = path.join(path.dirname(path.dirname(fileURLToPath(import.meta.url))),
-  "dev.tapparello.claude-deck.sdPlugin", "imgs");
+  "dev.tapparello.agent-vitals.sdPlugin", "imgs");
 // Action-list art lives in its own directory. It cannot share files with the key
 // art: Elgato requires the list icons to be monochrome white on TRANSPARENT, while
 // the key icons are a filled dark plate with identity hues. Same glyph table, two

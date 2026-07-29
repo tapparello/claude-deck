@@ -1,12 +1,12 @@
-# Claude Deck — Stream Deck plugin
+# Agent Vitals — Stream Deck plugin
 
-[![CI](https://github.com/tapparello/claude-deck/actions/workflows/ci.yml/badge.svg)](https://github.com/tapparello/claude-deck/actions/workflows/ci.yml)
+[![CI](https://github.com/tapparello/agent-vitals/actions/workflows/ci.yml/badge.svg)](https://github.com/tapparello/agent-vitals/actions/workflows/ci.yml)
 
 Live Claude usage gauges, running Claude Code sessions, per-session status, and quick-launch keys for the Elgato Stream Deck (Windows and macOS).
 
 The usage gauges show the **same session/weekly percentages Claude Desktop and Claude Code's `/usage` display** — pulled with your local Claude sign-in, refreshed every couple of minutes. No extra login, nothing leaves your machine.
 
-![Every Claude Deck key: usage gauges, shortcuts, session status, and the permission-prompt keys](docs/keys.png)
+![Every Agent Vitals key: usage gauges, shortcuts, session status, and the permission-prompt keys](docs/keys.png)
 
 ## Keys
 
@@ -73,17 +73,17 @@ can't drift from the code. `docs/keys.svg` and `docs/actions.svg` are the crisp 
 
 ## Install
 
-Download `dev.tapparello.claude-deck.streamDeckPlugin` from the
-[latest release](https://github.com/tapparello/claude-deck/releases/latest) and
+Download `dev.tapparello.agent-vitals.streamDeckPlugin` from the
+[latest release](https://github.com/tapparello/agent-vitals/releases/latest) and
 double-click it. Stream Deck installs it and the actions appear under the
-**Claude Deck** category.
+**Agent Vitals** category.
 
 <details>
 <summary>Or install from source</summary>
 
 1. Clone this repo and run `npm install && npm run build`.
 2. Close the Stream Deck app.
-3. Copy `dev.tapparello.claude-deck.sdPlugin` into your plugins folder:
+3. Copy `dev.tapparello.agent-vitals.sdPlugin` into your plugins folder:
    - **Windows:** `%APPDATA%\Elgato\StreamDeck\Plugins\`
    - **macOS:** `~/Library/Application Support/com.elgato.StreamDeck/Plugins/` (or run `./deploy.sh`, which also restarts Stream Deck)
 4. Start the Stream Deck app.
@@ -91,7 +91,7 @@ double-click it. Stream Deck installs it and the actions appear under the
 `npm run pack` builds the same `.streamDeckPlugin` file the release ships.
 </details>
 
-Optional: double-click `Claude.streamDeckProfile` to import a starter profile with some of the keys already arranged — including Allow / Always Allow / Deny, which still need the hook installed (next section) before they do anything.
+Optional: double-click `AgentVitals.streamDeckProfile` to import a starter profile with some of the keys already arranged — including Allow / Always Allow / Deny, which still need the hook installed (next section) before they do anything.
 
 ### Approving from the deck (Allow / Always Allow / Deny)
 
@@ -161,7 +161,7 @@ request arrives, or on its own a few minutes after the bad requests stop.
 
 ```powershell
 npm install
-npm run build      # bundles src/plugin.js -> dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs
+npm run build      # bundles src/plugin.js -> dev.tapparello.agent-vitals.sdPlugin/bin/plugin.mjs
 npm run selftest   # exercises the usage endpoint + local data without Stream Deck
 ```
 
@@ -169,7 +169,7 @@ On macOS:
 
 ```bash
 npm install
-npm run build      # bundles src/plugin.js -> dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs
+npm run build      # bundles src/plugin.js -> dev.tapparello.agent-vitals.sdPlugin/bin/plugin.mjs
 npm test           # unit tests for the pure modules (node:test)
 npm run lint       # correctness-only eslint; no formatting rules
 npm run selftest   # exercises the usage/session/today/burn pollers without Stream Deck
@@ -179,8 +179,8 @@ npm run pack       # builds the installable .streamDeckPlugin
 ```
 
 The plugin speaks the Stream Deck WebSocket protocol directly — the only runtime
-dependency is `ws`. Debug log: `claude-deck.log` inside the installed plugin folder,
-capped at 1 MB with one rotated generation (`claude-deck.log.old`).
+dependency is `ws`. Debug log: `agent-vitals.log` inside the installed plugin folder,
+capped at 1 MB with one rotated generation (`agent-vitals.log.old`).
 
 Most of the logic lives in pure, unit-tested modules — `usage.js` (cost and token
 accounting), `status.js` (session state), `view.js` (what every key draws),
@@ -244,4 +244,4 @@ Every one of those figures is **local to this machine** and cost is an **estimat
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE), which carries both copyright lines. This project began as a fork of [technicallybrantley/claude-deck](https://github.com/technicallybrantley/claude-deck) and has since been rewritten; the two have diverged substantially and are now developed independently. Not affiliated with or endorsed by Anthropic.
+MIT — see [`LICENSE`](LICENSE), which carries both copyright lines. This project began as a fork of [technicallybrantley/agent-vitals](https://github.com/technicallybrantley/agent-vitals) and has since been rewritten; the two have diverged substantially and are now developed independently. Not affiliated with or endorsed by Anthropic.

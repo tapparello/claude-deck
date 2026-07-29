@@ -175,10 +175,12 @@ test("decisionBody: unknown kind returns null", () => {
 
 import { describeRequest, alwaysRule, TARGET_MAX, RULE_FIT } from "../src/approve.js";
 
-const req = (over = {}) => ({ cwd: "/Users/x/dev/claude-deck", toolName: "Bash", toolInput: { command: "npm test" }, suggestions: [], ...over });
+const req = (over = {}) => ({ cwd: "/Users/x/dev/media-tools", toolName: "Bash", toolInput: { command: "npm test" }, suggestions: [], ...over });
 
 test("describeRequest names the project from cwd", () => {
-  assert.equal(describeRequest(req()).name, "claude-deck");
+  // Fixture is 11 chars on purpose — the cap below is what truncates anything
+  // longer, so a name that survives intact has to fit inside it.
+  assert.equal(describeRequest(req()).name, "media-tools");
   // 11-char cap: basename is truncated, not ellipsised away
   assert.equal(describeRequest(req({ cwd: "/a/inventory_service" })).name.length, 11);
   assert.equal(describeRequest(req({ cwd: undefined })).name, "");
@@ -208,13 +210,13 @@ test("describeRequest maps each tool to a target", () => {
 test("describeRequest collapses whitespace and control chars in EVERY branch", () => {
   assert.equal(describeRequest(req({ toolName: "Bash", toolInput: { command: "npm\n  test\t-v" } })).target, "npm test -v");
   assert.equal(describeRequest(req({ toolName: "WebSearch", toolInput: { query: "a\nb" } })).target, "a b");
-  // hyphens must SURVIVE - `claude-deck` and `--admin` are not whitespace
-  assert.equal(describeRequest(req({ cwd: "/a/claude-deck" })).name, "claude-deck");
+  // hyphens must SURVIVE - `media-tools` and `--admin` are not whitespace
+  assert.equal(describeRequest(req({ cwd: "/a/media-tools" })).name, "media-tools");
   assert.equal(describeRequest(req({ toolName: "Task", toolInput: { subagent_type: "a" + String.fromCharCode(1) + "b" } })).target, "a b");
 });
 
 test("describeRequest preserves hyphens in names and targets", () => {
-  assert.equal(describeRequest(req({ cwd: "/a/claude-deck" })).name, "claude-deck");
+  assert.equal(describeRequest(req({ cwd: "/a/media-tools" })).name, "media-tools");
   assert.equal(describeRequest(req({ toolName: "Bash", toolInput: { command: "x --flag" } })).target, "x --flag");
 });
 

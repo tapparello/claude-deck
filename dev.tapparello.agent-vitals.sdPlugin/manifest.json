@@ -1,12 +1,12 @@
 {
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
-  "Name": "Claude Deck",
+  "Name": "Agent Vitals",
   "Version": "1.8.0.0",
   "Author": "Cristiano Tapparello",
   "Description": "Live Claude usage limits, running Claude Code sessions, and quick-launch keys for Claude Desktop.",
-  "UUID": "dev.tapparello.claude-deck",
+  "UUID": "dev.tapparello.agent-vitals",
   "Icon": "imgs/plugin",
-  "Category": "Claude Deck",
+  "Category": "Agent Vitals",
   "CategoryIcon": "imgs/list/plugin",
   "CodePath": "bin/plugin.mjs",
   "SDKVersion": 2,
@@ -29,7 +29,7 @@
   ],
   "Actions": [
     {
-      "UUID": "dev.tapparello.claude-deck.usage-session",
+      "UUID": "dev.tapparello.agent-vitals.usage-session",
       "Name": "Session Usage (5h)",
       "Tooltip": "5-hour usage: the subscription session limit, or local spend over the last 5 hours on accounts without one (Foundry/Bedrock/Vertex). Set a budget to get a ring. Press to refresh.",
       "Icon": "imgs/list/session",
@@ -47,7 +47,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.usage-weekly",
+      "UUID": "dev.tapparello.agent-vitals.usage-weekly",
       "Name": "Weekly Usage",
       "Tooltip": "Weekly usage: the subscription weekly limit, or local spend over the last 7 days on accounts without one. Set a budget to get a ring. Press to refresh.",
       "Icon": "imgs/list/weekly",
@@ -65,7 +65,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.sessions",
+      "UUID": "dev.tapparello.agent-vitals.sessions",
       "Name": "Active Sessions",
       "Tooltip": "Running Claude Code sessions. Press to cycle through session details.",
       "Icon": "imgs/list/sessions",
@@ -82,7 +82,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.today",
+      "UUID": "dev.tapparello.agent-vitals.today",
       "Name": "Today's Activity",
       "Tooltip": "Today's Claude Code activity: chats, messages, and tokens. Press to refresh.",
       "Icon": "imgs/list/today",
@@ -99,7 +99,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.launch",
+      "UUID": "dev.tapparello.agent-vitals.launch",
       "Name": "Launch Claude Desktop",
       "Tooltip": "Open the Claude Desktop app.",
       "Icon": "imgs/list/launch",
@@ -113,7 +113,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.quick-chat",
+      "UUID": "dev.tapparello.agent-vitals.quick-chat",
       "Name": "Claude Quick Chat",
       "Tooltip": "Trigger Claude's quick-chat hotkey (Ctrl+Alt+Space on Windows; set your hotkey in settings on macOS).",
       "Icon": "imgs/list/chat",
@@ -128,7 +128,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.open-web",
+      "UUID": "dev.tapparello.agent-vitals.open-web",
       "Name": "Open claude.ai",
       "Tooltip": "Open a new chat on claude.ai in your browser.",
       "Icon": "imgs/list/web",
@@ -142,7 +142,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.claude-code",
+      "UUID": "dev.tapparello.agent-vitals.claude-code",
       "Name": "Claude Code Terminal",
       "Tooltip": "Open a terminal running Claude Code in your GitHub folder.",
       "Icon": "imgs/list/code",
@@ -156,7 +156,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.usage-model",
+      "UUID": "dev.tapparello.agent-vitals.usage-model",
       "Name": "Model Usage (weekly)",
       "Tooltip": "Per-model usage: the subscription weekly per-model limit, or local 7-day spend per model on accounts without one. Pick the model in settings.",
       "Icon": "imgs/list/model",
@@ -174,7 +174,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.burn-rate",
+      "UUID": "dev.tapparello.agent-vitals.burn-rate",
       "Name": "Burn Rate",
       "Tooltip": "Tokens per hour over the last hour, plus estimated time until the 5h session cap.",
       "Icon": "imgs/list/burn",
@@ -191,7 +191,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.project",
+      "UUID": "dev.tapparello.agent-vitals.project",
       "Name": "Project Terminal",
       "Tooltip": "Open Claude Code in a specific project folder. Configure the folder in settings.",
       "Icon": "imgs/list/project",
@@ -208,7 +208,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.focus-session",
+      "UUID": "dev.tapparello.agent-vitals.focus-session",
       "Name": "Focus Session",
       "Tooltip": "Press to cycle through running Claude Code sessions and bring their window to the front.",
       "Icon": "imgs/list/focus",
@@ -225,7 +225,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.quick-prompt",
+      "UUID": "dev.tapparello.agent-vitals.quick-prompt",
       "Name": "Quick Prompt",
       "Tooltip": "Open Claude quick chat and paste a canned prompt. Configure the prompt in settings.",
       "Icon": "imgs/list/prompt",
@@ -242,7 +242,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.custom",
+      "UUID": "dev.tapparello.agent-vitals.custom",
       "Name": "Claude Custom",
       "Tooltip": "A Claude-styled key that opens anything you choose: app, URL, or folder.",
       "Icon": "imgs/list/custom",
@@ -259,7 +259,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.usage-meter",
+      "UUID": "dev.tapparello.agent-vitals.usage-meter",
       "Name": "Usage",
       "Tooltip": "Local Claude Code token volume + estimated cost for a time window. Press to toggle cost/tokens; pick the window in settings.",
       "Icon": "imgs/list/usage",
@@ -277,7 +277,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.approver-status",
+      "UUID": "dev.tapparello.agent-vitals.approver-status",
       "Name": "Claude Status",
       "Tooltip": "Live state of a Claude Code session: Needs approval / Input needed / Working / Finished / Idle. Bind to a project in settings, or leave blank to auto-track the session that needs you.",
       "Icon": "imgs/list/status",
@@ -295,7 +295,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.approver-waiting",
+      "UUID": "dev.tapparello.agent-vitals.approver-waiting",
       "Name": "Claude Waiting",
       "Tooltip": "Lights up when any Claude Code session is waiting on you (permission prompt or question). Press to jump to that session's window; press again to cycle if several are waiting.",
       "Icon": "imgs/list/waiting",
@@ -312,7 +312,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.approve-allow",
+      "UUID": "dev.tapparello.agent-vitals.approve-allow",
       "Name": "Claude Allow",
       "Tooltip": "Approve the pending Claude Code permission prompt (same as pressing 1 in the terminal). Shows the command it would allow. Needs the one-time hook setup in this key's settings.",
       "Icon": "imgs/list/approve-allow",
@@ -330,7 +330,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.approve-always",
+      "UUID": "dev.tapparello.agent-vitals.approve-always",
       "Name": "Claude Always Allow",
       "Tooltip": "Approve and stop asking, using Claude Code's own suggested rule (same as pressing 2 in the terminal). The key shows the rule it would save. Greys out when no safe rule is offered.",
       "Icon": "imgs/list/approve-always",
@@ -348,7 +348,7 @@
       ]
     },
     {
-      "UUID": "dev.tapparello.claude-deck.approve-deny",
+      "UUID": "dev.tapparello.agent-vitals.approve-deny",
       "Name": "Claude Deny",
       "Tooltip": "Refuse the pending Claude Code permission prompt (same as pressing 3 in the terminal). The turn continues and Claude adapts.",
       "Icon": "imgs/list/approve-deny",

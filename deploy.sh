@@ -9,9 +9,9 @@ NO_RESTART=0
 [ "${1:-}" = "--no-restart" ] && NO_RESTART=1
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SRC="$DIR/dev.tapparello.claude-deck.sdPlugin"
+SRC="$DIR/dev.tapparello.agent-vitals.sdPlugin"
 DST_DIR="$HOME/Library/Application Support/com.elgato.StreamDeck/Plugins"
-DST="$DST_DIR/dev.tapparello.claude-deck.sdPlugin"
+DST="$DST_DIR/dev.tapparello.agent-vitals.sdPlugin"
 
 osascript -e 'quit app "Elgato Stream Deck"' 2>/dev/null || true
 pkill -x "Elgato Stream Deck" 2>/dev/null || true

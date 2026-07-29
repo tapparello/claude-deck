@@ -169,8 +169,8 @@ test("primary is working-first, then most-recent, then lowest pid", () => {
 });
 
 test("collision count reflects multiple same-project sessions", () => {
-  const sessions = [S({ cwd: "/a/claude-deck", pid: 1 }), S({ cwd: "/b/claude-deck", pid: 2 })];
-  const r = resolveStatusKey(sessions, "claude-deck");
+  const sessions = [S({ cwd: "/a/agent-vitals", pid: 1 }), S({ cwd: "/b/agent-vitals", pid: 2 })];
+  const r = resolveStatusKey(sessions, "agent-vitals");
   assert.equal(r.count, 2);
 });
 
@@ -279,10 +279,10 @@ test("sessionWhere tags the host so same-project sessions are distinguishable", 
   assert.equal(sessionWhere({ entrypoint: "claude-vscode" }), "code");
   assert.equal(sessionWhere({}), "");
   const two = [
-    S({ cwd: "/a/claude-deck", entrypoint: "cli", status: "busy", pid: 1 }),
-    S({ cwd: "/b/claude-deck", entrypoint: "claude-vscode", pid: 2 }),
+    S({ cwd: "/a/agent-vitals", entrypoint: "cli", status: "busy", pid: 1 }),
+    S({ cwd: "/b/agent-vitals", entrypoint: "claude-vscode", pid: 2 }),
   ];
-  const r = resolveStatusKey(two, "claude-deck", 0, NOW);
+  const r = resolveStatusKey(two, "agent-vitals", 0, NOW);
   assert.deepEqual(r.list.map((e) => e.where), ["cli", "code"]);
 });
 

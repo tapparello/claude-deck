@@ -1,4 +1,4 @@
-// Claude Deck — Stream Deck plugin
+// Agent Vitals — Stream Deck plugin
 // Shows live Claude subscription usage (same numbers as Claude Desktop / /usage),
 // running Claude Code sessions, and quick-launch keys.
 import { WebSocket } from "ws";
@@ -52,7 +52,7 @@ if (!IS_MAC) {
 // every poll failure and every approve decision logs, and this is a sync write on
 // the same thread that renders keys. Seeded from the file already on disk so a
 // restart does not reset the budget and let the old file grow past the cap.
-const LOG_FILE = path.join(process.cwd(), "claude-deck.log");
+const LOG_FILE = path.join(process.cwd(), "agent-vitals.log");
 const LOG_OLD_FILE = LOG_FILE + ".old";
 const LOG_MAX_BYTES = 1_000_000;
 let logBytes = 0;
@@ -380,7 +380,7 @@ function answerAndDrop(ids, why) {
 }
 
 function onHookRequest(payload, ticket) {
-  // Metadata only. tool_input for a Write is an entire file, and claude-deck.log
+  // Metadata only. tool_input for a Write is an entire file, and agent-vitals.log
   // lives in the plugin folder that README tells users to open and share.
   const toolName = String(payload?.tool_name ?? "");
   log(`approve: ${toolName} from ${path.basename(String(payload?.cwd ?? ""))}`);
@@ -762,7 +762,7 @@ const setImage = (context, image) => send({ event: "setImage", context, payload:
 const setTitle = (context) => send({ event: "setTitle", context, payload: { title: "", target: 0 } });
 const showAlert = (context) => send({ event: "showAlert", context });
 
-const kindOf = (action) => action.replace("dev.tapparello.claude-deck.", "");
+const kindOf = (action) => action.replace("dev.tapparello.agent-vitals.", "");
 
 // Adapter: resolve this key's per-context UI state, ask view.js what to draw, then
 // perform the two side effects it deliberately does not — pushing the image, and

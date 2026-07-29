@@ -46,7 +46,7 @@ jobs:
         # Stream Deck loads bin/plugin.mjs, not src/, so a stale committed bundle
         # ships old behaviour while the source looks correct. Rebuilding above and
         # then finding a diff means someone changed src without rebuilding.
-        run: git diff --exit-code -- dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs
+        run: git diff --exit-code -- dev.tapparello.agent-vitals.sdPlugin/bin/plugin.mjs
 
       - name: Selftest (loads and runs the real bundle)
         # The closest thing to running the plugin without a Stream Deck: it boots
@@ -61,7 +61,7 @@ jobs:
         # path a Marketplace submission goes through, so a listing cannot be
         # rejected for something CI could have caught. --no-update-check keeps it
         # from fetching schemas mid-build.
-        run: npx streamdeck pack dev.tapparello.claude-deck.sdPlugin --dry-run --no-update-check
+        run: npx streamdeck pack dev.tapparello.agent-vitals.sdPlugin --dry-run --no-update-check
 
       - name: Manifest, icons and Property Inspector are valid
         # A real file, not an inline `node -e`: the icon rules need literal double

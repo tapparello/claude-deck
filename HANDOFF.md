@@ -35,7 +35,7 @@ rediscover" doc. Keep it updated when you learn something the hard way.
   queue, press and deny-window guards). No I/O, so every rule is fixture-testable.
 - `src/hookserver.js` — the loopback listener the `PermissionRequest` hook POSTs to.
   Owns the capability URL, idempotent responses and dropped-socket detection.
-- `Claude.streamDeckProfile` — a zip of a `.sdProfile` directory, imported by
+- `AgentVitals.streamDeckProfile` — a zip of a `.sdProfile` directory, imported by
   double-clicking. **Re-export it whenever you add an action**, or importers get a
   layout missing the new keys: the approver keys were absent from it for 20 commits
   because nothing in this file said to. Rebuild by zipping the live profile directory
@@ -43,14 +43,14 @@ rediscover" doc. Keep it updated when you learn something the hard way.
   (keep that directory as the zip's top-level entry) and strip any per-key settings that
   differ from the documented defaults — a ticked `sessionOnly` would otherwise ship a
   different write scope than the README promises.
-- `dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs` — esbuild
+- `dev.tapparello.agent-vitals.sdPlugin/bin/plugin.mjs` — esbuild
   output, checked in because Stream Deck loads directly from the installed
   plugin folder. Regenerate with `npm run build`; don't hand-edit it.
-- `dev.tapparello.claude-deck.sdPlugin/manifest.json` — action
+- `dev.tapparello.agent-vitals.sdPlugin/manifest.json` — action
   definitions Stream Deck reads. Bump `"Version"` (4-part, e.g. `1.0.1.0`)
   on any behavior change so old cached state doesn't get confused with new.
 - `deploy.ps1` — stops Stream Deck, replaces the installed plugin folder
-  with a fresh copy of `dev.tapparello.claude-deck.sdPlugin/`,
+  with a fresh copy of `dev.tapparello.agent-vitals.sdPlugin/`,
   restarts it. This is Windows-only (PowerShell) — use the `PowerShell`
   tool, not `Bash`, to run it.
 - `deploy.sh` — the macOS equivalent, same three steps against
@@ -103,7 +103,7 @@ of the approver that needs no deck. Always run it before deploying to catch logi
 without a restart cycle. The usage-limit endpoint selftest checks can 429 if you just
 hit it (client backs off 240s) — that's expected, not a bug.
 
-Debug log at runtime, next to the installed plugin: `claude-deck.log` in
+Debug log at runtime, next to the installed plugin: `agent-vitals.log` in
 `%APPDATA%\Elgato\StreamDeck\Plugins\<plugin>\` or
 `~/Library/Application Support/com.elgato.StreamDeck/Plugins/<plugin>/`. It never
 contains the hook secret — the startup line prints a literal `<secret>` placeholder, so

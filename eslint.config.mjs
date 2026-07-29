@@ -48,6 +48,6 @@ export default [
   },
   {
     // The bundle is generated; never lint it.
-    ignores: ["dev.tapparello.claude-deck.sdPlugin/bin/**", "node_modules/**"],
+    ignores: ["dev.tapparello.agent-vitals.sdPlugin/bin/**", "node_modules/**"],
   },
 ];

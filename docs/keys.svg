@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1346" height="984" viewBox="0 0 1346 984">
 <rect width="1346" height="984" fill="#0d0d11"/>
-<text x="34" y="38" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">Claude Deck — key art</text><text x="34" y="74" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="600" fill="#9b96a8" letter-spacing="0.3">Usage and activity — a press cycles or refreshes, so no band</text><g transform="translate(34,94)"><rect width="144" height="144" rx="18" fill="#16151c"/>
+<text x="34" y="38" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">Agent Vitals — key art</text><text x="34" y="74" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="600" fill="#9b96a8" letter-spacing="0.3">Usage and activity — a press cycles or refreshes, so no band</text><g transform="translate(34,94)"><rect width="144" height="144" rx="18" fill="#16151c"/>
     <rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="#f87171" stroke-width="6" opacity="0.95"/>
     <text x="12" y="25" text-anchor="start" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="#9b96a8" letter-spacing="0.6">SESSION 5H</text>
     <text x="72" y="82" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="44" font-weight="700" fill="#f87171">94%</text>
@@ -59,12 +59,12 @@
     <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="#60a5fa" stroke-width="1" opacity="0.180"/>
     <path d="M0 37 V18 A18 18 0 0 1 18 0 H126 A18 18 0 0 1 144 18 V37 Z" fill="#7fbbbf" opacity="0.240"/><rect x="0" y="34" width="144" height="3" fill="#7fbbbf" opacity="0.95"/>
     <g transform="translate(10,8) scale(0.9167)" fill="none" stroke="#7fbbbf" stroke-width="2.84" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12 m-7 0 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0"/><path d="M12 1.5 v4"/><path d="M12 18.5 v4"/><path d="M1.5 12 h4"/><path d="M18.5 12 h4"/></g><text x="38" y="25" text-anchor="start" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="16" font-weight="800" fill="#7fbbbf" letter-spacing="0.5">FOCUS</text>
-    <text x="72" y="92" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">claude-deck</text>
+    <text x="72" y="92" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="700" fill="#f5f1ea">agent-vitals</text>
     <text x="72" y="127" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="400" fill="#9b96a8">working</text></g><text x="754" y="483" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="11" fill="#9b96a8">focus</text><g transform="translate(844,324)"><rect width="144" height="144" rx="18" fill="#16151c"/>
     
     <path d="M0 37 V18 A18 18 0 0 1 18 0 H126 A18 18 0 0 1 144 18 V37 Z" fill="#bbb08c" opacity="0.240"/><rect x="0" y="34" width="144" height="3" fill="#bbb08c" opacity="0.95"/>
     <g transform="translate(10,8) scale(0.9167)" fill="none" stroke="#bbb08c" stroke-width="2.84" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18 V6 h6 l2 2.5 h10 V18 z"/></g><text x="38" y="25" text-anchor="start" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="16" font-weight="800" fill="#bbb08c" letter-spacing="0.5">PROJECT</text>
-    <text x="72" y="92" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">claude-deck</text>
+    <text x="72" y="92" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="700" fill="#f5f1ea">agent-vitals</text>
     </g><text x="916" y="483" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="11" fill="#9b96a8">project</text><g transform="translate(1006,324)"><rect width="144" height="144" rx="18" fill="#16151c"/>
     
     <path d="M0 37 V18 A18 18 0 0 1 18 0 H126 A18 18 0 0 1 144 18 V37 Z" fill="#d7a4a6" opacity="0.240"/><rect x="0" y="34" width="144" height="3" fill="#d7a4a6" opacity="0.95"/>
@@ -81,7 +81,7 @@
     <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="#9b96a8" stroke-width="3" opacity="0.800"/>
     <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="#9b96a8" stroke-width="1" opacity="0.180"/>
     <text x="132" y="25" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="12" font-weight="600" fill="#9b96a8">cli</text>
-    <text x="72" y="78" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">claude-deck</text>
+    <text x="72" y="78" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">agent-vital</text>
     <text x="72" y="104" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="700" fill="#9b96a8">Idle</text>
     <text x="72" y="127" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="400" fill="#9b96a8">24m idle</text></g><text x="106" y="713" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="11" fill="#9b96a8">idle</text><g transform="translate(196,554)"><rect width="144" height="144" rx="18" fill="#16151c"/>
     <rect width="144" height="144" rx="18" fill="#60a5fa" opacity="0.100"/>
@@ -89,7 +89,7 @@
     <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="#60a5fa" stroke-width="3" opacity="1.000"/>
     <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="#60a5fa" stroke-width="1" opacity="0.180"/>
     <text x="132" y="25" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="12" font-weight="600" fill="#9b96a8">cli</text>
-    <text x="72" y="78" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">claude-deck</text>
+    <text x="72" y="78" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">agent-vital</text>
     <text x="72" y="104" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="700" fill="#60a5fa">Working</text>
     </g><text x="268" y="713" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="11" fill="#9b96a8">working</text><g transform="translate(358,554)"><rect width="144" height="144" rx="18" fill="#16151c"/>
     <rect width="144" height="144" rx="18" fill="#4ade80" opacity="0.100"/>
@@ -97,7 +97,7 @@
     <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="#4ade80" stroke-width="3" opacity="0.800"/>
     <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="#4ade80" stroke-width="1" opacity="0.180"/>
     <text x="132" y="25" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="12" font-weight="600" fill="#9b96a8">cli</text>
-    <text x="72" y="78" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">claude-deck</text>
+    <text x="72" y="78" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">agent-vital</text>
     <text x="72" y="104" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="700" fill="#4ade80">Finished</text>
     </g><text x="430" y="713" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="11" fill="#9b96a8">finished</text><g transform="translate(520,554)"><rect width="144" height="144" rx="18" fill="#16151c"/>
     <rect width="144" height="144" rx="18" fill="#fbbf24" opacity="0.220"/>
@@ -105,7 +105,7 @@
     <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="#fbbf24" stroke-width="5" opacity="1.000"/>
     <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="#fbbf24" stroke-width="1" opacity="0.180"/>
     <text x="132" y="25" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="12" font-weight="600" fill="#9b96a8">cli</text>
-    <text x="72" y="78" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">claude-deck</text>
+    <text x="72" y="78" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">agent-vital</text>
     <text x="72" y="104" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="#fbbf24">Needs approval</text>
     <text x="72" y="127" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="400" fill="#9b96a8">WebFetch · 4s</text></g><text x="592" y="713" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="11" fill="#9b96a8">needs approval</text><g transform="translate(682,554)"><rect width="144" height="144" rx="18" fill="#16151c"/>
     <rect width="144" height="144" rx="18" fill="#a855f7" opacity="0.220"/>
@@ -113,7 +113,7 @@
     <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="#a855f7" stroke-width="5" opacity="1.000"/>
     <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="#a855f7" stroke-width="1" opacity="0.180"/>
     <text x="132" y="25" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="12" font-weight="600" fill="#9b96a8">cli</text>
-    <text x="72" y="78" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">claude-deck</text>
+    <text x="72" y="78" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">agent-vital</text>
     <text x="72" y="104" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="700" fill="#a855f7">Input needed</text>
     </g><text x="754" y="713" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="11" fill="#9b96a8">input needed</text><g transform="translate(844,554)"><rect width="144" height="144" rx="18" fill="#16151c"/>
     <rect width="144" height="144" rx="18" fill="#60a5fa" opacity="0.100"/>
@@ -121,7 +121,7 @@
     <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="#60a5fa" stroke-width="3" opacity="1.000"/>
     <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="#60a5fa" stroke-width="1" opacity="0.180"/>
     <circle cx="121" cy="20" r="11.5" fill="#211f2b" stroke="#60a5fa" stroke-width="1.5"/><text x="121" y="25" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="700" fill="#f5f1ea">2</text>
-    <text x="72" y="78" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">claude-deck</text>
+    <text x="72" y="78" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">agent-vital</text>
     <text x="72" y="104" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="700" fill="#60a5fa">Working</text>
     </g><text x="916" y="713" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="11" fill="#9b96a8">two sessions</text><g transform="translate(1006,554)"><rect width="144" height="144" rx="18" fill="#16151c"/>
     <rect width="144" height="144" rx="18" fill="#9b96a8" opacity="0.100"/>
@@ -175,7 +175,7 @@
       <g transform="translate(10,8) scale(0.9167)" fill="none" stroke="#4ade80" stroke-width="2.84" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13 L9.5 18.5 L20 6"/></g><text x="38" y="25" text-anchor="start" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="16" font-weight="800" fill="#4ade80" letter-spacing="0.5">ALLOW</text>
       <circle cx="121" cy="20" r="11.5" fill="#211f2b" stroke="#4ade80" stroke-width="1.5"/><text x="121" y="25" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="700" fill="#f5f1ea">3</text>
       <text x="72" y="92" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="#f5f1ea">docs.amplify.…</text>
-      <text x="72" y="127" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="400" fill="#9b96a8">claude-deck</text></g><text x="592" y="943" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="11" fill="#9b96a8">allow</text><g transform="translate(682,784)"><rect width="144" height="144" rx="18" fill="#16151c"/>
+      <text x="72" y="127" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="400" fill="#9b96a8">agent-vita…</text></g><text x="592" y="943" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="11" fill="#9b96a8">allow</text><g transform="translate(682,784)"><rect width="144" height="144" rx="18" fill="#16151c"/>
       <rect width="144" height="144" rx="18" fill="#60a5fa" opacity="0.220"/>
     <rect x="2" y="2" width="140" height="140" rx="17" fill="none" stroke="#60a5fa" stroke-width="2" opacity="0.450"/>
     <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="#60a5fa" stroke-width="5" opacity="1.000"/>
@@ -184,7 +184,7 @@
       <g transform="translate(10,8) scale(0.9167)" fill="none" stroke="#60a5fa" stroke-width="2.84" stroke-linecap="round" stroke-linejoin="round"><path d="M2 13 L7 18 L16.5 6.5"/><path d="M10.5 18 L20 6.5"/></g><text x="38" y="25" text-anchor="start" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="12" font-weight="800" fill="#60a5fa" letter-spacing="0.5">ALWAYS ·PRJ</text>
       <circle cx="121" cy="20" r="11.5" fill="#211f2b" stroke="#60a5fa" stroke-width="1.5"/><text x="121" y="25" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="700" fill="#f5f1ea">3</text>
       <text x="72" y="68" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">WebFetch</text><text x="72" y="90" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">domain:</text><text x="72" y="112" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="700" fill="#f5f1ea">docs.amplify.aws</text>
-      <text x="72" y="127" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="400" fill="#9b96a8">claude-deck</text></g><text x="754" y="943" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="11" fill="#9b96a8">always</text><g transform="translate(844,784)"><rect width="144" height="144" rx="18" fill="#16151c"/>
+      <text x="72" y="127" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="400" fill="#9b96a8">agent-vita…</text></g><text x="754" y="943" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="11" fill="#9b96a8">always</text><g transform="translate(844,784)"><rect width="144" height="144" rx="18" fill="#16151c"/>
       <rect width="144" height="144" rx="18" fill="#f87171" opacity="0.220"/>
     <rect x="2" y="2" width="140" height="140" rx="17" fill="none" stroke="#f87171" stroke-width="2" opacity="0.450"/>
     <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="#f87171" stroke-width="5" opacity="1.000"/>
@@ -193,7 +193,7 @@
       <g transform="translate(10,8) scale(0.9167)" fill="none" stroke="#16151c" stroke-width="2.84" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 6.5 L17.5 17.5"/><path d="M17.5 6.5 L6.5 17.5"/></g><text x="38" y="25" text-anchor="start" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="16" font-weight="800" fill="#16151c" letter-spacing="0.5">DENY</text>
       <circle cx="121" cy="20" r="11.5" fill="#211f2b" stroke="#f87171" stroke-width="1.5"/><text x="121" y="25" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="700" fill="#f5f1ea">3</text>
       <text x="72" y="92" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="#f5f1ea">docs.amplify.…</text>
-      <text x="72" y="127" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="400" fill="#9b96a8">claude-deck</text></g><text x="916" y="943" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="11" fill="#9b96a8">deny</text><g transform="translate(1006,784)"><rect width="144" height="144" rx="18" fill="#16151c"/>
+      <text x="72" y="127" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="400" fill="#9b96a8">agent-vita…</text></g><text x="916" y="943" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="11" fill="#9b96a8">deny</text><g transform="translate(1006,784)"><rect width="144" height="144" rx="18" fill="#16151c"/>
       <rect width="144" height="144" rx="18" fill="#9b96a8" opacity="0.100"/>
     <rect x="2" y="2" width="140" height="140" rx="17" fill="none" stroke="#9b96a8" stroke-width="2" opacity="0.220"/>
     <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="#9b96a8" stroke-width="3" opacity="0.800"/>

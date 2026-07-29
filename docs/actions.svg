@@ -23,12 +23,12 @@
     <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="#60a5fa" stroke-width="1" opacity="0.180"/>
     <path d="M0 37 V18 A18 18 0 0 1 18 0 H126 A18 18 0 0 1 144 18 V37 Z" fill="#7fbbbf" opacity="0.240"/><rect x="0" y="34" width="144" height="3" fill="#7fbbbf" opacity="0.95"/>
     <g transform="translate(10,8) scale(0.9167)" fill="none" stroke="#7fbbbf" stroke-width="2.84" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12 m-7 0 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0"/><path d="M12 1.5 v4"/><path d="M12 18.5 v4"/><path d="M1.5 12 h4"/><path d="M18.5 12 h4"/></g><text x="38" y="25" text-anchor="start" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="16" font-weight="800" fill="#7fbbbf" letter-spacing="0.5">FOCUS</text>
-    <text x="72" y="92" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">claude-deck</text>
+    <text x="72" y="92" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="700" fill="#f5f1ea">agent-vitals</text>
     <text x="72" y="127" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="400" fill="#9b96a8">working</text></g><text x="754" y="227" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="11" fill="#9b96a8">focus</text><g transform="translate(844,68)"><rect width="144" height="144" rx="18" fill="#16151c"/>
     
     <path d="M0 37 V18 A18 18 0 0 1 18 0 H126 A18 18 0 0 1 144 18 V37 Z" fill="#bbb08c" opacity="0.240"/><rect x="0" y="34" width="144" height="3" fill="#bbb08c" opacity="0.95"/>
     <g transform="translate(10,8) scale(0.9167)" fill="none" stroke="#bbb08c" stroke-width="2.84" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18 V6 h6 l2 2.5 h10 V18 z"/></g><text x="38" y="25" text-anchor="start" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="16" font-weight="800" fill="#bbb08c" letter-spacing="0.5">PROJECT</text>
-    <text x="72" y="92" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="19" font-weight="700" fill="#f5f1ea">claude-deck</text>
+    <text x="72" y="92" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="17" font-weight="700" fill="#f5f1ea">agent-vitals</text>
     </g><text x="916" y="227" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="11" fill="#9b96a8">project</text><g transform="translate(1006,68)"><rect width="144" height="144" rx="18" fill="#16151c"/>
     
     <path d="M0 37 V18 A18 18 0 0 1 18 0 H126 A18 18 0 0 1 144 18 V37 Z" fill="#d7a4a6" opacity="0.240"/><rect x="0" y="34" width="144" height="3" fill="#d7a4a6" opacity="0.95"/>

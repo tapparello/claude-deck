@@ -10,7 +10,7 @@
 // A file cannot have that failure mode, and eslint checks it like any other source.
 import fs from "node:fs";
 
-const DIR = "dev.tapparello.claude-deck.sdPlugin/";
+const DIR = "dev.tapparello.agent-vitals.sdPlugin/";
 const fail = (msg) => { console.error("✖ " + msg); process.exitCode = 1; };
 
 const m = JSON.parse(fs.readFileSync(DIR + "manifest.json", "utf8"));

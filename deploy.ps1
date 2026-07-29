@@ -3,8 +3,8 @@
 # it replaces the launcher and plugin icons in the deployed copy only.
 param([switch]$NoRestart)
 
-$src = Join-Path $PSScriptRoot "dev.tapparello.claude-deck.sdPlugin"
-$dst = Join-Path $env:APPDATA "Elgato\StreamDeck\Plugins\dev.tapparello.claude-deck.sdPlugin"
+$src = Join-Path $PSScriptRoot "dev.tapparello.agent-vitals.sdPlugin"
+$dst = Join-Path $env:APPDATA "Elgato\StreamDeck\Plugins\dev.tapparello.agent-vitals.sdPlugin"
 
 Stop-Process -Name StreamDeck -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
