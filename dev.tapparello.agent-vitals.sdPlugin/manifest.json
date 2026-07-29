@@ -3,7 +3,7 @@
   "Name": "Agent Vitals",
   "Version": "1.8.0.0",
   "Author": "Cristiano Tapparello",
-  "Description": "Live Claude usage limits, running Claude Code sessions, and quick-launch keys for Claude Desktop.",
+  "Description": "Usage and cost gauges, live Claude Code session status, and one-press Allow / Always / Deny for permission prompts. Plus quick-launch keys for Claude Desktop and claude.ai.",
   "UUID": "dev.tapparello.agent-vitals",
   "Icon": "imgs/plugin",
   "Category": "Agent Vitals",
