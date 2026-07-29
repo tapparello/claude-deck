@@ -1,5 +1,11 @@
 node_modules/
 *.log
+# The rotated generation the logger keeps (see LOG_OLD_FILE in src/plugin.js).
+# `*.log` does not match a name ending in `.old`.
+*.log.old
+# Built release artifact (npm run pack). Produced from the .sdPlugin folder, so
+# committing it would just be a second copy that can go stale.
+*.streamDeckPlugin
 local-assets/
 usage-cache.json
 product/

@@ -180,7 +180,7 @@ const req = (over = {}) => ({ cwd: "/Users/x/dev/claude-deck", toolName: "Bash",
 test("describeRequest names the project from cwd", () => {
   assert.equal(describeRequest(req()).name, "claude-deck");
   // 11-char cap: basename is truncated, not ellipsised away
-  assert.equal(describeRequest(req({ cwd: "/a/fmf_connect_flutter" })).name.length, 11);
+  assert.equal(describeRequest(req({ cwd: "/a/inventory_service" })).name.length, 11);
   assert.equal(describeRequest(req({ cwd: undefined })).name, "");
 });
 

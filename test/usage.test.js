@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { windowStartMs, rateFor, estimateCost, parseRequests, mergeById, aggregate, familyOf, aggregateByModel, budgetPct, gaugeSource, hasSubscriptionData, USAGE_FRESH_MS } from "../src/usage.js";
+import { windowStartMs, rateFor, estimateCost, parseRequests, mergeById, aggregate, familyOf, aggregateByModel, budgetPct, gaugeSource, hasSubscriptionData, USAGE_FRESH_MS, newDayCounts, foldDayChunk, dayCountsTotals } from "../src/usage.js";
 
 test("windowStartMs 7day is exactly now - 7 days", () => {
   const now = 1_800_000_000_000;
@@ -263,4 +263,164 @@ test("aggregate reports input and output separately from the grand total", () =>
   assert.ok(a.cost > 0);
   const empty = aggregate([], now);
   assert.deepEqual([empty.in, empty.out, empty.tokens], [0, 0, 0]);
+});
+
+// ---------- cache-write TTL split ----------
+// Claude Code transcripts carry a cache_creation breakdown:
+//   "cache_creation": {"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":8756}
+// A 5-minute cache write bills at 1.25x the input rate, a 1-hour write at 2x, so
+// the flat 1.25x this used to apply undercharged any 1-hour write. In practice
+// Claude Code only ever writes 5-minute entries (every ephemeral_1h_input_tokens
+// value across ~34k local transcript records is 0), so this changes no number
+// today — it removes an assumption rather than fixing an observed error.
+
+test("estimateCost prices 1h cache writes at 2x input, 5m at 1.25x", () => {
+  const M = 1_000_000;
+  // all 5m
+  assert.equal(estimateCost("claude-opus-4-8", { in: 0, out: 0, cacheRead: 0, cacheCreate: M, cacheCreate1h: 0 }), 6.25);
+  // all 1h -> 2 x 5
+  assert.equal(estimateCost("claude-opus-4-8", { in: 0, out: 0, cacheRead: 0, cacheCreate: M, cacheCreate1h: M }), 10);
+  // half and half -> 0.5*6.25 + 0.5*10
+  assert.equal(estimateCost("claude-opus-4-8", { in: 0, out: 0, cacheRead: 0, cacheCreate: M, cacheCreate1h: M / 2 }), 8.125);
+});
+
+test("estimateCost treats a missing cacheCreate1h as all-5m (older transcripts)", () => {
+  const M = 1_000_000;
+  assert.equal(estimateCost("claude-opus-4-8", { in: 0, out: 0, cacheRead: 0, cacheCreate: M }), 6.25);
+});
+
+test("estimateCost clamps a 1h portion larger than the total", () => {
+  const M = 1_000_000;
+  // Never let a malformed breakdown produce a negative 5m remainder.
+  assert.equal(estimateCost("claude-opus-4-8", { in: 0, out: 0, cacheRead: 0, cacheCreate: M, cacheCreate1h: 5 * M }), 10);
+});
+
+test("the 1h cache multiplier follows an input-rate override", () => {
+  const M = 1_000_000;
+  assert.equal(
+    estimateCost("claude-opus-4-8", { in: 0, out: 0, cacheRead: 0, cacheCreate: M, cacheCreate1h: M }, { opus: { in: 4 } }),
+    8, // 2 x 4
+  );
+});
+
+test("parseRequests reads the cache_creation TTL breakdown", () => {
+  const line = JSON.stringify({
+    type: "assistant", timestamp: "2026-07-28T12:00:00Z",
+    message: {
+      id: "m1", model: "claude-opus-4-8",
+      usage: {
+        input_tokens: 10, output_tokens: 5,
+        cache_read_input_tokens: 100, cache_creation_input_tokens: 80,
+        cache_creation: { ephemeral_1h_input_tokens: 30, ephemeral_5m_input_tokens: 50 },
+      },
+    },
+  });
+  const [r] = parseRequests(line);
+  assert.equal(r.tok.cacheCreate, 80, "grand total stays the full cache write");
+  assert.equal(r.tok.cacheCreate1h, 30);
+});
+
+test("parseRequests defaults cacheCreate1h to 0 when no breakdown is present", () => {
+  const line = JSON.stringify({
+    type: "assistant", timestamp: "2026-07-28T12:00:00Z",
+    message: { id: "m1", model: "claude-opus-4-8", usage: { input_tokens: 1, cache_creation_input_tokens: 40 } },
+  });
+  const [r] = parseRequests(line);
+  assert.equal(r.tok.cacheCreate, 40);
+  assert.equal(r.tok.cacheCreate1h, 0);
+});
+
+test("the TTL split does not change token totals", () => {
+  const reqs = [{ t: 10, model: "claude-opus-4-8", tok: { in: 1, out: 2, cacheRead: 3, cacheCreate: 100, cacheCreate1h: 40 } }];
+  // cacheCreate is still the whole cache write, counted once.
+  assert.equal(aggregate(reqs, 0).tokens, 1 + 2 + 3 + 100);
+});
+
+// ---------- incremental day accounting ----------
+// pollToday used to re-read every transcript touched today, in full, on every
+// tick that saw a size change — tens of MB for an active session, every 5
+// minutes. These helpers let it tail from a saved offset the way pollBurn already
+// does, which means the per-request dedup state has to survive across chunks.
+
+const dayLine = (over) => JSON.stringify({
+  type: "assistant", timestamp: "2026-07-28T12:00:00Z",
+  message: { id: "m1", model: "claude-opus-4-8", usage: { input_tokens: 10, output_tokens: 5 } },
+  ...over,
+});
+
+test("foldDayChunk counts user and assistant messages", () => {
+  const c = newDayCounts("2026-07-28");
+  foldDayChunk(c, [
+    JSON.stringify({ type: "user", timestamp: "2026-07-28T12:00:00Z" }),
+    dayLine({}),
+  ].join("\n"));
+  assert.equal(dayCountsTotals(c).msgs, 2);
+});
+
+test("foldDayChunk counts one assistant message per request id", () => {
+  const c = newDayCounts("2026-07-28");
+  // Three snapshot lines for one streamed reply.
+  foldDayChunk(c, [dayLine({}), dayLine({}), dayLine({})].join("\n"));
+  assert.equal(dayCountsTotals(c).msgs, 1);
+});
+
+test("foldDayChunk takes the max usage across snapshots of one request", () => {
+  const c = newDayCounts("2026-07-28");
+  const snap = (n) => JSON.stringify({
+    type: "assistant", timestamp: "2026-07-28T12:00:00Z",
+    message: { id: "m1", usage: { input_tokens: n, output_tokens: 0 } },
+  });
+  foldDayChunk(c, [snap(10), snap(40), snap(25)].join("\n"));
+  assert.equal(dayCountsTotals(c).tokens, 40, "counted once, at the largest snapshot");
+});
+
+test("dedup survives across chunks: a later snapshot must not double count", () => {
+  const c = newDayCounts("2026-07-28");
+  const snap = (n) => JSON.stringify({
+    type: "assistant", timestamp: "2026-07-28T12:00:00Z",
+    message: { id: "m1", usage: { input_tokens: n, output_tokens: 0 } },
+  });
+  foldDayChunk(c, snap(10));            // first tail
+  foldDayChunk(c, snap(40));            // next tick picks up the final snapshot
+  const t = dayCountsTotals(c);
+  assert.equal(t.tokens, 40, "one request, max usage — not 10+40");
+  assert.equal(t.msgs, 1, "and still one message");
+});
+
+test("foldDayChunk sums usage for lines with no request id", () => {
+  const c = newDayCounts("2026-07-28");
+  const anon = (n) => JSON.stringify({
+    type: "assistant", timestamp: "2026-07-28T12:00:00Z",
+    message: { usage: { input_tokens: n, output_tokens: 0 } },
+  });
+  foldDayChunk(c, [anon(5), anon(7)].join("\n"));
+  assert.equal(dayCountsTotals(c).tokens, 12, "no id means no dedup key, so both count");
+});
+
+test("foldDayChunk counts every cache bucket in the token total", () => {
+  const c = newDayCounts("2026-07-28");
+  foldDayChunk(c, JSON.stringify({
+    type: "assistant", timestamp: "2026-07-28T12:00:00Z",
+    message: { id: "m1", usage: {
+      input_tokens: 1, output_tokens: 2,
+      cache_read_input_tokens: 4, cache_creation_input_tokens: 8,
+    } },
+  }));
+  assert.equal(dayCountsTotals(c).tokens, 15);
+});
+
+test("foldDayChunk ignores lines from another day and undated lines", () => {
+  const c = newDayCounts("2026-07-28");
+  foldDayChunk(c, [
+    JSON.stringify({ type: "user", timestamp: "2026-07-27T23:59:00Z" }),
+    JSON.stringify({ type: "user" }),
+    dayLine({}),
+  ].join("\n"));
+  assert.equal(dayCountsTotals(c).msgs, 1);
+});
+
+test("foldDayChunk skips malformed and blank lines", () => {
+  const c = newDayCounts("2026-07-28");
+  foldDayChunk(c, ["", "not json", "{oops", dayLine({})].join("\n"));
+  assert.equal(dayCountsTotals(c).msgs, 1);
 });

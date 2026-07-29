@@ -11,10 +11,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { iconSvg, C } from "../src/keyart.js";
+import { Resvg } from "@resvg/resvg-js";
+import { iconSvg, listIconSvg, C } from "../src/keyart.js";
 
 const OUT = path.join(path.dirname(path.dirname(fileURLToPath(import.meta.url))),
   "dev.tapparello.claude-deck.sdPlugin", "imgs");
+// Action-list art lives in its own directory. It cannot share files with the key
+// art: Elgato requires the list icons to be monochrome white on TRANSPARENT, while
+// the key icons are a filled dark plate with identity hues. Same glyph table, two
+// renderings — see listIconSvg in src/keyart.js.
+const LIST_OUT = path.join(OUT, "list");
 
 // file name -> [glyph, colour]. One distinct mark per action; no two actions share one.
 const ICONS = {
@@ -52,7 +58,27 @@ if (missing.length) {
   process.exit(1);
 }
 
+fs.mkdirSync(LIST_OUT, { recursive: true });
 for (const [name, [glyphName, col]] of Object.entries(ICONS)) {
-  fs.writeFileSync(path.join(OUT, `${name}.svg`), iconSvg(glyphName, col));
+  // "plugin" is the PNG-only plugin icon (below) and the category icon (list set).
+  // Deliberately no imgs/plugin.svg: Stream Deck resolves manifest icon paths
+  // without an extension, so shipping both plugin.svg and plugin.png makes which
+  // one it picks a coin toss — deploy.sh has always deleted the .svg for exactly
+  // this reason when swapping in a local PNG.
+  if (name !== "plugin") fs.writeFileSync(path.join(OUT, `${name}.svg`), iconSvg(glyphName, col));
+  // 28px for the category icon, 20px for the actions themselves (Elgato's sizes).
+  fs.writeFileSync(path.join(LIST_OUT, `${name}.svg`), listIconSvg(glyphName, name === "plugin" ? 28 : 20));
 }
-console.log(`wrote ${Object.keys(ICONS).length} icons to ${path.relative(process.cwd(), OUT)}`);
+
+// The plugin icon must be PNG — 256x256, plus a 512x512 @2x — where every other
+// surface takes SVG. Rasterized here from the same source rather than exported by
+// hand from a drawing app, so it cannot drift from the glyph table either.
+const pluginSvg = iconSvg("grid", C.text);
+for (const [file, px] of [["plugin.png", 256], ["plugin@2x.png", 512]]) {
+  const png = new Resvg(pluginSvg, { fitTo: { mode: "width", value: px } }).render().asPng();
+  fs.writeFileSync(path.join(OUT, file), png);
+}
+
+console.log(`wrote ${Object.keys(ICONS).length - 1} key icons to ${path.relative(process.cwd(), OUT)}`);
+console.log(`wrote ${Object.keys(ICONS).length} list icons to ${path.relative(process.cwd(), LIST_OUT)}`);
+console.log("wrote plugin.png (256) and plugin@2x.png (512)");

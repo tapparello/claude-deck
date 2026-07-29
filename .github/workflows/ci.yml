@@ -30,6 +30,12 @@ jobs:
 
       - run: npm ci
 
+      - name: Lint
+        # Correctness rules only, no formatting. Runs before the build so a dead
+        # reference fails here with a file and line rather than as a runtime
+        # ReferenceError inside Stream Deck, where nothing surfaces it.
+        run: npm run lint
+
       - name: Unit tests
         run: npm test
 
@@ -49,26 +55,16 @@ jobs:
         # anywhere" paths degrade instead of throwing.
         run: npm run selftest
 
-      - name: Manifest and Property Inspector are valid
-        run: |
-          node -e "
-            const fs = require('fs');
-            const m = JSON.parse(fs.readFileSync('dev.tapparello.claude-deck.sdPlugin/manifest.json', 'utf8'));
-            if (!/^\d+\.\d+\.\d+\.\d+$/.test(m.Version)) throw new Error('Version must be 4-part: ' + m.Version);
-            const uuids = m.Actions.map(a => a.UUID);
-            if (new Set(uuids).size !== uuids.length) throw new Error('duplicate action UUID');
-            for (const a of m.Actions) {
-              if (!a.UUID.startsWith(m.UUID + '.')) throw new Error('action outside the plugin namespace: ' + a.UUID);
-              for (const icon of [a.Icon, ...(a.States || []).map(s => s.Image)]) {
-                if (icon && !fs.existsSync('dev.tapparello.claude-deck.sdPlugin/' + icon + '.svg')) {
-                  throw new Error('missing icon: ' + icon);
-                }
-              }
-              if (a.PropertyInspectorPath && !fs.existsSync('dev.tapparello.claude-deck.sdPlugin/' + a.PropertyInspectorPath)) {
-                throw new Error('missing PI: ' + a.PropertyInspectorPath);
-              }
-            }
-            const pi = fs.readFileSync('dev.tapparello.claude-deck.sdPlugin/pi/pi.html', 'utf8');
-            new Function(pi.split('<script>')[1].split('</script>')[0]);
-            console.log('manifest OK: v' + m.Version + ', ' + m.Actions.length + ' actions, PI parses');
-          "
+      - name: Package validates against Elgato's own schema
+        # A dry-run pack runs Elgato's validator over the manifest — stricter and
+        # more current than the hand-rolled checks below, and it is the same code
+        # path a Marketplace submission goes through, so a listing cannot be
+        # rejected for something CI could have caught. --no-update-check keeps it
+        # from fetching schemas mid-build.
+        run: npx streamdeck pack dev.tapparello.claude-deck.sdPlugin --dry-run --no-update-check
+
+      - name: Manifest, icons and Property Inspector are valid
+        # A real file, not an inline `node -e`: the icon rules need literal double
+        # quotes, which terminate the shell string early and broke on all three
+        # runners at once while passing locally.
+        run: npm run check:manifest

@@ -1,0 +1,70 @@
+name: Release
+
+# Tag-driven. `git tag v1.8.0 && git push --tags` builds the installable
+# .streamDeckPlugin and attaches it to a GitHub Release, so "download and copy a
+# folder into your plugins directory" stops being the install instructions.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build a release from"
+        required: true
+
+permissions:
+  contents: write # required to create the release and upload the asset
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v5
+        with:
+          # Same version Stream Deck's bundled runtime provides, so the bundle
+          # shipped to users is built by the runtime that will execute it.
+          node-version: "20"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint and test
+        run: |
+          npm run lint
+          npm test
+
+      - name: Build the bundle
+        run: npm run build
+
+      - name: Committed bundle is in sync with src
+        # A release must never ship a bundle that disagrees with the tagged source.
+        run: git diff --exit-code -- dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs
+
+      - name: Tag matches the manifest version
+        # The manifest is the version of record. Catch a tag that disagrees here,
+        # rather than shipping a package whose name and contents differ.
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          MANIFEST=$(node -p "require('./dev.tapparello.claude-deck.sdPlugin/manifest.json').Version")
+          echo "tag=$TAG manifest=$MANIFEST"
+          case "$MANIFEST" in
+            "${TAG#v}".*|"${TAG#v}") ;;
+            *) echo "::error::tag $TAG does not match manifest version $MANIFEST"; exit 1 ;;
+          esac
+
+      - name: Pack the plugin
+        run: npm run pack
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            dev.tapparello.claude-deck.streamDeckPlugin

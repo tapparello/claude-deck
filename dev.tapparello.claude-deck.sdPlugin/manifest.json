@@ -7,7 +7,7 @@
   "UUID": "dev.tapparello.claude-deck",
   "Icon": "imgs/plugin",
   "Category": "Claude Deck",
-  "CategoryIcon": "imgs/plugin",
+  "CategoryIcon": "imgs/list/plugin",
   "CodePath": "bin/plugin.mjs",
   "SDKVersion": 2,
   "Nodejs": {
@@ -32,7 +32,7 @@
       "UUID": "dev.tapparello.claude-deck.usage-session",
       "Name": "Session Usage (5h)",
       "Tooltip": "5-hour usage: the subscription session limit, or local spend over the last 5 hours on accounts without one (Foundry/Bedrock/Vertex). Set a budget to get a ring. Press to refresh.",
-      "Icon": "imgs/session",
+      "Icon": "imgs/list/session",
       "PropertyInspectorPath": "pi/pi.html",
       "Controllers": [
         "Keypad"
@@ -50,7 +50,7 @@
       "UUID": "dev.tapparello.claude-deck.usage-weekly",
       "Name": "Weekly Usage",
       "Tooltip": "Weekly usage: the subscription weekly limit, or local spend over the last 7 days on accounts without one. Set a budget to get a ring. Press to refresh.",
-      "Icon": "imgs/weekly",
+      "Icon": "imgs/list/weekly",
       "PropertyInspectorPath": "pi/pi.html",
       "Controllers": [
         "Keypad"
@@ -68,7 +68,7 @@
       "UUID": "dev.tapparello.claude-deck.sessions",
       "Name": "Active Sessions",
       "Tooltip": "Running Claude Code sessions. Press to cycle through session details.",
-      "Icon": "imgs/sessions",
+      "Icon": "imgs/list/sessions",
       "Controllers": [
         "Keypad"
       ],
@@ -85,7 +85,7 @@
       "UUID": "dev.tapparello.claude-deck.today",
       "Name": "Today's Activity",
       "Tooltip": "Today's Claude Code activity: chats, messages, and tokens. Press to refresh.",
-      "Icon": "imgs/today",
+      "Icon": "imgs/list/today",
       "Controllers": [
         "Keypad"
       ],
@@ -102,7 +102,7 @@
       "UUID": "dev.tapparello.claude-deck.launch",
       "Name": "Launch Claude Desktop",
       "Tooltip": "Open the Claude Desktop app.",
-      "Icon": "imgs/launch",
+      "Icon": "imgs/list/launch",
       "Controllers": [
         "Keypad"
       ],
@@ -116,7 +116,7 @@
       "UUID": "dev.tapparello.claude-deck.quick-chat",
       "Name": "Claude Quick Chat",
       "Tooltip": "Trigger Claude's quick-chat hotkey (Ctrl+Alt+Space on Windows; set your hotkey in settings on macOS).",
-      "Icon": "imgs/chat",
+      "Icon": "imgs/list/chat",
       "PropertyInspectorPath": "pi/pi.html",
       "Controllers": [
         "Keypad"
@@ -131,7 +131,7 @@
       "UUID": "dev.tapparello.claude-deck.open-web",
       "Name": "Open claude.ai",
       "Tooltip": "Open a new chat on claude.ai in your browser.",
-      "Icon": "imgs/web",
+      "Icon": "imgs/list/web",
       "Controllers": [
         "Keypad"
       ],
@@ -145,7 +145,7 @@
       "UUID": "dev.tapparello.claude-deck.claude-code",
       "Name": "Claude Code Terminal",
       "Tooltip": "Open a terminal running Claude Code in your GitHub folder.",
-      "Icon": "imgs/code",
+      "Icon": "imgs/list/code",
       "Controllers": [
         "Keypad"
       ],
@@ -159,7 +159,7 @@
       "UUID": "dev.tapparello.claude-deck.usage-model",
       "Name": "Model Usage (weekly)",
       "Tooltip": "Per-model usage: the subscription weekly per-model limit, or local 7-day spend per model on accounts without one. Pick the model in settings.",
-      "Icon": "imgs/model",
+      "Icon": "imgs/list/model",
       "PropertyInspectorPath": "pi/pi.html",
       "Controllers": [
         "Keypad"
@@ -177,7 +177,7 @@
       "UUID": "dev.tapparello.claude-deck.burn-rate",
       "Name": "Burn Rate",
       "Tooltip": "Tokens per hour over the last hour, plus estimated time until the 5h session cap.",
-      "Icon": "imgs/burn",
+      "Icon": "imgs/list/burn",
       "Controllers": [
         "Keypad"
       ],
@@ -194,7 +194,7 @@
       "UUID": "dev.tapparello.claude-deck.project",
       "Name": "Project Terminal",
       "Tooltip": "Open Claude Code in a specific project folder. Configure the folder in settings.",
-      "Icon": "imgs/project",
+      "Icon": "imgs/list/project",
       "PropertyInspectorPath": "pi/pi.html",
       "Controllers": [
         "Keypad"
@@ -211,7 +211,7 @@
       "UUID": "dev.tapparello.claude-deck.focus-session",
       "Name": "Focus Session",
       "Tooltip": "Press to cycle through running Claude Code sessions and bring their window to the front.",
-      "Icon": "imgs/focus",
+      "Icon": "imgs/list/focus",
       "Controllers": [
         "Keypad"
       ],
@@ -228,7 +228,7 @@
       "UUID": "dev.tapparello.claude-deck.quick-prompt",
       "Name": "Quick Prompt",
       "Tooltip": "Open Claude quick chat and paste a canned prompt. Configure the prompt in settings.",
-      "Icon": "imgs/prompt",
+      "Icon": "imgs/list/prompt",
       "PropertyInspectorPath": "pi/pi.html",
       "Controllers": [
         "Keypad"
@@ -245,7 +245,7 @@
       "UUID": "dev.tapparello.claude-deck.custom",
       "Name": "Claude Custom",
       "Tooltip": "A Claude-styled key that opens anything you choose: app, URL, or folder.",
-      "Icon": "imgs/custom",
+      "Icon": "imgs/list/custom",
       "PropertyInspectorPath": "pi/pi.html",
       "Controllers": [
         "Keypad"
@@ -262,7 +262,7 @@
       "UUID": "dev.tapparello.claude-deck.usage-meter",
       "Name": "Usage",
       "Tooltip": "Local Claude Code token volume + estimated cost for a time window. Press to toggle cost/tokens; pick the window in settings.",
-      "Icon": "imgs/usage",
+      "Icon": "imgs/list/usage",
       "PropertyInspectorPath": "pi/pi.html",
       "Controllers": [
         "Keypad"
@@ -280,7 +280,7 @@
       "UUID": "dev.tapparello.claude-deck.approver-status",
       "Name": "Claude Status",
       "Tooltip": "Live state of a Claude Code session: Needs approval / Input needed / Working / Finished / Idle. Bind to a project in settings, or leave blank to auto-track the session that needs you.",
-      "Icon": "imgs/status",
+      "Icon": "imgs/list/status",
       "PropertyInspectorPath": "pi/pi.html",
       "Controllers": [
         "Keypad"
@@ -298,7 +298,7 @@
       "UUID": "dev.tapparello.claude-deck.approver-waiting",
       "Name": "Claude Waiting",
       "Tooltip": "Lights up when any Claude Code session is waiting on you (permission prompt or question). Press to jump to that session's window; press again to cycle if several are waiting.",
-      "Icon": "imgs/waiting",
+      "Icon": "imgs/list/waiting",
       "Controllers": [
         "Keypad"
       ],
@@ -315,7 +315,7 @@
       "UUID": "dev.tapparello.claude-deck.approve-allow",
       "Name": "Claude Allow",
       "Tooltip": "Approve the pending Claude Code permission prompt (same as pressing 1 in the terminal). Shows the command it would allow. Needs the one-time hook setup in this key's settings.",
-      "Icon": "imgs/approve-allow",
+      "Icon": "imgs/list/approve-allow",
       "Controllers": [
         "Keypad"
       ],
@@ -333,7 +333,7 @@
       "UUID": "dev.tapparello.claude-deck.approve-always",
       "Name": "Claude Always Allow",
       "Tooltip": "Approve and stop asking, using Claude Code's own suggested rule (same as pressing 2 in the terminal). The key shows the rule it would save. Greys out when no safe rule is offered.",
-      "Icon": "imgs/approve-always",
+      "Icon": "imgs/list/approve-always",
       "Controllers": [
         "Keypad"
       ],
@@ -351,7 +351,7 @@
       "UUID": "dev.tapparello.claude-deck.approve-deny",
       "Name": "Claude Deny",
       "Tooltip": "Refuse the pending Claude Code permission prompt (same as pressing 3 in the terminal). The turn continues and Claude adapts.",
-      "Icon": "imgs/approve-deny",
+      "Icon": "imgs/list/approve-deny",
       "Controllers": [
         "Keypad"
       ],

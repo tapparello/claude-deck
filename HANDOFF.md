@@ -6,13 +6,31 @@ rediscover" doc. Keep it updated when you learn something the hard way.
 
 ## Repo shape
 
-- `src/plugin.js` — the actual source. Edit this, never the bundle.
+- `src/plugin.js` — the I/O shell, and the only impure module: pollers, the websocket,
+  the platform adapters, and the mutable `state`. Edit this, never the bundle. If what
+  you are changing is a *decision* rather than an effect, it probably belongs in one of
+  the pure modules below, where it can be tested.
+- `src/view.js` — what every key draws, as `viewFor(kind, env)`. Pure: everything it
+  used to read from module scope in `plugin.js` is passed in, and `plugin.js` keeps a
+  ~26-line adapter that supplies it and performs the two side effects `viewFor`
+  deliberately does not (push the image; record what the approve keys painted). Add a
+  key's display logic HERE, not in the adapter — that is the whole point of the split,
+  and `test/view.test.js` is where you prove it. `localGauge()` lives here too: it takes
+  `animPhase` as an argument rather than reading the ticker, which is what made it pure.
+- `src/usage.js` — cost and token accounting: rate table, per-request parsing, window
+  aggregation, and the incremental per-file day counters the Today key tails with.
+- `src/status.js` — session state derivation (the Claude Code status enum), urgency
+  ordering, and the recycled-pid check.
+- `src/osa.js` — platform string handling: AppleScript escaping, hotkey parsing, and
+  the `ps` output parsers.
 - `src/keyart.js` — every key's SVG, and the whole design system. Pure functions of
   their arguments, which is what lets `tools/gen-showcase.mjs` render the entire deck
   outside the plugin. Read the header comment before changing anything visual: the three
   rules there are each backed by a measurement, and two of them exist because the
-  obvious-looking alternative was tried and broke something. `localGauge()` deliberately
-  stayed in `plugin.js` — it reads the `animPhase` ticker, so it is not pure.
+  obvious-looking alternative was tried and broke something. It renders glyphs for TWO
+  surfaces with opposite rules — `iconSvg` for keys (filled plate, identity hues) and
+  `listIconSvg` for the Stream Deck action list (monochrome white on transparent, which
+  Elgato requires and CI enforces).
 - `src/approve.js` — pure decision logic for the approver (rule sanitising, key text,
   queue, press and deny-window guards). No I/O, so every rule is fixture-testable.
 - `src/hookserver.js` — the loopback listener the `PermissionRequest` hook POSTs to.
@@ -41,32 +59,41 @@ rediscover" doc. Keep it updated when you learn something the hard way.
   Stream Deck quit, which also leaves the approver's hook server down, so the keys go
   dead and Claude Code gets `ECONNREFUSED`. Check `pgrep -x "Stream Deck"` after
   deploying and run `open -a "Elgato Stream Deck"` if it is not up.
-- `tools/gen-icons.mjs` (`npm run icons`) — writes all 21 action-list icons from the
-  same glyph table the keys use. Never hand-edit `imgs/*.svg`: they had drifted to FOUR
-  different backgrounds and their own art before this existed. The script refuses to run
-  if a file on disk has no mapping, so a new action can't silently keep a stale icon.
+- `tools/gen-icons.mjs` (`npm run icons`) — writes BOTH icon sets plus the plugin icon
+  from the same glyph table the keys use: `imgs/*.svg` (key art), `imgs/list/*.svg`
+  (monochrome action-list art) and `imgs/plugin.png` + `@2x` (rasterized with
+  `@resvg/resvg-js`). Never hand-edit any of them: they had drifted to FOUR different
+  backgrounds and their own art before this existed. The script refuses to run if a file
+  on disk has no mapping, so a new action can't silently keep a stale icon. There is
+  deliberately no `imgs/plugin.svg` — manifest icon paths carry no extension, so
+  shipping both it and the PNG would make Stream Deck's choice a coin toss.
 - `tools/gen-showcase.mjs` (`npm run showcase`) — writes `docs/keys.svg` and
   `docs/actions.svg` from the real renderers, for the README. Regenerate after ANY
   visual change; the previous README shots outlived the design they documented by a
   whole redesign. `docs/*.png` are raster snapshots of those SVGs for hosts that won't
-  render SVG — refresh them by opening the SVG in a browser at natural size and
-  screenshotting, since there is no rasteriser in the toolchain.
+  render SVG. There IS a rasteriser in the toolchain now (`@resvg/resvg-js`, added for
+  the PNG plugin icon), so these no longer need the browser-screenshot dance.
+  Regenerating the showcase is also a cheap equivalence check on any refactor that
+  touches rendering: if `docs/*.svg` come back byte-identical, the key renderers did
+  not move.
 - `local-assets/claude-logo.png` is gitignored (personal-use icon override); both deploy
-  scripts copy it over the launcher/category icons if present. **It no longer reaches the
-  launch KEY:** `launch` now has a renderer, so `setImage` overwrites whatever art the
-  manifest points at. The category icon still honours it.
+  scripts copy it over `imgs/plugin.png` if present. **It reaches neither the launch KEY
+  nor the category icon:** `launch` has a renderer, so `setImage` overwrites whatever art
+  the manifest points at, and the category icon is now `imgs/list/plugin.svg`, which must
+  stay monochrome. It changes the plugin icon only. Never commit it.
 
 ## Build → deploy → verify loop
 
 ```powershell
-npm test            # 185 unit tests, no Stream Deck and no network needed
+npm run lint        # correctness-only eslint (no formatting rules)
+npm test            # 259 unit tests, no Stream Deck and no network needed
 npm run build       # src/plugin.js -> bin/plugin.mjs
 npm run selftest     # runs the plugin's poll functions headless, prints results
 .\deploy.ps1          # installs to %APPDATA%\Elgato\...\Plugins\, restarts Stream Deck
 ```
 
 ```bash
-npm test && npm run build && npm run selftest && ./deploy.sh   # macOS
+npm run lint && npm test && npm run build && npm run selftest && ./deploy.sh   # macOS
 ```
 
 `selftest` is the fast feedback loop — it calls `pollUsage`/`pollToday`/
@@ -86,6 +113,12 @@ don't try to read the live URL out of it (compare by probing the endpoint instea
 
 This is the thing most likely to bite you again if you touch `pollToday()`
 or `pollBurn()` (or add a new poller that reads `~/.claude/projects/**/*.jsonl`):
+
+**The dedup now lives in `src/usage.js`** — `parseRequests` for the cost path and
+`foldDayChunk` for the Today path — and both are unit-tested, including the case that
+matters most for an incremental reader: two snapshots of the SAME request arriving in
+different read chunks must yield one message at the larger usage, not two. If you add a
+poller, reuse those rather than re-deriving the rule; the paragraphs below are why.
 
 **One assistant turn writes multiple lines to the transcript.** When a
 response streams tool calls, Claude Code appends a new JSONL line per

@@ -3715,7 +3715,7 @@ var import_websocket_server = __toESM(require_websocket_server(), 1);
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
-import path2 from "node:path";
+import path3 from "node:path";
 import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -3788,10 +3788,10 @@ function classifyCustomCommand(cmd, { home = "", exists = () => false } = {}) {
   const raw = String(cmd ?? "").trim();
   if (!raw) return null;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return { mode: "open", arg: raw };
-  let path3 = raw;
-  if (raw === "~") path3 = home;
-  else if (raw.startsWith("~/")) path3 = home + raw.slice(1);
-  if (exists(path3)) return { mode: "open", arg: path3 };
+  let path4 = raw;
+  if (raw === "~") path4 = home;
+  else if (raw.startsWith("~/")) path4 = home + raw.slice(1);
+  if (exists(path4)) return { mode: "open", arg: path4 };
   return { mode: "app", arg: raw };
 }
 function parseKeychainToken(raw) {
@@ -3813,6 +3813,24 @@ function parsePsTree(out) {
     if (m) tree.set(m[1], { ppid: m[2], comm: m[3] });
   }
   return tree;
+}
+function parseElapsed(str) {
+  const s = String(str ?? "").trim();
+  if (/^\d+$/.test(s)) return Number(s);
+  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(s);
+  if (!m) return null;
+  const [, dd, hh, mm, ss] = m;
+  return Number(dd ?? 0) * 86400 + Number(hh ?? 0) * 3600 + Number(mm) * 60 + Number(ss);
+}
+function parseProcStarts(out, nowMs) {
+  const starts = /* @__PURE__ */ new Map();
+  for (const line2 of String(out ?? "").split("\n")) {
+    const m = /^\s*(\d+)\s+(\S+)\s*$/.exec(line2);
+    if (!m) continue;
+    const secs = parseElapsed(m[2]);
+    if (secs != null) starts.set(Number(m[1]), nowMs - secs * 1e3);
+  }
+  return starts;
 }
 function hostAppForPid(tree, pid, maxDepth = 16) {
   let cur = String(pid);
@@ -3883,12 +3901,17 @@ function rateFor(model, overrides) {
   const o = overrides?.[fam];
   return [validNum(o?.in) ?? dIn, validNum(o?.out) ?? dOut];
 }
+var CACHE_READ_MULT = 0.1;
+var CACHE_WRITE_5M_MULT = 1.25;
+var CACHE_WRITE_1H_MULT = 2;
 function estimateCost(model, tok, overrides) {
   const r = rateFor(model, overrides);
   if (!r) return 0;
   const [inR, outR] = r;
   const t = tok || {};
-  return ((t.in || 0) * inR + (t.out || 0) * outR + (t.cacheRead || 0) * 0.1 * inR + (t.cacheCreate || 0) * 1.25 * inR) / 1e6;
+  const write = t.cacheCreate || 0;
+  const write1h = Math.min(t.cacheCreate1h || 0, write);
+  return ((t.in || 0) * inR + (t.out || 0) * outR + (t.cacheRead || 0) * CACHE_READ_MULT * inR + (write - write1h) * CACHE_WRITE_5M_MULT * inR + write1h * CACHE_WRITE_1H_MULT * inR) / 1e6;
 }
 function totalOf(tok) {
   return tok.in + tok.out + tok.cacheRead + tok.cacheCreate;
@@ -3911,7 +3934,11 @@ function parseRequests(text) {
       in: u.input_tokens || 0,
       out: u.output_tokens || 0,
       cacheRead: u.cache_read_input_tokens || 0,
-      cacheCreate: u.cache_creation_input_tokens || 0
+      // Grand total of the cache write, plus the 1-hour-TTL slice of it. The
+      // breakdown lives in a nested object that older transcripts lack, hence the
+      // 0 default — see estimateCost for why that default is the right one.
+      cacheCreate: u.cache_creation_input_tokens || 0,
+      cacheCreate1h: u.cache_creation?.ephemeral_1h_input_tokens || 0
     };
     const rec = { id: j.message?.id ?? j.requestId ?? null, t: new Date(j.timestamp).getTime(), model: j.message?.model ?? "", tok };
     if (rec.id == null) {
@@ -3922,6 +3949,42 @@ function parseRequests(text) {
     if (!prev || totalOf(tok) > totalOf(prev.tok)) byId.set(rec.id, rec);
   }
   return [...byId.values(), ...noId];
+}
+function localDay(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function newDayCounts(day) {
+  return { day, msgs: 0, looseTokens: 0, reqTok: /* @__PURE__ */ new Map(), seenMsg: /* @__PURE__ */ new Set() };
+}
+function foldDayChunk(counts, text) {
+  for (const line2 of String(text ?? "").split("\n")) {
+    if (!line2) continue;
+    let j;
+    try {
+      j = JSON.parse(line2);
+    } catch {
+      continue;
+    }
+    if (!j.timestamp || localDay(j.timestamp) !== counts.day) continue;
+    const mid = j.message?.id ?? j.requestId;
+    if (j.type === "user") counts.msgs++;
+    else if (j.type === "assistant" && (!mid || !counts.seenMsg.has(mid))) {
+      if (mid) counts.seenMsg.add(mid);
+      counts.msgs++;
+    }
+    const u = j.message?.usage;
+    if (!u) continue;
+    const tok = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+    if (mid) counts.reqTok.set(mid, Math.max(counts.reqTok.get(mid) ?? 0, tok));
+    else counts.looseTokens += tok;
+  }
+  return counts;
+}
+function dayCountsTotals(counts) {
+  let tokens = counts.looseTokens;
+  for (const t of counts.reqTok.values()) tokens += t;
+  return { msgs: counts.msgs, tokens };
 }
 function mergeById(lists) {
   const byId = /* @__PURE__ */ new Map();
@@ -4021,6 +4084,12 @@ function sessionState(s, now = Date.now(), activityAt = null) {
     return Math.max(0, now - at) < FINISHED_MS ? "finished" : "idle";
   }
   return "idle";
+}
+var PID_START_SLACK_MS = 6e4;
+function pidLooksRecycled(session, procStartMs, slackMs = PID_START_SLACK_MS) {
+  const startedAt = session?.startedAt;
+  if (!startedAt || procStartMs == null) return false;
+  return procStartMs > startedAt + slackMs;
 }
 function sessionSig(sessions, now = Date.now(), activity = null) {
   return JSON.stringify((sessions ?? []).map((s) => [s.pid, s.status ?? "", s.waitingFor ?? "", sessionState(s, now, actOf(s, activity))]));
@@ -4255,6 +4324,132 @@ function pressDecision({ queue, shownId, lastHeadChangeAt, now, settleMs = SETTL
   if (h.id !== shownId) return { action: "alert", reason: "stale-paint" };
   return { action: "resolve", id: h.id, reason: "ok" };
 }
+
+// src/hookserver.js
+import { createServer } from "node:http";
+import { timingSafeEqual } from "node:crypto";
+var BODY_MAX = 1024 * 1024;
+var BADPATH_WINDOW_MS = 5 * 6e4;
+var BADPATH_MIN_HITS = 3;
+var sameSecret = (a, b) => {
+  const A = Buffer.from(String(a)), B = Buffer.from(String(b));
+  return A.length === B.length && timingSafeEqual(A, B);
+};
+function startHookServer({ port, secret, onRequest, onDrop, log: log2 = () => {
+}, retries = 3, retryMs = 500 }) {
+  if (!secret || String(secret).length < 32) {
+    return Promise.reject(new Error("hook secret too short"));
+  }
+  const wantPath = `/permission/${secret}`;
+  const stats = { badPathHits: [] };
+  let boundPort = null;
+  const server = createServer((req, res) => {
+    const deny = (code) => {
+      res.writeHead(code).end();
+    };
+    if (!sameSecret(req.url ?? "", wantPath)) {
+      const now = Date.now();
+      stats.badPathHits.push(now);
+      stats.badPathHits = stats.badPathHits.filter((t) => now - t < BADPATH_WINDOW_MS);
+      return deny(404);
+    }
+    if (stats.badPathHits.length) stats.badPathHits = [];
+    const host = String(req.headers.host ?? "");
+    if (host !== `127.0.0.1:${boundPort}` && host !== `localhost:${boundPort}`) return deny(403);
+    if (req.method !== "POST") return deny(405);
+    req.setEncoding("utf8");
+    let body = "", over = false;
+    req.on("data", (c) => {
+      if (over) return;
+      body += c;
+      if (body.length > BODY_MAX) {
+        over = true;
+        res.writeHead(413);
+        res.end();
+        res.on("finish", () => req.destroy());
+      }
+    });
+    req.on("end", () => {
+      if (over) return;
+      let payload;
+      try {
+        payload = JSON.parse(body || "{}");
+      } catch {
+        return deny(400);
+      }
+      const ticket = {
+        id: null,
+        closed: false,
+        respond(out) {
+          if (ticket.closed || res.writableEnded) return false;
+          ticket.closed = true;
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(out ?? {}));
+          return true;
+        }
+      };
+      res.on("close", () => {
+        if (res.writableEnded || ticket.closed) return;
+        ticket.closed = true;
+        onDrop?.(ticket);
+      });
+      try {
+        onRequest(payload, ticket);
+      } catch (e) {
+        log2("hook onRequest threw:", String(e));
+        ticket.respond(null);
+      }
+    });
+    req.on("error", () => {
+    });
+  });
+  return new Promise((resolve2, reject) => {
+    let left = retries;
+    const attempt = () => {
+      server.once("error", (e) => {
+        if (e.code === "EADDRINUSE" && left-- > 0) {
+          log2(`hook port ${port} busy, retrying (${left} left)`);
+          setTimeout(attempt, retryMs);
+          return;
+        }
+        reject(e);
+      });
+      server.listen(port, "127.0.0.1", () => {
+        boundPort = server.address().port;
+        server.removeAllListeners("error");
+        server.on("error", (err) => log2("hook server error:", String(err)));
+        log2(`hook server on http://127.0.0.1:${boundPort}/permission/<secret>`);
+        resolve2({
+          boundPort,
+          // The secret this server actually bound to, so a caller can tell a genuine
+          // secret CHANGE (which needs a rebind) apart from a same-secret re-assert
+          // (which doesn't) instead of comparing boundPort alone.
+          secret,
+          stats,
+          close: () => new Promise((done) => {
+            let settled = false;
+            const finish = () => {
+              if (!settled) {
+                settled = true;
+                done();
+              }
+            };
+            server.close(finish);
+            server.closeIdleConnections();
+            setTimeout(() => {
+              server.closeAllConnections?.();
+              finish();
+            }, 250).unref();
+          })
+        });
+      });
+    };
+    attempt();
+  });
+}
+
+// src/view.js
+import path2 from "node:path";
 
 // src/keyart.js
 var C = {
@@ -4544,139 +4739,262 @@ function approveKey(kind, req, o = {}) {
   return shell(col, mult, lines, name, cornerSvg, word);
 }
 
-// src/hookserver.js
-import { createServer } from "node:http";
-import { timingSafeEqual } from "node:crypto";
-var BODY_MAX = 1024 * 1024;
-var BADPATH_WINDOW_MS = 5 * 6e4;
-var BADPATH_MIN_HITS = 3;
-var sameSecret = (a, b) => {
-  const A = Buffer.from(String(a)), B = Buffer.from(String(b));
-  return A.length === B.length && timingSafeEqual(A, B);
-};
-function startHookServer({ port, secret, onRequest, onDrop, log: log2 = () => {
-}, retries = 3, retryMs = 500 }) {
-  if (!secret || String(secret).length < 32) {
-    return Promise.reject(new Error("hook secret too short"));
+// src/view.js
+var PULSE_MS = 12e4;
+function fmtReset(iso, now = Date.now()) {
+  if (!iso) return "";
+  const ms = new Date(iso).getTime() - now;
+  if (!isFinite(ms) || ms <= 0) return "resetting\u2026";
+  const h = Math.floor(ms / 36e5), m = Math.round(ms % 36e5 / 6e4);
+  if (h >= 48) return `${Math.round(h / 24)}d left`;
+  return h > 0 ? `${h}h ${m}m left` : `${m}m left`;
+}
+function fmtAgo(ms) {
+  const h = Math.floor(ms / 36e5), m = Math.floor(ms % 36e5 / 6e4);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+var GAUGE_WINDOW = { "usage-session": "5h", "usage-weekly": "7day", "usage-model": "7day" };
+function gaugeMode(state2, kind, now) {
+  const win = GAUGE_WINDOW[kind];
+  const hasLocal = !!(win && state2.usageMeter?.[win]);
+  return gaugeSource({ usage: state2.usage, usageErr: state2.usageErr, usageAt: state2.usageAt, now }, hasLocal);
+}
+function localGauge(header2, agg, budget, view = "cost", animPhase2 = null) {
+  if (!agg) return usageMeterKey(header2, "--", "no data yet", true);
+  if (view === "tokens") {
+    return usageMeterKey(header2, fmtNum(agg.tokens), `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out`, false);
   }
-  const wantPath = `/permission/${secret}`;
-  const stats = { badPathHits: [] };
-  let boundPort = null;
-  const server = createServer((req, res) => {
-    const deny = (code) => {
-      res.writeHead(code).end();
-    };
-    if (!sameSecret(req.url ?? "", wantPath)) {
-      const now = Date.now();
-      stats.badPathHits.push(now);
-      stats.badPathHits = stats.badPathHits.filter((t) => now - t < BADPATH_WINDOW_MS);
-      return deny(404);
+  const pct = budgetPct(agg.cost, budget);
+  if (pct == null) return usageMeterKey(header2, "$" + agg.cost.toFixed(2), "est", true);
+  const over = pct > 100 ? " \xB7 " + Math.round(pct) + "%" : "";
+  return gaugeKey(header2, pct, `$${Math.round(agg.cost)} / $${Math.round(Number(budget))}${over}`, pct >= 90 ? animPhase2 : null);
+}
+function modelList(state2, mode) {
+  if (mode === "local") return state2.usageMeterModels ?? [];
+  return state2.usage?.models ?? [];
+}
+function modelListIndex(pressed, list, want) {
+  if (pressed != null && list.length) return pressed % list.length;
+  if (!want || !list.length) return 0;
+  const w = String(want).toLowerCase();
+  const byName = list.findIndex((e) => String(e.name ?? e.model).toLowerCase() === w);
+  if (byName >= 0) return byName;
+  const fam = familyOf(w) ?? w;
+  const byFam = list.findIndex((e) => String(e.model ?? e.name).toLowerCase() === fam);
+  return byFam >= 0 ? byFam : 0;
+}
+function sessionEta(state2, now) {
+  if (gaugeMode(state2, "usage-session", now) !== "subscription") {
+    const b5 = state2.usageMeter?.["5h"];
+    return b5 ? "$" + b5.cost.toFixed(2) + " last 5h" : "no cap";
+  }
+  const h = state2.pctHistory ?? [];
+  if (h.length < 2) return "measuring\u2026";
+  const latest = h[h.length - 1];
+  const past = h.find((s) => latest.t - s.t >= 10 * 6e4) ?? h[0];
+  const dt = latest.t - past.t;
+  if (dt < 4 * 6e4) return "measuring\u2026";
+  const slope = (latest.pct - past.pct) / dt;
+  if (slope <= 5e-8) return "steady";
+  const msLeft = (100 - latest.pct) / slope;
+  const resetMs = state2.usage?.fiveHour?.resetsAt ? new Date(state2.usage.fiveHour.resetsAt).getTime() - latest.t : Infinity;
+  if (msLeft >= resetMs) return "resets first";
+  const hh = Math.floor(msLeft / 36e5), mm = Math.round(msLeft % 36e5 / 6e4);
+  return hh > 0 ? `cap in ~${hh}h ${mm}m` : `cap in ~${mm}m`;
+}
+function viewFor(kind, env) {
+  const {
+    state: state2,
+    settings = {},
+    now,
+    animPhase: animPhase2 = null,
+    usageViewMode = "cost",
+    pressedModelIdx = null,
+    cycleIdx = -1,
+    focus = null,
+    autoSlot: autoSlot2 = 0,
+    authFlagged: authFlagged2 = false,
+    defaultCodeDir = ""
+  } = env;
+  const img = (image) => ({ image });
+  switch (kind) {
+    case "usage-session": {
+      const mode = gaugeMode(state2, "usage-session", now);
+      if (mode === "local") return img(localGauge("LAST 5H", state2.usageMeter?.["5h"], settings.budget, usageViewMode, animPhase2));
+      if (mode !== "subscription") return img(gaugeKey("SESSION 5H", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
+      const b = state2.usage?.fiveHour;
+      return img(gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt, now) : "no data", b?.pct >= 90 ? animPhase2 : null));
     }
-    if (stats.badPathHits.length) stats.badPathHits = [];
-    const host = String(req.headers.host ?? "");
-    if (host !== `127.0.0.1:${boundPort}` && host !== `localhost:${boundPort}`) return deny(403);
-    if (req.method !== "POST") return deny(405);
-    req.setEncoding("utf8");
-    let body = "", over = false;
-    req.on("data", (c) => {
-      if (over) return;
-      body += c;
-      if (body.length > BODY_MAX) {
-        over = true;
-        res.writeHead(413);
-        res.end();
-        res.on("finish", () => req.destroy());
+    case "usage-weekly": {
+      const mode = gaugeMode(state2, "usage-weekly", now);
+      if (mode === "local") return img(localGauge("LAST 7D", state2.usageMeter?.["7day"], settings.budget, usageViewMode, animPhase2));
+      if (mode !== "subscription") return img(gaugeKey("WEEKLY", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
+      const b = state2.usage?.weekly;
+      const u = state2.usage;
+      const sub = u?.scopedPct != null && u.scopedName ? `${u.scopedName} ${Math.round(u.scopedPct)}%` : u?.weeklyOpus?.pct != null ? `opus ${Math.round(u.weeklyOpus.pct)}%` : b ? fmtReset(b.resetsAt, now) : "no data";
+      return img(gaugeKey("WEEKLY", b?.pct ?? null, sub, b?.pct >= 90 ? animPhase2 : null));
+    }
+    case "usage-model": {
+      const mmode = gaugeMode(state2, "usage-model", now);
+      if (mmode !== "subscription" && mmode !== "local") {
+        return img(gaugeKey("MODEL 7D", null, mmode === "throttled" ? "throttled" : mmode === "error" ? "sign in?" : "no data"));
       }
-    });
-    req.on("end", () => {
-      if (over) return;
-      let payload;
-      try {
-        payload = JSON.parse(body || "{}");
-      } catch {
-        return deny(400);
+      const list = modelList(state2, mmode);
+      const want = settings.model;
+      const i = modelListIndex(pressedModelIdx, list, want);
+      const pick = list[i];
+      const head_ = ((pick?.name ?? pick?.model ?? want ?? "MODEL") + "").toUpperCase().slice(0, 8) + " 7D";
+      const more = list.length > 1 ? ` ${i + 1}/${list.length}` : "";
+      if (!pick) return img(usageMeterKey(head_, "--", mmode === "local" ? "no data yet" : "no data", true));
+      if (mmode === "local") {
+        return img(localGauge(head_ + more, pick, settings.budget, usageViewMode, animPhase2));
       }
-      const ticket = {
-        id: null,
-        closed: false,
-        respond(out) {
-          if (ticket.closed || res.writableEnded) return false;
-          ticket.closed = true;
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify(out ?? {}));
-          return true;
+      return img(gaugeKey(head_ + more, pick.pct ?? null, pick.resetsAt ? fmtReset(pick.resetsAt, now) : "no data", pick.pct >= 90 ? animPhase2 : null));
+    }
+    case "burn-rate":
+      return img(burnKey(state2.burn?.tokensHour ?? null, sessionEta(state2, now)));
+    case "project": {
+      const label = settings.label || (settings.path ? path2.basename(settings.path) : "");
+      return img(labelKey("PROJECT", label || "configure", settings.path ? "" : "set folder in settings"));
+    }
+    case "focus-session": {
+      const blocked = blockedSessions(state2.sessions, now, state2.activity);
+      const pool = blocked.length ? blocked : state2.sessions;
+      const poolSig = pool.map((x) => x.pid).join(",");
+      const s = pool.length ? focus && focus.sig === poolSig ? pool[focus.i % pool.length] : pool[0] : null;
+      if (blocked.length) {
+        const b = s ?? blocked[0];
+        return img(labelKey("FOCUS", b.name ?? "session", String(b.waitingFor ?? "needs you"), C.warn, true));
+      }
+      const anyWorking = state2.sessions.some((x) => sessionState(x, now, state2.activity.get(x.sessionId) ?? null) === "working");
+      return img(labelKey("FOCUS", s ? s.name : `${state2.sessions.length} sessions`, s ? sessionState(s, now, state2.activity.get(s.sessionId) ?? null) : "press to cycle", anyWorking ? C.info : null));
+    }
+    case "quick-prompt":
+      return img(labelKey("PROMPT", settings.label || "configure", settings.prompt ? "" : "set prompt in settings"));
+    case "custom":
+      return img(labelKey("CLAUDE", settings.label || "custom", settings.command ? "" : "set command in settings"));
+    // These four used to have no case at all, so they never called setImage and kept
+    // their manifest icon forever — three flat pieces of icon art next to seventeen
+    // data panels, which is what ran two visual languages on one deck. Rendering them
+    // costs the ability to set a custom image on these keys from the Stream Deck app.
+    case "launch":
+      return img(actionKey("launch", "launch", "Desktop", "claude app"));
+    case "quick-chat":
+      return img(actionKey("chat", "chat", "New chat", "claude desktop"));
+    case "open-web":
+      return img(actionKey("web", "claude.ai", "Open", "in browser"));
+    case "claude-code":
+      return img(actionKey("code", "code", "Terminal", "~/" + path2.basename(defaultCodeDir)));
+    case "sessions": {
+      const n = state2.sessions.length;
+      if (cycleIdx >= 0 && state2.sessions[cycleIdx]) {
+        const s = state2.sessions[cycleIdx];
+        const st = sessionState(s, now, state2.activity.get(s.sessionId) ?? null);
+        const stLabel = { "needs-approval": "needs you", "input-needed": "input needed", working: "working", finished: "done", idle: "idle" }[st] ?? st;
+        const stColor = st === "needs-approval" ? C.warn : st === "input-needed" ? C.ask : st === "working" ? C.info : C.dim;
+        return img(linesKey(`${cycleIdx + 1}/${n}`, [
+          { text: (s.name ?? "session").slice(0, 11), big: false, color: C.text },
+          { text: stLabel, color: stColor },
+          { text: fmtAgo(now - (s.startedAt ?? now)) + " old", color: C.dim }
+        ]));
+      }
+      const blocked = blockedSessions(state2.sessions, now, state2.activity).length;
+      const busy = state2.sessions.filter((s) => sessionState(s, now, state2.activity.get(s.sessionId) ?? null) === "working").length;
+      const sub = blocked > 0 ? `${blocked} needs you` : busy > 0 ? `${busy} working` : n > 0 ? "all idle" : "none running";
+      const subCol = blocked > 0 ? C.warn : busy > 0 ? C.info : C.dim;
+      return img(bigCountKey("CLAUDE CODE", n, sub, subCol, busy > 0 ? animPhase2 : null, blocked > 0 ? C.warn : busy > 0 ? C.info : null, blocked > 0));
+    }
+    case "today": {
+      const t = state2.today;
+      return img(linesKey("TODAY", [
+        { text: `${t?.chats ?? "--"} chats`, color: C.text },
+        { text: `${fmtNum(t?.msgs)} msgs`, color: C.text },
+        { text: `${fmtNum(t?.tokens)} tok`, color: C.text }
+      ]));
+    }
+    case "usage-meter": {
+      const win = settings.window ?? "today";
+      const header2 = { today: "TODAY", month: "THIS MONTH", "7day": "7-DAY" }[win] ?? "TODAY";
+      const agg = state2.usageMeter?.[win];
+      const suffix = settings.label ? " \xB7 " + settings.label : "";
+      if (!agg) return img(usageMeterKey(header2, "--", "no data", usageViewMode === "cost"));
+      if (usageViewMode === "cost") return img(usageMeterKey(header2, "$" + agg.cost.toFixed(2), "cost" + suffix, true));
+      return img(usageMeterKey(header2, fmtNum(agg.tokens), agg.in != null ? `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out` : "tokens" + suffix, false));
+    }
+    case "approver-status": {
+      const resolved = resolveStatusKey(state2.sessions, settings.project ?? "", autoSlot2, now, state2.activity);
+      const cycling = !!settings.cycle && cycleIdx >= 0;
+      const entry = statusEntry(resolved, cycling ? cycleIdx : null);
+      const explicit = !!(settings.project && settings.project.trim());
+      const name = settings.label || entry.name || (settings.project ?? "");
+      let detail = "";
+      if (cycling && resolved.count > 1) {
+        const parent = entry.cwd ? path2.basename(path2.dirname(entry.cwd)) : "";
+        detail = `${cycleIdx + 1}/${resolved.count}${parent ? " \xB7 " + parent : ""}`;
+      } else if (entry.waitingFor) {
+        const waited = entry.waitingSince ? fmtShort(now - entry.waitingSince) : "";
+        detail = shortWait(entry.waitingFor) + (waited ? " \xB7 " + waited : "");
+      } else if (entry.state === "finished") {
+        detail = "just now";
+      } else if (entry.state === "idle" && entry.statusAge != null) {
+        detail = fmtAgo(entry.statusAge) + " idle";
+      }
+      const blockedNow = entry.state === "needs-approval" || entry.state === "input-needed";
+      const fresh = blockedNow && (!entry.waitingSince || now - entry.waitingSince < PULSE_MS);
+      return img(statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where, fresh ? animPhase2 : null));
+    }
+    case "approver-waiting": {
+      const blocked = blockedSessions(state2.sessions, now, state2.activity);
+      if (!blocked.length) {
+        const n = state2.sessions.length;
+        return img(statusKey("WAITING", "quiet", 1, n ? `${n} session${n > 1 ? "s" : ""} ok` : "no sessions"));
+      }
+      const i = cycleIdx >= 0 ? cycleIdx % blocked.length : 0;
+      const b = blocked[i];
+      const st = sessionState(b, now, state2.activity.get(b.sessionId) ?? null);
+      const since = b.status === "waiting" && b.statusUpdatedAt ? b.statusUpdatedAt : null;
+      const waited = since ? fmtShort(now - since) : "";
+      const why = shortWait(b.waitingFor ?? "") || "needs you";
+      const fresh = !since || now - since < PULSE_MS;
+      return img(statusKey(path2.basename(b.cwd ?? "") || "claude", st, blocked.length, why + (waited ? " \xB7 " + waited : ""), sessionWhere(b), fresh ? animPhase2 : null));
+    }
+    case "approve-allow":
+    case "approve-always":
+    case "approve-deny": {
+      const req = head(state2.approveQueue);
+      const fresh = req && now - req.receivedAt < PULSE_MS;
+      const err = state2.hookErr ?? (!state2.approveQueue.length && authFlagged2 ? "auth?" : null);
+      return {
+        image: approveKey(kind, req, {
+          sessionOnly: !!settings.sessionOnly,
+          label: settings.label,
+          err,
+          depth: state2.approveQueue.length,
+          phase: fresh ? animPhase2 : null,
+          denied: kind === "approve-always" && req ? denyBlock(state2.denies, req, now) : null
+        }),
+        // What this key is PAINTING. The press guard compares against it, so a press
+        // can never answer a request the user did not see. Returned rather than
+        // written here so this stays a pure function; the caller records it.
+        painted: {
+          reqId: req?.id ?? null,
+          rule: kind === "approve-always" && req ? alwaysRule(req, !!settings.sessionOnly) : null
         }
       };
-      res.on("close", () => {
-        if (res.writableEnded || ticket.closed) return;
-        ticket.closed = true;
-        onDrop?.(ticket);
-      });
-      try {
-        onRequest(payload, ticket);
-      } catch (e) {
-        log2("hook onRequest threw:", String(e));
-        ticket.respond(null);
-      }
-    });
-    req.on("error", () => {
-    });
-  });
-  return new Promise((resolve2, reject) => {
-    let left = retries;
-    const attempt = () => {
-      server.once("error", (e) => {
-        if (e.code === "EADDRINUSE" && left-- > 0) {
-          log2(`hook port ${port} busy, retrying (${left} left)`);
-          setTimeout(attempt, retryMs);
-          return;
-        }
-        reject(e);
-      });
-      server.listen(port, "127.0.0.1", () => {
-        boundPort = server.address().port;
-        server.removeAllListeners("error");
-        server.on("error", (err) => log2("hook server error:", String(err)));
-        log2(`hook server on http://127.0.0.1:${boundPort}/permission/<secret>`);
-        resolve2({
-          boundPort,
-          // The secret this server actually bound to, so a caller can tell a genuine
-          // secret CHANGE (which needs a rebind) apart from a same-secret re-assert
-          // (which doesn't) instead of comparing boundPort alone.
-          secret,
-          stats,
-          close: () => new Promise((done) => {
-            let settled = false;
-            const finish = () => {
-              if (!settled) {
-                settled = true;
-                done();
-              }
-            };
-            server.close(finish);
-            server.closeIdleConnections();
-            setTimeout(() => {
-              server.closeAllConnections?.();
-              finish();
-            }, 250).unref();
-          })
-        });
-      });
-    };
-    attempt();
-  });
+    }
+  }
+  return {};
 }
 
 // src/plugin.js
 var IS_MAC = process.platform === "darwin";
-var PLUGIN_DIR = path2.dirname(path2.dirname(fileURLToPath(import.meta.url)));
-var CLAUDE_DIR = path2.join(os.homedir(), ".claude");
-var CREDS_FILE = path2.join(CLAUDE_DIR, ".credentials.json");
-var SESSIONS_DIR = path2.join(CLAUDE_DIR, "sessions");
-var PROJECTS_DIR = path2.join(CLAUDE_DIR, "projects");
-var STATS_CACHE = path2.join(CLAUDE_DIR, "stats-cache.json");
+var PLUGIN_DIR = path3.dirname(path3.dirname(fileURLToPath(import.meta.url)));
+var CLAUDE_DIR = path3.join(os.homedir(), ".claude");
+var CREDS_FILE = path3.join(CLAUDE_DIR, ".credentials.json");
+var SESSIONS_DIR = path3.join(CLAUDE_DIR, "sessions");
+var PROJECTS_DIR = path3.join(CLAUDE_DIR, "projects");
 var USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
-var githubDir = path2.join(os.homedir(), "Documents", "GitHub");
+var githubDir = path3.join(os.homedir(), "Documents", "GitHub");
 var DEFAULT_CODE_DIR = fs.existsSync(githubDir) ? githubDir : os.homedir();
 var desktopAppId = "shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude";
 if (!IS_MAC) {
@@ -4693,37 +5011,30 @@ if (!IS_MAC) {
     }
   );
 }
-var LOG_FILE = path2.join(process.cwd(), "claude-deck.log");
+var LOG_FILE = path3.join(process.cwd(), "claude-deck.log");
+var LOG_OLD_FILE = LOG_FILE + ".old";
+var LOG_MAX_BYTES = 1e6;
+var logBytes = 0;
+try {
+  logBytes = fs.statSync(LOG_FILE).size;
+} catch {
+}
 function log(...args) {
   const line2 = `${(/* @__PURE__ */ new Date()).toISOString()} ${args.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(" ")}`;
   console.log(line2);
+  const bytes = Buffer.byteLength(line2) + 1;
   try {
+    if (logBytes + bytes > LOG_MAX_BYTES) {
+      try {
+        fs.renameSync(LOG_FILE, LOG_OLD_FILE);
+      } catch {
+      }
+      logBytes = 0;
+    }
     fs.appendFileSync(LOG_FILE, line2 + "\n");
+    logBytes += bytes;
   } catch {
   }
-}
-function localGauge(header2, agg, budget, view = "cost") {
-  if (!agg) return usageMeterKey(header2, "--", "no data yet", true);
-  if (view === "tokens") {
-    return usageMeterKey(header2, fmtNum(agg.tokens), `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out`, false);
-  }
-  const pct = budgetPct(agg.cost, budget);
-  if (pct == null) return usageMeterKey(header2, "$" + agg.cost.toFixed(2), "est", true);
-  const over = pct > 100 ? " \xB7 " + Math.round(pct) + "%" : "";
-  return gaugeKey(header2, pct, `$${Math.round(agg.cost)} / $${Math.round(Number(budget))}${over}`, pct >= 90 ? animPhase : null);
-}
-function fmtReset(iso) {
-  if (!iso) return "";
-  const ms = new Date(iso).getTime() - Date.now();
-  if (!isFinite(ms) || ms <= 0) return "resetting\u2026";
-  const h = Math.floor(ms / 36e5), m = Math.round(ms % 36e5 / 6e4);
-  if (h >= 48) return `${Math.round(h / 24)}d left`;
-  return h > 0 ? `${h}h ${m}m left` : `${m}m left`;
-}
-function fmtAgo(ts) {
-  const ms = Date.now() - ts;
-  const h = Math.floor(ms / 36e5), m = Math.floor(ms % 36e5 / 6e4);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 var state = {
   activity: /* @__PURE__ */ new Map(),
@@ -4731,6 +5042,8 @@ var state = {
   usage: null,
   // { fiveHour, weekly, weeklyOpus } each { pct, resetsAt }
   usageErr: null,
+  usageMeter: null,
+  // { [window]: {tokens, cost, in, out} } from pollUsageMeter
   usageMeterModels: null,
   // [{model,tokens,cost}] over 7d, for the model key in local mode
   usageAt: 0,
@@ -4760,7 +5073,7 @@ function pickBucket(o) {
 var USAGE_DELAY_BASE = 12e4;
 var usageDelay = USAGE_DELAY_BASE;
 var lastUsageAttempt = 0;
-var CACHE_FILE = path2.join(PLUGIN_DIR, "usage-cache.json");
+var CACHE_FILE = path3.join(PLUGIN_DIR, "usage-cache.json");
 try {
   const c = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
   if (Date.now() - c.at < 30 * 6e4) {
@@ -4842,27 +5155,6 @@ function scheduleResetPoll() {
   clearTimeout(resetTimer);
   resetTimer = setTimeout(pollUsage, Math.min(...deltas) + 8e3);
 }
-function modelList(mode) {
-  if (mode === "local") return state.usageMeterModels ?? [];
-  return state.usage?.models ?? [];
-}
-function modelListIndex(context, list, want, mode) {
-  const pressed = modelIdx.get(context);
-  if (pressed != null && list.length) return pressed % list.length;
-  if (!want || !list.length) return 0;
-  const w = String(want).toLowerCase();
-  const byName = list.findIndex((e) => String(e.name ?? e.model).toLowerCase() === w);
-  if (byName >= 0) return byName;
-  const fam = familyOf(w) ?? w;
-  const byFam = list.findIndex((e) => String(e.model ?? e.name).toLowerCase() === fam);
-  return byFam >= 0 ? byFam : 0;
-}
-var GAUGE_WINDOW = { "usage-session": "5h", "usage-weekly": "7day", "usage-model": "7day" };
-function gaugeMode(kind) {
-  const win = GAUGE_WINDOW[kind];
-  const hasLocal = !!(win && state.usageMeter?.[win]);
-  return gaugeSource({ usage: state.usage, usageErr: state.usageErr, usageAt: state.usageAt, now: Date.now() }, hasLocal);
-}
 var transcriptDirFor = /* @__PURE__ */ new Map();
 async function transcriptMtime(s) {
   if (!s?.sessionId) return null;
@@ -4876,7 +5168,7 @@ async function transcriptMtime(s) {
     }
   };
   if (known) {
-    const mt = await tryPath(path2.join(known, file));
+    const mt = await tryPath(path3.join(known, file));
     if (mt != null) return mt;
     transcriptDirFor.delete(s.sessionId);
   }
@@ -4884,7 +5176,7 @@ async function transcriptMtime(s) {
   if (hint) {
     const mt = await tryPath(hint);
     if (mt != null) {
-      transcriptDirFor.set(s.sessionId, path2.dirname(hint));
+      transcriptDirFor.set(s.sessionId, path3.dirname(hint));
       return mt;
     }
   }
@@ -4896,8 +5188,8 @@ async function transcriptMtime(s) {
   }
   for (const d of dirs) {
     if (!d.isDirectory()) continue;
-    const dir = path2.join(PROJECTS_DIR, d.name);
-    const mt = await tryPath(path2.join(dir, file));
+    const dir = path3.join(PROJECTS_DIR, d.name);
+    const mt = await tryPath(path3.join(dir, file));
     if (mt != null) {
       transcriptDirFor.set(s.sessionId, dir);
       return mt;
@@ -4913,18 +5205,44 @@ function pidAlive(pid) {
     return false;
   }
 }
+var pidVerdict = /* @__PURE__ */ new Map();
+var verdictKey = (s) => `${s.pid}:${s.startedAt ?? 0}`;
+async function dropRecycledPids(sessions) {
+  const unknown = sessions.filter((s) => !pidVerdict.has(verdictKey(s)));
+  if (unknown.length) {
+    let starts = null;
+    try {
+      starts = parseProcStarts(await platform.listProcStarts(), Date.now());
+    } catch (e) {
+      log("sessions: process-start listing failed, keeping all sessions:", String(e?.message ?? e));
+    }
+    if (starts) {
+      for (const s of unknown) {
+        const recycled = pidLooksRecycled(s, starts.get(s.pid) ?? null);
+        pidVerdict.set(verdictKey(s), !recycled);
+        if (recycled) {
+          log(`sessions: ignoring ${path3.basename(s.cwd ?? "")} \u2014 pid ${s.pid} belongs to a process younger than the session (stale session file)`);
+        }
+      }
+    }
+  }
+  const live = new Set(sessions.map(verdictKey));
+  for (const k of pidVerdict.keys()) if (!live.has(k)) pidVerdict.delete(k);
+  return sessions.filter((s) => pidVerdict.get(verdictKey(s)) !== false);
+}
 async function pollSessions() {
   try {
     const files = await fsp.readdir(SESSIONS_DIR).catch(() => []);
-    const out = [];
+    let out = [];
     for (const f of files) {
       if (!f.endsWith(".json")) continue;
       try {
-        const s = JSON.parse(await fsp.readFile(path2.join(SESSIONS_DIR, f), "utf8"));
+        const s = JSON.parse(await fsp.readFile(path3.join(SESSIONS_DIR, f), "utf8"));
         if (s.pid && pidAlive(s.pid)) out.push(s);
       } catch {
       }
     }
+    out = await dropRecycledPids(out);
     out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
     for (const s of out) {
       if (s.status) continue;
@@ -4990,7 +5308,7 @@ function answerAndDrop(ids, why) {
 }
 function onHookRequest(payload, ticket) {
   const toolName = String(payload?.tool_name ?? "");
-  log(`approve: ${toolName} from ${path2.basename(String(payload?.cwd ?? ""))}`);
+  log(`approve: ${toolName} from ${path3.basename(String(payload?.cwd ?? ""))}`);
   if (payload?.hook_event_name !== "PermissionRequest" || !toolName) return void ticket.respond(null);
   if (!hasApproveKey()) return void ticket.respond(null);
   const req = {
@@ -5104,7 +5422,7 @@ async function walkTranscripts(dir, cutoffMs) {
       return;
     }
     for (const e of entries) {
-      const p = path2.join(d, e.name);
+      const p = path3.join(d, e.name);
       if (e.isDirectory()) {
         await rec(p);
         continue;
@@ -5123,11 +5441,20 @@ async function walkTranscripts(dir, cutoffMs) {
   await rec(dir);
   return out;
 }
-var fileCache = /* @__PURE__ */ new Map();
-var localDay = (ts) => {
-  const d = new Date(ts);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
+var SCAN_TTL_MS = 5e3;
+var transcriptScan = { at: 0, cutoff: Infinity, files: [] };
+async function scanTranscripts(cutoffMs) {
+  const now = Date.now();
+  const fresh = now - transcriptScan.at < SCAN_TTL_MS;
+  if (fresh && transcriptScan.cutoff <= cutoffMs) {
+    return transcriptScan.files.filter((f) => f.mtimeMs >= cutoffMs);
+  }
+  const cutoff = fresh ? Math.min(transcriptScan.cutoff, cutoffMs) : cutoffMs;
+  const files = await walkTranscripts(PROJECTS_DIR, cutoff);
+  transcriptScan = { at: now, cutoff, files };
+  return files.filter((f) => f.mtimeMs >= cutoffMs);
+}
+var todayTracker = /* @__PURE__ */ new Map();
 async function pollToday() {
   try {
     const day = localDay(Date.now());
@@ -5135,50 +5462,41 @@ async function pollToday() {
     dayStart.setHours(0, 0, 0, 0);
     let msgs = 0, tokens = 0;
     const chats = /* @__PURE__ */ new Set();
-    const files = await walkTranscripts(PROJECTS_DIR, dayStart.getTime());
+    const files = await scanTranscripts(dayStart.getTime());
+    const seen = /* @__PURE__ */ new Set();
     for (const st of files) {
       const fp = st.path;
-      if (!fp.split(path2.sep).includes("subagents")) chats.add(fp);
-      const cached = fileCache.get(fp);
-      if (cached && cached.size === st.size && cached.day === day) {
-        msgs += cached.msgs;
-        tokens += cached.tokens;
-        continue;
+      seen.add(fp);
+      if (!fp.split(path3.sep).includes("subagents")) chats.add(fp);
+      let rec = todayTracker.get(fp);
+      if (!rec || rec.counts.day !== day || st.size < rec.offset) {
+        rec = { offset: 0, rest: "", counts: newDayCounts(day) };
       }
-      let fMsgs = 0, fTokens = 0;
-      try {
-        const text = await fsp.readFile(fp, "utf8");
-        const reqTok = /* @__PURE__ */ new Map();
-        const seenMsg = /* @__PURE__ */ new Set();
-        for (const line2 of text.split("\n")) {
-          if (!line2) continue;
-          let j;
+      if (st.size > rec.offset) {
+        try {
+          const fh = await fsp.open(fp, "r");
           try {
-            j = JSON.parse(line2);
-          } catch {
-            continue;
+            const len = st.size - rec.offset;
+            const buf = Buffer.alloc(len);
+            const { bytesRead } = await fh.read(buf, 0, len, rec.offset);
+            rec.offset += bytesRead;
+            const chunk = rec.rest + buf.subarray(0, bytesRead).toString("utf8");
+            const cut2 = chunk.lastIndexOf("\n");
+            rec.rest = cut2 < 0 ? chunk : chunk.slice(cut2 + 1);
+            foldDayChunk(rec.counts, cut2 < 0 ? "" : chunk.slice(0, cut2));
+          } finally {
+            await fh.close();
           }
-          if (!j.timestamp || localDay(j.timestamp) !== day) continue;
-          const mid = j.message?.id ?? j.requestId;
-          if (j.type === "user") fMsgs++;
-          else if (j.type === "assistant" && (!mid || !seenMsg.has(mid))) {
-            if (mid) seenMsg.add(mid);
-            fMsgs++;
-          }
-          const u = j.message?.usage;
-          if (!u) continue;
-          const tok = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-          if (mid) reqTok.set(mid, Math.max(reqTok.get(mid) ?? 0, tok));
-          else fTokens += tok;
+        } catch {
+          continue;
         }
-        for (const tok of reqTok.values()) fTokens += tok;
-      } catch {
-        continue;
       }
-      fileCache.set(fp, { size: st.size, day, msgs: fMsgs, tokens: fTokens });
-      msgs += fMsgs;
-      tokens += fTokens;
+      todayTracker.set(fp, rec);
+      const t = dayCountsTotals(rec.counts);
+      msgs += t.msgs;
+      tokens += t.tokens;
     }
+    for (const fp of todayTracker.keys()) if (!seen.has(fp)) todayTracker.delete(fp);
     state.today = { chats: chats.size, msgs, tokens };
     renderAll(["today"]);
   } catch (e) {
@@ -5190,9 +5508,11 @@ async function pollBurn() {
   try {
     const now = Date.now();
     const scanCutoff = now - 90 * 6e4;
-    const files = await walkTranscripts(PROJECTS_DIR, scanCutoff);
+    const files = await scanTranscripts(scanCutoff);
+    const seen = /* @__PURE__ */ new Set();
     for (const st of files) {
       const fp = st.path;
+      seen.add(fp);
       let rec = hourTracker.get(fp);
       if (!rec || st.size < rec.offset || !rec.seen) rec = { offset: 0, rest: "", events: [], seen: /* @__PURE__ */ new Map() };
       if (st.size > rec.offset) {
@@ -5200,9 +5520,9 @@ async function pollBurn() {
         try {
           const len = st.size - rec.offset;
           const buf = Buffer.alloc(len);
-          await fh.read(buf, 0, len, rec.offset);
-          rec.offset = st.size;
-          const lines = (rec.rest + buf.toString("utf8")).split("\n");
+          const { bytesRead } = await fh.read(buf, 0, len, rec.offset);
+          rec.offset += bytesRead;
+          const lines = (rec.rest + buf.subarray(0, bytesRead).toString("utf8")).split("\n");
           rec.rest = lines.pop() ?? "";
           for (const line2 of lines) {
             if (!line2) continue;
@@ -5234,6 +5554,7 @@ async function pollBurn() {
       for (const [mid, ev] of rec.seen) if (now - ev.t >= 65 * 6e4) rec.seen.delete(mid);
       hourTracker.set(fp, rec);
     }
+    for (const fp of hourTracker.keys()) if (!seen.has(fp)) hourTracker.delete(fp);
     let tokensHour = 0;
     for (const rec of hourTracker.values()) for (const e of rec.events) if (now - e.t < 36e5) tokensHour += e.tok;
     state.burn = { tokensHour, at: now };
@@ -5248,14 +5569,14 @@ async function pollUsageMeter(forceWins) {
   if (forceWins) for (const w of forceWins) wins.add(w);
   else for (const v of views.values()) {
     if (v.kind === "usage-meter") wins.add(v.settings?.window ?? "today");
-    else if (GAUGE_WINDOW[v.kind] && gaugeMode(v.kind) === "local") wins.add(GAUGE_WINDOW[v.kind]);
-    else if (v.kind === "burn-rate" && gaugeMode("usage-session") === "local") wins.add("5h");
+    else if (GAUGE_WINDOW[v.kind] && gaugeMode(state, v.kind, Date.now()) === "local") wins.add(GAUGE_WINDOW[v.kind]);
+    else if (v.kind === "burn-rate" && gaugeMode(state, "usage-session", Date.now()) === "local") wins.add("5h");
   }
   if (!wins.size) return;
   const now = Date.now();
   const cutoff = Math.min(...[...wins].map((w) => windowStartMs(w, now)));
   try {
-    const files = await walkTranscripts(PROJECTS_DIR, cutoff);
+    const files = await scanTranscripts(cutoff);
     const seen = /* @__PURE__ */ new Set();
     const lists = [];
     for (const { path: fp, size, mtimeMs } of files) {
@@ -5286,25 +5607,6 @@ async function pollUsageMeter(forceWins) {
     log("usage-meter poll failed:", String(e));
   }
 }
-function sessionEta() {
-  if (gaugeMode("usage-session") !== "subscription") {
-    const b5 = state.usageMeter?.["5h"];
-    return b5 ? "$" + b5.cost.toFixed(2) + " last 5h" : "no cap";
-  }
-  const h = state.pctHistory;
-  if (h.length < 2) return "measuring\u2026";
-  const latest = h[h.length - 1];
-  const past = h.find((s) => latest.t - s.t >= 10 * 6e4) ?? h[0];
-  const dt = latest.t - past.t;
-  if (dt < 4 * 6e4) return "measuring\u2026";
-  const slope = (latest.pct - past.pct) / dt;
-  if (slope <= 5e-8) return "steady";
-  const msLeft = (100 - latest.pct) / slope;
-  const resetMs = state.usage?.fiveHour?.resetsAt ? new Date(state.usage.fiveHour.resetsAt).getTime() - latest.t : Infinity;
-  if (msLeft >= resetMs) return "resets first";
-  const hh = Math.floor(msLeft / 36e5), mm = Math.round(msLeft % 36e5 / 6e4);
-  return hh > 0 ? `cap in ~${hh}h ${mm}m` : `cap in ~${mm}m`;
-}
 function argOf(name) {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : void 0;
@@ -5327,178 +5629,26 @@ var setTitle = (context) => send({ event: "setTitle", context, payload: { title:
 var showAlert = (context) => send({ event: "showAlert", context });
 var kindOf = (action) => action.replace("dev.tapparello.claude-deck.", "");
 function render(context, kind) {
-  switch (kind) {
-    case "usage-session": {
-      const mode = gaugeMode("usage-session");
-      if (mode === "local") return setImage(context, localGauge("LAST 5H", state.usageMeter?.["5h"], views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
-      if (mode !== "subscription") return setImage(context, gaugeKey("SESSION 5H", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
-      const b = state.usage?.fiveHour;
-      return setImage(context, gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt) : "no data", b?.pct >= 90 ? animPhase : null));
-    }
-    case "usage-weekly": {
-      const mode = gaugeMode("usage-weekly");
-      if (mode === "local") return setImage(context, localGauge("LAST 7D", state.usageMeter?.["7day"], views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
-      if (mode !== "subscription") return setImage(context, gaugeKey("WEEKLY", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
-      const b = state.usage?.weekly;
-      const u = state.usage;
-      const sub = u?.scopedPct != null && u.scopedName ? `${u.scopedName} ${Math.round(u.scopedPct)}%` : u?.weeklyOpus?.pct != null ? `opus ${Math.round(u.weeklyOpus.pct)}%` : b ? fmtReset(b.resetsAt) : "no data";
-      return setImage(context, gaugeKey("WEEKLY", b?.pct ?? null, sub, b?.pct >= 90 ? animPhase : null));
-    }
-    case "usage-model": {
-      const mmode = gaugeMode("usage-model");
-      if (mmode !== "subscription" && mmode !== "local") {
-        return setImage(context, gaugeKey("MODEL 7D", null, mmode === "throttled" ? "throttled" : mmode === "error" ? "sign in?" : "no data"));
-      }
-      const list = modelList(mmode);
-      const want = views.get(context)?.settings?.model;
-      const i = modelListIndex(context, list, want, mmode);
-      const pick = list[i];
-      const head2 = ((pick?.name ?? pick?.model ?? want ?? "MODEL") + "").toUpperCase().slice(0, 8) + " 7D";
-      const more = list.length > 1 ? ` ${i + 1}/${list.length}` : "";
-      if (!pick) return setImage(context, usageMeterKey(head2, "--", mmode === "local" ? "no data yet" : "no data", true));
-      if (mmode === "local") {
-        return setImage(context, localGauge(head2 + more, pick, views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
-      }
-      return setImage(context, gaugeKey(head2 + more, pick.pct ?? null, pick.resetsAt ? fmtReset(pick.resetsAt) : "no data", pick.pct >= 90 ? animPhase : null));
-    }
-    case "burn-rate":
-      return setImage(context, burnKey(state.burn?.tokensHour ?? null, sessionEta()));
-    case "project": {
-      const s = views.get(context)?.settings ?? {};
-      const label = s.label || (s.path ? path2.basename(s.path) : "");
-      return setImage(context, labelKey("PROJECT", label || "configure", s.path ? "" : "set folder in settings"));
-    }
-    case "focus-session": {
-      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
-      const pool = blocked.length ? blocked : state.sessions;
-      const fi = focusIdx.get(context);
-      const poolSig = pool.map((x) => x.pid).join(",");
-      const s = pool.length ? fi && fi.sig === poolSig ? pool[fi.i % pool.length] : pool[0] : null;
-      if (blocked.length) {
-        const b = s ?? blocked[0];
-        return setImage(context, labelKey("FOCUS", b.name ?? "session", String(b.waitingFor ?? "needs you"), C.warn, true));
-      }
-      const anyWorking = state.sessions.some((x) => sessionState(x, Date.now(), state.activity.get(x.sessionId) ?? null) === "working");
-      return setImage(context, labelKey("FOCUS", s ? s.name : `${state.sessions.length} sessions`, s ? sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) : "press to cycle", anyWorking ? C.info : null));
-    }
-    case "quick-prompt": {
-      const s = views.get(context)?.settings ?? {};
-      return setImage(context, labelKey("PROMPT", s.label || "configure", s.prompt ? "" : "set prompt in settings"));
-    }
-    case "custom": {
-      const s = views.get(context)?.settings ?? {};
-      return setImage(context, labelKey("CLAUDE", s.label || "custom", s.command ? "" : "set command in settings"));
-    }
-    // These four used to have no case at all, so they never called setImage and kept
-    // their manifest icon forever — three flat pieces of icon art next to seventeen
-    // data panels, which is what ran two visual languages on one deck. Rendering them
-    // costs the ability to set a custom image on these keys from the Stream Deck app.
-    case "launch":
-      return setImage(context, actionKey("launch", "launch", "Desktop", "claude app"));
-    case "quick-chat":
-      return setImage(context, actionKey("chat", "chat", "New chat", "claude desktop"));
-    case "open-web":
-      return setImage(context, actionKey("web", "claude.ai", "Open", "in browser"));
-    case "claude-code":
-      return setImage(context, actionKey("code", "code", "Terminal", "~/" + path2.basename(DEFAULT_CODE_DIR)));
-    case "sessions": {
-      const cy = cycle.get(context);
-      const n = state.sessions.length;
-      if (cy && cy.idx >= 0 && state.sessions[cy.idx]) {
-        const s = state.sessions[cy.idx];
-        const st = sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null);
-        const stLabel = { "needs-approval": "needs you", "input-needed": "input needed", working: "working", finished: "done", idle: "idle" }[st] ?? st;
-        const stColor = st === "needs-approval" ? C.warn : st === "input-needed" ? C.ask : st === "working" ? C.info : C.dim;
-        return setImage(context, linesKey(`${cy.idx + 1}/${n}`, [
-          { text: (s.name ?? "session").slice(0, 11), big: false, color: C.text },
-          { text: stLabel, color: stColor },
-          { text: fmtAgo(s.startedAt ?? Date.now()) + " old", color: C.dim }
-        ]));
-      }
-      const blocked = blockedSessions(state.sessions, Date.now(), state.activity).length;
-      const busy = state.sessions.filter((s) => sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) === "working").length;
-      const sub = blocked > 0 ? `${blocked} needs you` : busy > 0 ? `${busy} working` : n > 0 ? "all idle" : "none running";
-      const subCol = blocked > 0 ? C.warn : busy > 0 ? C.info : C.dim;
-      return setImage(context, bigCountKey("CLAUDE CODE", n, sub, subCol, busy > 0 ? animPhase : null, blocked > 0 ? C.warn : busy > 0 ? C.info : null, blocked > 0));
-    }
-    case "today": {
-      const t = state.today;
-      return setImage(context, linesKey("TODAY", [
-        { text: `${t?.chats ?? "--"} chats`, color: C.text },
-        { text: `${fmtNum(t?.msgs)} msgs`, color: C.text },
-        { text: `${fmtNum(t?.tokens)} tok`, color: C.text }
-      ]));
-    }
-    case "usage-meter": {
-      const s = views.get(context)?.settings ?? {};
-      const win = s.window ?? "today";
-      const header2 = { today: "TODAY", month: "THIS MONTH", "7day": "7-DAY" }[win] ?? "TODAY";
-      const view = usageView.get(context) ?? "cost";
-      const agg = state.usageMeter?.[win];
-      const suffix = s.label ? " \xB7 " + s.label : "";
-      if (!agg) return setImage(context, usageMeterKey(header2, "--", "no data", view === "cost"));
-      if (view === "cost") return setImage(context, usageMeterKey(header2, "$" + agg.cost.toFixed(2), "cost" + suffix, true));
-      return setImage(context, usageMeterKey(header2, fmtNum(agg.tokens), agg.in != null ? `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out` : "tokens" + suffix, false));
-    }
-    case "approver-status": {
-      const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoSlotFor(context), Date.now(), state.activity);
-      const cy = cycle.get(context);
-      const cycling = !!s.cycle && !!(cy && cy.idx >= 0);
-      const entry = statusEntry(resolved, cycling ? cy.idx : null);
-      const explicit = !!(s.project && s.project.trim());
-      const name = s.label || entry.name || (s.project ?? "");
-      let detail = "";
-      if (cycling && resolved.count > 1) {
-        const parent = entry.cwd ? path2.basename(path2.dirname(entry.cwd)) : "";
-        detail = `${cy.idx + 1}/${resolved.count}${parent ? " \xB7 " + parent : ""}`;
-      } else if (entry.waitingFor) {
-        const waited = entry.waitingSince ? fmtShort(Date.now() - entry.waitingSince) : "";
-        detail = shortWait(entry.waitingFor) + (waited ? " \xB7 " + waited : "");
-      } else if (entry.state === "finished") {
-        detail = "just now";
-      } else if (entry.state === "idle" && entry.statusAge != null) {
-        detail = fmtAgo(Date.now() - entry.statusAge) + " idle";
-      }
-      const blockedNow = entry.state === "needs-approval" || entry.state === "input-needed";
-      const fresh = blockedNow && (!entry.waitingSince || Date.now() - entry.waitingSince < PULSE_MS);
-      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where, fresh ? animPhase : null));
-    }
-    case "approver-waiting": {
-      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
-      if (!blocked.length) {
-        const n = state.sessions.length;
-        return setImage(context, statusKey("WAITING", "quiet", 1, n ? `${n} session${n > 1 ? "s" : ""} ok` : "no sessions"));
-      }
-      const cy = cycle.get(context);
-      const i = cy && cy.idx >= 0 ? cy.idx % blocked.length : 0;
-      const b = blocked[i];
-      const st = sessionState(b, Date.now(), state.activity.get(b.sessionId) ?? null);
-      const since = b.status === "waiting" && b.statusUpdatedAt ? b.statusUpdatedAt : null;
-      const waited = since ? fmtShort(Date.now() - since) : "";
-      const why = shortWait(b.waitingFor ?? "") || "needs you";
-      const fresh = !since || Date.now() - since < PULSE_MS;
-      return setImage(context, statusKey(path2.basename(b.cwd ?? "") || "claude", st, blocked.length, why + (waited ? " \xB7 " + waited : ""), sessionWhere(b), fresh ? animPhase : null));
-    }
-    case "approve-allow":
-    case "approve-always":
-    case "approve-deny": {
-      const s = views.get(context)?.settings ?? {};
-      const req = head(state.approveQueue);
-      shownReq.set(context, req?.id ?? null);
-      shownRule.set(context, kind === "approve-always" && req ? alwaysRule(req, !!s.sessionOnly) : null);
-      const fresh = req && Date.now() - req.receivedAt < PULSE_MS;
-      const err = state.hookErr ?? (!state.approveQueue.length && authFlagged() ? "auth?" : null);
-      return setImage(context, approveKey(kind, req, {
-        sessionOnly: !!s.sessionOnly,
-        label: s.label,
-        err,
-        depth: state.approveQueue.length,
-        phase: fresh ? animPhase : null,
-        denied: kind === "approve-always" && req ? denyBlock(state.denies, req, Date.now()) : null
-      }));
-    }
+  const v = views.get(context);
+  const cy = cycle.get(context);
+  const { image, painted } = viewFor(kind, {
+    state,
+    settings: v?.settings ?? {},
+    now: Date.now(),
+    animPhase,
+    usageViewMode: usageView.get(context) ?? "cost",
+    pressedModelIdx: modelIdx.get(context) ?? null,
+    cycleIdx: cy && cy.idx >= 0 ? cy.idx : -1,
+    focus: focusIdx.get(context) ?? null,
+    autoSlot: kind === "approver-status" ? autoSlotFor(context) : 0,
+    authFlagged: authFlagged(),
+    defaultCodeDir: DEFAULT_CODE_DIR
+  });
+  if (painted) {
+    shownReq.set(context, painted.reqId);
+    shownRule.set(context, painted.rule);
   }
+  if (image != null) setImage(context, image);
 }
 function renderAll(kinds) {
   for (const [context, v] of views) if (kinds.includes(v.kind)) render(context, v.kind);
@@ -5511,7 +5661,6 @@ function sessionByPid(pid) {
   return state.sessions.find((s) => s.pid === pid) ?? null;
 }
 var OSA_TIMEOUT_MS = 8e3;
-var PULSE_MS = 12e4;
 function spawnDetached(cmd, args) {
   return new Promise((resolve2, reject) => {
     const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
@@ -5547,7 +5696,7 @@ function pbcopy(text) {
 }
 function focusTarget(s) {
   const name = String(s.name ?? "").replace(/["'‘’“”]/g, "").slice(0, 40);
-  return (name || path2.basename(s.cwd ?? "")).toLowerCase();
+  return (name || path3.basename(s.cwd ?? "")).toLowerCase();
 }
 var winPlatform = {
   launchDesktop() {
@@ -5617,6 +5766,22 @@ if ($found -eq [IntPtr]::Zero) { exit 1 };
         else psFallback();
       });
       wt.unref();
+    });
+  },
+  // "<pid> <elapsed-seconds>" per line, for the recycled-pid check. Shaped to
+  // match macOS `ps -axo pid=,etimes=` so one parser serves both platforms.
+  // StartTime throws on some protected system processes — skip those rather than
+  // failing the whole listing, since a pid we cannot read is simply left
+  // unverified (and therefore kept).
+  listProcStarts() {
+    const ps = 'Get-Process | ForEach-Object { try { "$($_.Id) $([int]((Get-Date) - $_.StartTime).TotalSeconds)" } catch {} }';
+    return new Promise((resolve2, reject) => {
+      execFile(
+        "powershell.exe",
+        ["-NoProfile", "-Command", ps],
+        { timeout: OSA_TIMEOUT_MS, maxBuffer: 4 << 20 },
+        (err, out) => err ? reject(err) : resolve2(String(out))
+      );
     });
   },
   // OAuth token from the credentials file (Windows/Linux location).
@@ -5710,7 +5875,7 @@ var macPlatform = {
         }).catch(fallback("tty lookup failed"));
       }
       if (strat === "vscode") {
-        const base2 = path2.basename(s.cwd ?? "");
+        const base2 = path3.basename(s.cwd ?? "");
         if (!base2) return activateApp();
         const esc2 = escapeAppleScript(base2);
         return runOsa([
@@ -5733,6 +5898,20 @@ var macPlatform = {
         ]).catch(fallback("vscode window match failed"));
       }
       return activateApp();
+    });
+  },
+  // "<pid> <elapsed>" per line, for the recycled-pid check. `etime`, not `etimes`:
+  // the seconds-valued `etimes` keyword is a GNU procps extension and BSD ps exits
+  // with "keyword not found" (measured). parseElapsed handles etime's
+  // "[[dd-]hh:]mm:ss" shape, which is numeric and so locale-independent.
+  listProcStarts() {
+    return new Promise((resolve2, reject) => {
+      execFile(
+        "ps",
+        ["-axo", "pid=,etime="],
+        { timeout: OSA_TIMEOUT_MS, maxBuffer: 4 << 20 },
+        (err, out) => err ? reject(err) : resolve2(String(out))
+      );
     });
   },
   // OAuth token from the login Keychain (service "Claude Code-credentials"),
@@ -5765,7 +5944,7 @@ function onKeyDown(context, kind) {
   switch (kind) {
     case "usage-session":
     case "usage-weekly":
-      if (gaugeMode(kind) === "local") {
+      if (gaugeMode(state, kind, Date.now()) === "local") {
         usageView.set(context, (usageView.get(context) ?? "cost") === "cost" ? "tokens" : "cost");
         pollUsageMeter();
         return render(context, kind);
@@ -5789,10 +5968,10 @@ function onKeyDown(context, kind) {
       return render(context, "sessions");
     }
     case "usage-model": {
-      const mode = gaugeMode("usage-model");
-      const list = modelList(mode);
+      const mode = gaugeMode(state, "usage-model", Date.now());
+      const list = modelList(state, mode);
       if (list.length > 1) {
-        const cur = modelListIndex(context, list, views.get(context)?.settings?.model, mode);
+        const cur = modelListIndex(modelIdx.get(context) ?? null, list, views.get(context)?.settings?.model);
         modelIdx.set(context, (cur + 1) % list.length);
       } else if (mode === "local") pollUsageMeter();
       else if (Date.now() - lastUsageAttempt > 3e4) pollUsage();
@@ -5937,7 +6116,7 @@ if (process.argv.includes("--selftest")) {
     log("selftest status (auto k0):", JSON.stringify(statusEntry(resolveStatusKey(state.sessions, "", 0, Date.now(), state.activity))));
     const demo0 = state.sessions[0];
     if (demo0) {
-      const proj = path2.basename(demo0.cwd ?? "");
+      const proj = path3.basename(demo0.cwd ?? "");
       const r = resolveStatusKey(state.sessions, proj, 0, Date.now(), state.activity);
       log(`selftest status (explicit ${proj}) count=${r.count}:`, JSON.stringify(statusEntry(r)));
     }
@@ -5945,7 +6124,7 @@ if (process.argv.includes("--selftest")) {
     log("selftest today:", JSON.stringify(state.today));
     await pollUsageMeter(["5h"]);
     await pollBurn();
-    log("selftest burn:", JSON.stringify(state.burn), "eta:", sessionEta());
+    log("selftest burn:", JSON.stringify(state.burn), "eta:", sessionEta(state, Date.now()));
     await pollUsageMeter(["5h", "today", "month", "7day"]);
     log("selftest usage-meter:", JSON.stringify(state.usageMeter));
     log("selftest per-model 7d:", JSON.stringify(state.usageMeterModels));
@@ -6088,7 +6267,7 @@ if (process.argv.includes("--selftest")) {
     if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
     if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");
     for (const [k, win] of Object.entries(GAUGE_WINDOW)) {
-      if (gaugeMode(k) !== "local") continue;
+      if (gaugeMode(state, k, Date.now()) !== "local") continue;
       const agg = k === "usage-model" ? (state.usageMeterModels ?? [])[0] : state.usageMeter?.[win];
       const bud = [...views.values()].find((v) => v.kind === k)?.settings?.budget;
       if (agg && (budgetPct(agg.cost, bud) ?? 0) >= 90) kinds.push(k);

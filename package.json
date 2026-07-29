@@ -1,6 +1,6 @@
 {
   "name": "claude-deck",
-  "version": "1.0.0",
+  "version": "1.8.0",
   "private": true,
   "type": "module",
   "description": "Stream Deck plugin: Claude usage, active sessions, and shortcuts",
@@ -8,6 +8,9 @@
     "build": "esbuild src/plugin.js --bundle --platform=node --format=esm --outfile=dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs --external:bufferutil --external:utf-8-validate --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\"",
     "selftest": "node dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs --selftest",
     "test": "node --test",
+    "lint": "eslint .",
+    "check:manifest": "node tools/check-manifest.mjs",
+    "pack": "streamdeck pack dev.tapparello.claude-deck.sdPlugin --force --no-update-check",
     "icons": "node tools/gen-icons.mjs",
     "showcase": "node tools/gen-showcase.mjs"
   },
@@ -15,6 +18,9 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "esbuild": "^0.24.2"
+    "@elgato/cli": "^1.7.4",
+    "@resvg/resvg-js": "^2.6.2",
+    "esbuild": "^0.24.2",
+    "eslint": "^9.39.5"
   }
 }

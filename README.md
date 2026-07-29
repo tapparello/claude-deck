@@ -73,13 +73,25 @@ can't drift from the code. `docs/keys.svg` and `docs/actions.svg` are the crisp 
 
 ## Install
 
-1. Download/clone this repo.
+Download `dev.tapparello.claude-deck.streamDeckPlugin` from the
+[latest release](https://github.com/tapparello/claude-deck/releases/latest) and
+double-click it. Stream Deck installs it and the actions appear under the
+**Claude Deck** category.
+
+<details>
+<summary>Or install from source</summary>
+
+1. Clone this repo and run `npm install && npm run build`.
 2. Close the Stream Deck app.
 3. Copy `dev.tapparello.claude-deck.sdPlugin` into your plugins folder:
    - **Windows:** `%APPDATA%\Elgato\StreamDeck\Plugins\`
-   - **macOS:** `~/Library/Application Support/com.elgato.StreamDeck/Plugins/` (or run `./deploy.sh`)
-4. Start the Stream Deck app — the actions appear under the **Claude Deck** category.
-5. Optional: double-click `Claude.streamDeckProfile` to import a starter profile with some of the keys already arranged — including Allow / Always Allow / Deny, which still need the hook installed (next section) before they do anything.
+   - **macOS:** `~/Library/Application Support/com.elgato.StreamDeck/Plugins/` (or run `./deploy.sh`, which also restarts Stream Deck)
+4. Start the Stream Deck app.
+
+`npm run pack` builds the same `.streamDeckPlugin` file the release ships.
+</details>
+
+Optional: double-click `Claude.streamDeckProfile` to import a starter profile with some of the keys already arranged — including Allow / Always Allow / Deny, which still need the hook installed (next section) before they do anything.
 
 ### Approving from the deck (Allow / Always Allow / Deny)
 
@@ -158,12 +170,23 @@ On macOS:
 ```bash
 npm install
 npm run build      # bundles src/plugin.js -> dev.tapparello.claude-deck.sdPlugin/bin/plugin.mjs
-npm test           # runs the src/osa.js unit tests (node:test)
+npm test           # unit tests for the pure modules (node:test)
+npm run lint       # correctness-only eslint; no formatting rules
 npm run selftest   # exercises the usage/session/today/burn pollers without Stream Deck
+npm run icons      # regenerates both icon sets + the PNG plugin icon from one glyph table
+npm run pack       # builds the installable .streamDeckPlugin
 ./deploy.sh        # installs to ~/Library/Application Support/com.elgato.StreamDeck/Plugins/, restarts Stream Deck
 ```
 
-The plugin speaks the Stream Deck WebSocket protocol directly — the only runtime dependency is `ws`. Debug log: `claude-deck.log` inside the installed plugin folder.
+The plugin speaks the Stream Deck WebSocket protocol directly — the only runtime
+dependency is `ws`. Debug log: `claude-deck.log` inside the installed plugin folder,
+capped at 1 MB with one rotated generation (`claude-deck.log.old`).
+
+Most of the logic lives in pure, unit-tested modules — `usage.js` (cost and token
+accounting), `status.js` (session state), `view.js` (what every key draws),
+`keyart.js` (the SVG renderers), `approve.js` (permission decisions), `osa.js`
+(platform string handling). `plugin.js` is the I/O shell: pollers, the websocket, and
+the platform adapters. Tagging `v*` builds and publishes a release.
 
 ## macOS permissions
 

@@ -18,6 +18,7 @@ function textExtents(dataUri) {
     const attrs = m[1], body = m[2];
     if (!body.trim()) continue;
     const num = (k) => Number((attrs.match(new RegExp(`${k}="([^"]+)"`)) ?? [])[1]);
+    // eslint-disable-next-line no-sparse-arrays -- default array; only [1] is read
     const anchor = (attrs.match(/text-anchor="([^"]+)"/) ?? [, "start"])[1];
     const w = body.length * ADVANCE * num("font-size");
     const x = num("x");
@@ -164,7 +165,7 @@ test("no report or action key overflows its box on adversarial input", () => {
   assertInsideBox(burnKey(40_600_000, "$39.25 last 5h"), "burn");
   assertInsideBox(bigCountKey("claude code", 7, "1 working", null, 2, null, false), "bigCount");
   assertInsideBox(linesKey("today", [{ text: "16 chats" }, { text: LONG }, { text: "58.6M tok" }]), "lines");
-  assertInsideBox(statusKey("ctapparello", "needs-approval", 3, "WebFetch · 4s", "cli", 1), "status");
+  assertInsideBox(statusKey("monorepo-ui", "needs-approval", 3, "WebFetch · 4s", "cli", 1), "status");
   assertInsideBox(statusKey(LONG, "working", 1, LONG, "code"), "status long");
   assertInsideBox(labelKey("FOCUS", LONG, LONG), "label long");
   assertInsideBox(labelKey("PROJECT", "claude-deck", "set folder in settings"), "label");

@@ -8,21 +8,20 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript } from "./osa.js";
-import { windowStartMs, parseRequests, mergeById, aggregate, aggregateByModel, budgetPct, gaugeSource, familyOf } from "./usage.js";
-import { resolveStatusKey, statusEntry, autoSlot, sessionWhere, fmtShort, shortWait, sessionState, blockedSessions, sessionSig, transcriptPathFor } from "./status.js";
+import { escapeAppleScript, parseHotkey, hotkeyClause, classifyCustomCommand, parseKeychainToken, parsePsTree, hostAppForPid, focusStrategyForBundle, terminalFocusScript, parseProcStarts } from "./osa.js";
+import { windowStartMs, parseRequests, mergeById, aggregate, aggregateByModel, budgetPct, localDay, newDayCounts, foldDayChunk, dayCountsTotals } from "./usage.js";
+import { resolveStatusKey, statusEntry, autoSlot, sessionState, blockedSessions, sessionSig, transcriptPathFor, pidLooksRecycled } from "./status.js";
 import { randomBytes } from "node:crypto";
 import {
-  decisionBody, describeRequest, alwaysRule, pressDecision,
+  decisionBody, alwaysRule, pressDecision,
   enqueue, head, resolve, expiredIds, staleIds, seedBaselines, hookFragment,
   rememberDeny, denyBlock, pruneDenies,
   PORT_DEFAULT, HOLD_S_DEFAULT, QUEUE_MAX,
 } from "./approve.js";
-import {
-  C, gaugeKey, linesKey, bigCountKey, burnKey, usageMeterKey, labelKey, actionKey,
-  statusKey, approveKey, fmtNum,
-} from "./keyart.js";
 import { startHookServer, BADPATH_WINDOW_MS, BADPATH_MIN_HITS } from "./hookserver.js";
+import {
+  viewFor, gaugeMode, GAUGE_WINDOW, modelList, modelListIndex, sessionEta, PULSE_MS,
+} from "./view.js";
 
 const IS_MAC = process.platform === "darwin";
 
@@ -32,7 +31,6 @@ const CLAUDE_DIR = path.join(os.homedir(), ".claude");
 const CREDS_FILE = path.join(CLAUDE_DIR, ".credentials.json");
 const SESSIONS_DIR = path.join(CLAUDE_DIR, "sessions");
 const PROJECTS_DIR = path.join(CLAUDE_DIR, "projects");
-const STATS_CACHE = path.join(CLAUDE_DIR, "stats-cache.json");
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const githubDir = path.join(os.homedir(), "Documents", "GitHub");
 const DEFAULT_CODE_DIR = fs.existsSync(githubDir) ? githubDir : os.homedir();
@@ -46,53 +44,43 @@ if (!IS_MAC) {
 }
 
 // ---------- logging ----------
+// Size-capped with one generation kept, so the log can never grow without bound:
+// Stream Deck keeps this process alive for weeks, and README tells users to open
+// and share this file. Disk is bounded at 2 * LOG_MAX_BYTES.
+//
+// The running total is tracked in memory rather than stat'ing on every call —
+// every poll failure and every approve decision logs, and this is a sync write on
+// the same thread that renders keys. Seeded from the file already on disk so a
+// restart does not reset the budget and let the old file grow past the cap.
 const LOG_FILE = path.join(process.cwd(), "claude-deck.log");
+const LOG_OLD_FILE = LOG_FILE + ".old";
+const LOG_MAX_BYTES = 1_000_000;
+let logBytes = 0;
+try { logBytes = fs.statSync(LOG_FILE).size; } catch {}
+
 function log(...args) {
   const line = `${new Date().toISOString()} ${args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")}`;
   console.log(line);
-  try { fs.appendFileSync(LOG_FILE, line + "\n"); } catch {}
+  const bytes = Buffer.byteLength(line) + 1; // byteLength, not length: paths and session names are not all ASCII
+  try {
+    if (logBytes + bytes > LOG_MAX_BYTES) {
+      // rename replaces any existing .old, so exactly one generation survives.
+      // Guarded separately: a missing LOG_FILE must not cost us the append below.
+      try { fs.renameSync(LOG_FILE, LOG_OLD_FILE); } catch {}
+      logBytes = 0;
+    }
+    fs.appendFileSync(LOG_FILE, line + "\n");
+    logBytes += bytes;
+  } catch {}
 }
 
-
-// A gauge key rendered from local transcript data. With a budget it becomes the
-// familiar ring (gaugeKey clamps the drawn bar at 100%, so an overage is carried
-// in the sub-line instead); without one it shows the absolute spend. A missing
-// aggregate renders "--" — never "$0.00", which would claim zero spend on a
-// machine that has spent hundreds today.
-function localGauge(header, agg, budget, view = "cost") {
-  if (!agg) return usageMeterKey(header, "--", "no data yet", true);
-  // Token view: the grand total big, with the plain input/output split beneath,
-  // since that is what you compare against a provider's per-token billing.
-  if (view === "tokens") {
-    return usageMeterKey(header, fmtNum(agg.tokens), `${fmtNum(agg.in)} in · ${fmtNum(agg.out)} out`, false);
-  }
-  const pct = budgetPct(agg.cost, budget);
-  if (pct == null) return usageMeterKey(header, "$" + agg.cost.toFixed(2), "est", true);
-  const over = pct > 100 ? " · " + Math.round(pct) + "%" : "";
-  return gaugeKey(header, pct, `$${Math.round(agg.cost)} / $${Math.round(Number(budget))}${over}`, pct >= 90 ? animPhase : null);
-}
-
-
-// ---------- formatting ----------
-function fmtReset(iso) {
-  if (!iso) return "";
-  const ms = new Date(iso).getTime() - Date.now();
-  if (!isFinite(ms) || ms <= 0) return "resetting…";
-  const h = Math.floor(ms / 3.6e6), m = Math.round((ms % 3.6e6) / 6e4);
-  if (h >= 48) return `${Math.round(h / 24)}d left`;
-  return h > 0 ? `${h}h ${m}m left` : `${m}m left`;
-}
-function fmtAgo(ts) {
-  const ms = Date.now() - ts;
-  const h = Math.floor(ms / 3.6e6), m = Math.floor((ms % 3.6e6) / 6e4);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
-}
 
 // ---------- data: usage (OAuth endpoint — same source as /usage & Claude Desktop) ----------
 const state = {
   activity: new Map(), // sessionId -> transcript mtimeMs (status-less sessions only)
   usage: null,        // { fiveHour, weekly, weeklyOpus } each { pct, resetsAt }
   usageErr: null,
+  usageMeter: null,   // { [window]: {tokens, cost, in, out} } from pollUsageMeter
   usageMeterModels: null, // [{model,tokens,cost}] over 7d, for the model key in local mode
   usageAt: 0,
   sessions: [],
@@ -207,38 +195,6 @@ function scheduleResetPoll() {
   resetTimer = setTimeout(pollUsage, Math.min(...deltas) + 8000);
 }
 
-// The models a Model key can rotate through: subscription buckets, or the local
-// per-family split. One shape for both so the render/press paths agree.
-function modelList(mode) {
-  if (mode === "local") return state.usageMeterModels ?? [];
-  return state.usage?.models ?? [];
-}
-// Index this key is showing: an explicit press wins, else the configured model
-// (matched by family, since a name saved from API days won't equal "opus"), else
-// the first (priciest / highest) entry.
-function modelListIndex(context, list, want, mode) {
-  const pressed = modelIdx.get(context);
-  if (pressed != null && list.length) return pressed % list.length;
-  if (!want || !list.length) return 0;
-  const w = String(want).toLowerCase();
-  const byName = list.findIndex((e) => String(e.name ?? e.model).toLowerCase() === w);
-  if (byName >= 0) return byName;
-  const fam = familyOf(w) ?? w;
-  const byFam = list.findIndex((e) => String(e.model ?? e.name).toLowerCase() === fam);
-  return byFam >= 0 ? byFam : 0;
-}
-
-// Which local window each gauge key needs when it falls back.
-const GAUGE_WINDOW = { "usage-session": "5h", "usage-weekly": "7day", "usage-model": "7day" };
-
-// Source for the gauge keys. Kept in one place so the poller and all three
-// render cases can never disagree about which mode they are in.
-function gaugeMode(kind) {
-  const win = GAUGE_WINDOW[kind];
-  const hasLocal = !!(win && state.usageMeter?.[win]);
-  return gaugeSource({ usage: state.usage, usageErr: state.usageErr, usageAt: state.usageAt, now: Date.now() }, hasLocal);
-}
-
 // mtime of a session's transcript. The slugified path is only a hint (the
 // Windows rule is unverified), so on a miss we locate <sessionId>.jsonl by name
 // and remember which directory it was in — correct on any platform, and one
@@ -276,10 +232,47 @@ function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+// Verdicts for the recycled-pid check, keyed by pid AND startedAt so the same pid
+// reused by a genuinely new session is re-verified rather than inheriting the old
+// answer. Pruned every tick against the live set — this map must not become the
+// third unbounded cache.
+const pidVerdict = new Map(); // "pid:startedAt" -> true (genuine) | false (recycled)
+const verdictKey = (s) => `${s.pid}:${s.startedAt ?? 0}`;
+
+// Drop sessions whose file outlived its process and whose pid now belongs to
+// something else (see pidLooksRecycled). The process listing costs one subprocess,
+// so it runs only when an unverified session appears — sessions are long-lived, so
+// in practice that is once per session, not once per 5s tick.
+async function dropRecycledPids(sessions) {
+  const unknown = sessions.filter((s) => !pidVerdict.has(verdictKey(s)));
+  if (unknown.length) {
+    let starts = null;
+    try {
+      starts = parseProcStarts(await platform.listProcStarts(), Date.now());
+    } catch (e) {
+      // Fail open, and deliberately do NOT cache a verdict: a transient failure
+      // must not permanently mark an unverified session as genuine.
+      log("sessions: process-start listing failed, keeping all sessions:", String(e?.message ?? e));
+    }
+    if (starts) {
+      for (const s of unknown) {
+        const recycled = pidLooksRecycled(s, starts.get(s.pid) ?? null);
+        pidVerdict.set(verdictKey(s), !recycled);
+        if (recycled) {
+          log(`sessions: ignoring ${path.basename(s.cwd ?? "")} — pid ${s.pid} belongs to a process younger than the session (stale session file)`);
+        }
+      }
+    }
+  }
+  const live = new Set(sessions.map(verdictKey));
+  for (const k of pidVerdict.keys()) if (!live.has(k)) pidVerdict.delete(k);
+  return sessions.filter((s) => pidVerdict.get(verdictKey(s)) !== false);
+}
+
 async function pollSessions() {
   try {
     const files = await fsp.readdir(SESSIONS_DIR).catch(() => []);
-    const out = [];
+    let out = [];
     for (const f of files) {
       if (!f.endsWith(".json")) continue;
       try {
@@ -287,6 +280,9 @@ async function pollSessions() {
         if (s.pid && pidAlive(s.pid)) out.push(s);
       } catch {}
     }
+    // Before anything derives from this list — including the approver's staleness
+    // baselines below — discard sessions whose pid was recycled after a crash.
+    out = await dropRecycledPids(out);
     out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
     // The VS Code extension writes no status at all, so for those sessions only,
     // stat the transcript to tell "mid-turn" from "idle". One stat per such
@@ -540,13 +536,46 @@ async function walkTranscripts(dir, cutoffMs) {
   return out;
 }
 
-// ---------- data: today's activity (local JSONL, incremental-ish) ----------
-const fileCache = new Map(); // path -> { size, mtime, msgs, tokens }
-const todayKey = () => new Date().toISOString().slice(0, 10);
-const localDay = (ts) => {
-  const d = new Date(ts);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
+// One directory walk shared by every consumer that asks for an overlapping window.
+//
+// pollBurn, pollUsageMeter and pollToday each used to walk ~/.claude/projects and
+// stat every .jsonl independently — pollBurn and pollUsageMeter both on a 60s
+// timer, so on a machine with many projects that was two full traversals a minute
+// doing identical work, plus a third every 5 minutes and one more on every Usage
+// key press.
+//
+// The TTL is deliberately short. It exists to collapse callers that fire at
+// essentially the same moment (the two 60s timers are started together and stay in
+// step), NOT to serve stale data: pollBurn decides how many bytes to tail from
+// each file's size, so a stale size just defers those lines to its next tick.
+const SCAN_TTL_MS = 5_000;
+let transcriptScan = { at: 0, cutoff: Infinity, files: [] };
+
+async function scanTranscripts(cutoffMs) {
+  const now = Date.now();
+  const fresh = now - transcriptScan.at < SCAN_TTL_MS;
+  // A cached scan is usable only if it reaches at least as far back as this
+  // caller needs; the caller then narrows it to its own window.
+  if (fresh && transcriptScan.cutoff <= cutoffMs) {
+    return transcriptScan.files.filter((f) => f.mtimeMs >= cutoffMs);
+  }
+  // Widen to the union while the cache is fresh, so a month-window Usage key and
+  // the 90-minute burn scan take turns paying for one traversal instead of
+  // invalidating each other's.
+  const cutoff = fresh ? Math.min(transcriptScan.cutoff, cutoffMs) : cutoffMs;
+  const files = await walkTranscripts(PROJECTS_DIR, cutoff);
+  transcriptScan = { at: now, cutoff, files };
+  return files.filter((f) => f.mtimeMs >= cutoffMs);
+}
+
+// ---------- data: today's activity (incremental tail of today's transcripts) ----------
+// Tails each file from a saved offset, the same shape pollBurn uses. The previous
+// version re-read every transcript touched today IN FULL whenever its size changed
+// — for an active session that is the whole file, every 5 minutes, and transcripts
+// reach tens of MB. The dedup state that makes a partial read correct (one count
+// per request id, max usage across snapshots) lives in the accumulator, so it
+// survives between chunks; see newDayCounts/foldDayChunk in usage.js.
+const todayTracker = new Map(); // path -> { offset, rest, counts }
 
 async function pollToday() {
   try {
@@ -554,45 +583,48 @@ async function pollToday() {
     const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
     let msgs = 0, tokens = 0;
     const chats = new Set();
-    const files = await walkTranscripts(PROJECTS_DIR, dayStart.getTime());
+    const files = await scanTranscripts(dayStart.getTime());
+    const seen = new Set();
     for (const st of files) {
       const fp = st.path;
-        if (!fp.split(path.sep).includes("subagents")) chats.add(fp); // conversations only (cross-platform)
-        const cached = fileCache.get(fp);
-        if (cached && cached.size === st.size && cached.day === day) {
-          msgs += cached.msgs; tokens += cached.tokens;
-          continue;
-        }
-        let fMsgs = 0, fTokens = 0;
+      seen.add(fp);
+      if (!fp.split(path.sep).includes("subagents")) chats.add(fp); // conversations only (cross-platform)
+      let rec = todayTracker.get(fp);
+      // Restart from scratch on a new local day (the counts are day-scoped) or if
+      // the file shrank, which means it was rewritten and our offset is meaningless.
+      if (!rec || rec.counts.day !== day || st.size < rec.offset) {
+        rec = { offset: 0, rest: "", counts: newDayCounts(day) };
+      }
+      if (st.size > rec.offset) {
         try {
-          const text = await fsp.readFile(fp, "utf8");
-          // One assistant message streams as several snapshot lines, each
-          // stamped with the whole request's usage — count each request once
-          // (max, in case a later snapshot carries the final totals).
-          const reqTok = new Map(); // message.id/requestId -> tokens
-          const seenMsg = new Set();
-          for (const line of text.split("\n")) {
-            if (!line) continue;
-            let j;
-            try { j = JSON.parse(line); } catch { continue; }
-            if (!j.timestamp || localDay(j.timestamp) !== day) continue;
-            const mid = j.message?.id ?? j.requestId;
-            if (j.type === "user") fMsgs++;
-            else if (j.type === "assistant" && (!mid || !seenMsg.has(mid))) {
-              if (mid) seenMsg.add(mid);
-              fMsgs++;
-            }
-            const u = j.message?.usage;
-            if (!u) continue;
-            const tok = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-            if (mid) reqTok.set(mid, Math.max(reqTok.get(mid) ?? 0, tok));
-            else fTokens += tok;
-          }
-          for (const tok of reqTok.values()) fTokens += tok;
+          const fh = await fsp.open(fp, "r");
+          try {
+            const len = st.size - rec.offset;
+            const buf = Buffer.alloc(len);
+            // Trust bytesRead, not st.size: the shared scan's stat can be a few
+            // seconds old, so a file rewritten in between would leave the tail of
+            // `buf` as NUL padding and feed it to the parser.
+            const { bytesRead } = await fh.read(buf, 0, len, rec.offset);
+            rec.offset += bytesRead;
+            // A read can land mid-line; hold the remainder for the next chunk so
+            // foldDayChunk only ever sees whole lines.
+            const chunk = rec.rest + buf.subarray(0, bytesRead).toString("utf8");
+            const cut = chunk.lastIndexOf("\n");
+            rec.rest = cut < 0 ? chunk : chunk.slice(cut + 1);
+            foldDayChunk(rec.counts, cut < 0 ? "" : chunk.slice(0, cut));
+          } finally { await fh.close(); }
         } catch { continue; }
-        fileCache.set(fp, { size: st.size, day, msgs: fMsgs, tokens: fTokens });
-        msgs += fMsgs; tokens += fTokens;
+      }
+      todayTracker.set(fp, rec);
+      const t = dayCountsTotals(rec.counts);
+      msgs += t.msgs; tokens += t.tokens;
     }
+    // Drop entries for files that left the scan (not touched today). Without this
+    // the map only ever grows: the plugin runs for weeks, and at every local
+    // midnight the whole previous day's file set becomes unreachable but stays
+    // resident. A file outside today's scan contributes nothing to today's totals,
+    // so forgetting it cannot change the numbers.
+    for (const fp of todayTracker.keys()) if (!seen.has(fp)) todayTracker.delete(fp);
     state.today = { chats: chats.size, msgs, tokens };
     renderAll(["today"]);
   } catch (e) {
@@ -607,9 +639,11 @@ async function pollBurn() {
   try {
     const now = Date.now();
     const scanCutoff = now - 90 * 60_000;
-    const files = await walkTranscripts(PROJECTS_DIR, scanCutoff);
+    const files = await scanTranscripts(scanCutoff);
+    const seen = new Set();
     for (const st of files) {
       const fp = st.path;
+        seen.add(fp);
         let rec = hourTracker.get(fp);
         if (!rec || st.size < rec.offset || !rec.seen) rec = { offset: 0, rest: "", events: [], seen: new Map() };
         if (st.size > rec.offset) {
@@ -617,9 +651,10 @@ async function pollBurn() {
           try {
             const len = st.size - rec.offset;
             const buf = Buffer.alloc(len);
-            await fh.read(buf, 0, len, rec.offset);
-            rec.offset = st.size;
-            const lines = (rec.rest + buf.toString("utf8")).split("\n");
+            // See pollToday: bytesRead, not st.size, or NUL padding reaches the parser.
+            const { bytesRead } = await fh.read(buf, 0, len, rec.offset);
+            rec.offset += bytesRead;
+            const lines = (rec.rest + buf.subarray(0, bytesRead).toString("utf8")).split("\n");
             rec.rest = lines.pop() ?? "";
             for (const line of lines) {
               if (!line) continue;
@@ -644,6 +679,13 @@ async function pollBurn() {
         for (const [mid, ev] of rec.seen) if (now - ev.t >= 65 * 60_000) rec.seen.delete(mid);
         hourTracker.set(fp, rec);
     }
+    // Same leak as fileCache: every project ever touched kept a record (with its
+    // own `seen` Map) for the life of the process. A file that fell out of the
+    // 90-minute scan has no line newer than that, so its newest event is already
+    // outside the 65-minute window below and its contribution to tokensHour is
+    // zero — dropping it is exact, not approximate. If work resumes in that
+    // project the record is rebuilt from offset 0 on the next tick.
+    for (const fp of hourTracker.keys()) if (!seen.has(fp)) hourTracker.delete(fp);
     let tokensHour = 0;
     for (const rec of hourTracker.values()) for (const e of rec.events) if (now - e.t < 3.6e6) tokensHour += e.tok;
     state.burn = { tokensHour, at: now };
@@ -662,15 +704,15 @@ async function pollUsageMeter(forceWins) {
   else for (const v of views.values()) {
     if (v.kind === "usage-meter") wins.add(v.settings?.window ?? "today");
     // Gauge keys need a local window too, but only while they're in fallback.
-    else if (GAUGE_WINDOW[v.kind] && gaugeMode(v.kind) === "local") wins.add(GAUGE_WINDOW[v.kind]);
+    else if (GAUGE_WINDOW[v.kind] && gaugeMode(state, v.kind, Date.now()) === "local") wins.add(GAUGE_WINDOW[v.kind]);
     // Burn Rate's ETA falls back to local 5h spend, so it needs that window too.
-    else if (v.kind === "burn-rate" && gaugeMode("usage-session") === "local") wins.add("5h");
+    else if (v.kind === "burn-rate" && gaugeMode(state, "usage-session", Date.now()) === "local") wins.add("5h");
   }
   if (!wins.size) return; // gated: no Usage keys visible
   const now = Date.now();
   const cutoff = Math.min(...[...wins].map((w) => windowStartMs(w, now)));
   try {
-    const files = await walkTranscripts(PROJECTS_DIR, cutoff);
+    const files = await scanTranscripts(cutoff);
     const seen = new Set();
     const lists = [];
     for (const { path: fp, size, mtimeMs } of files) {
@@ -694,31 +736,6 @@ async function pollUsageMeter(forceWins) {
   } catch (e) {
     log("usage-meter poll failed:", String(e));
   }
-}
-
-// Projects time-to-cap from the trend of 5h utilization samples
-function sessionEta() {
-  // pctHistory is fed only from the subscription 5h percentage, so on an account
-  // without one it stays empty forever and this used to read "measuring…"
-  // indefinitely — implying a number was coming that never would. Say what is
-  // actually true instead; the tok/hr figure above it is still real.
-  if (gaugeMode("usage-session") !== "subscription") {
-    const b5 = state.usageMeter?.["5h"];
-    return b5 ? "$" + b5.cost.toFixed(2) + " last 5h" : "no cap";
-  }
-  const h = state.pctHistory;
-  if (h.length < 2) return "measuring…";
-  const latest = h[h.length - 1];
-  const past = h.find((s) => latest.t - s.t >= 10 * 60_000) ?? h[0];
-  const dt = latest.t - past.t;
-  if (dt < 4 * 60_000) return "measuring…";
-  const slope = (latest.pct - past.pct) / dt;
-  if (slope <= 5e-8) return "steady";
-  const msLeft = (100 - latest.pct) / slope;
-  const resetMs = state.usage?.fiveHour?.resetsAt ? new Date(state.usage.fiveHour.resetsAt).getTime() - latest.t : Infinity;
-  if (msLeft >= resetMs) return "resets first";
-  const hh = Math.floor(msLeft / 3.6e6), mm = Math.round((msLeft % 3.6e6) / 6e4);
-  return hh > 0 ? `cap in ~${hh}h ${mm}m` : `cap in ~${mm}m`;
 }
 
 // ---------- websocket / stream deck plumbing ----------
@@ -747,199 +764,30 @@ const showAlert = (context) => send({ event: "showAlert", context });
 
 const kindOf = (action) => action.replace("dev.tapparello.claude-deck.", "");
 
+// Adapter: resolve this key's per-context UI state, ask view.js what to draw, then
+// perform the two side effects it deliberately does not — pushing the image, and
+// recording what the approve keys painted for the press guard to check.
 function render(context, kind) {
-  switch (kind) {
-    case "usage-session": {
-      const mode = gaugeMode("usage-session");
-      if (mode === "local") return setImage(context, localGauge("LAST 5H", state.usageMeter?.["5h"], views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
-      if (mode !== "subscription") return setImage(context, gaugeKey("SESSION 5H", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
-      const b = state.usage?.fiveHour;
-      return setImage(context, gaugeKey("SESSION 5H", b?.pct ?? null, b ? fmtReset(b.resetsAt) : "no data", b?.pct >= 90 ? animPhase : null));
-    }
-    case "usage-weekly": {
-      const mode = gaugeMode("usage-weekly");
-      if (mode === "local") return setImage(context, localGauge("LAST 7D", state.usageMeter?.["7day"], views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
-      if (mode !== "subscription") return setImage(context, gaugeKey("WEEKLY", null, mode === "throttled" ? "throttled" : mode === "error" ? "sign in?" : "no data"));
-      const b = state.usage?.weekly;
-      const u = state.usage;
-      const sub = u?.scopedPct != null && u.scopedName
-        ? `${u.scopedName} ${Math.round(u.scopedPct)}%`
-        : u?.weeklyOpus?.pct != null ? `opus ${Math.round(u.weeklyOpus.pct)}%`
-        : b ? fmtReset(b.resetsAt) : "no data";
-      return setImage(context, gaugeKey("WEEKLY", b?.pct ?? null, sub, b?.pct >= 90 ? animPhase : null));
-    }
-    case "usage-model": {
-      const mmode = gaugeMode("usage-model");
-      if (mmode !== "subscription" && mmode !== "local") {
-        return setImage(context, gaugeKey("MODEL 7D", null, mmode === "throttled" ? "throttled" : mmode === "error" ? "sign in?" : "no data"));
-      }
-      const list = modelList(mmode);
-      const want = views.get(context)?.settings?.model;
-      const i = modelListIndex(context, list, want, mmode);
-      const pick = list[i];
-      const head = ((pick?.name ?? pick?.model ?? want ?? "MODEL") + "").toUpperCase().slice(0, 8) + " 7D";
-      const more = list.length > 1 ? ` ${i + 1}/${list.length}` : "";
-      if (!pick) return setImage(context, usageMeterKey(head, "--", mmode === "local" ? "no data yet" : "no data", true));
-      if (mmode === "local") {
-        return setImage(context, localGauge(head + more, pick, views.get(context)?.settings?.budget, usageView.get(context) ?? "cost"));
-      }
-      return setImage(context, gaugeKey(head + more, pick.pct ?? null, pick.resetsAt ? fmtReset(pick.resetsAt) : "no data", pick.pct >= 90 ? animPhase : null));
-    }
-    case "burn-rate":
-      return setImage(context, burnKey(state.burn?.tokensHour ?? null, sessionEta()));
-    case "project": {
-      const s = views.get(context)?.settings ?? {};
-      const label = s.label || (s.path ? path.basename(s.path) : "");
-      return setImage(context, labelKey("PROJECT", label || "configure", s.path ? "" : "set folder in settings"));
-    }
-    case "focus-session": {
-      // Blocked sessions take priority: pressing goes straight to the one that
-      // needs you, and the key advertises that with the reason + a warm accent.
-      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
-      const pool = blocked.length ? blocked : state.sessions;
-      const fi = focusIdx.get(context);
-      const poolSig = pool.map((x) => x.pid).join(",");
-      // Only trust the remembered index while the pool is unchanged; otherwise
-      // show the top of the pool rather than a session the user never focused.
-      const s = pool.length ? (fi && fi.sig === poolSig ? pool[fi.i % pool.length] : pool[0]) : null;
-      if (blocked.length) {
-        const b = s ?? blocked[0];
-        return setImage(context, labelKey("FOCUS", b.name ?? "session", String(b.waitingFor ?? "needs you"), C.warn, true));
-      }
-      const anyWorking = state.sessions.some((x) => sessionState(x, Date.now(), state.activity.get(x.sessionId) ?? null) === "working");
-      return setImage(context, labelKey("FOCUS", s ? s.name : `${state.sessions.length} sessions`, s ? sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) : "press to cycle", anyWorking ? C.info : null));
-    }
-    case "quick-prompt": {
-      const s = views.get(context)?.settings ?? {};
-      return setImage(context, labelKey("PROMPT", s.label || "configure", s.prompt ? "" : "set prompt in settings"));
-    }
-    case "custom": {
-      const s = views.get(context)?.settings ?? {};
-      return setImage(context, labelKey("CLAUDE", s.label || "custom", s.command ? "" : "set command in settings"));
-    }
-    // These four used to have no case at all, so they never called setImage and kept
-    // their manifest icon forever — three flat pieces of icon art next to seventeen
-    // data panels, which is what ran two visual languages on one deck. Rendering them
-    // costs the ability to set a custom image on these keys from the Stream Deck app.
-    case "launch":
-      return setImage(context, actionKey("launch", "launch", "Desktop", "claude app"));
-    case "quick-chat":
-      return setImage(context, actionKey("chat", "chat", "New chat", "claude desktop"));
-    case "open-web":
-      return setImage(context, actionKey("web", "claude.ai", "Open", "in browser"));
-    case "claude-code":
-      return setImage(context, actionKey("code", "code", "Terminal", "~/" + path.basename(DEFAULT_CODE_DIR)));
-    case "sessions": {
-      const cy = cycle.get(context);
-      const n = state.sessions.length;
-      if (cy && cy.idx >= 0 && state.sessions[cy.idx]) {
-        const s = state.sessions[cy.idx];
-        // Use the derived state, not the raw status: "waiting" is blocked-on-you,
-        // and rendering it in success-green was the very bug phase 2 fixes.
-        const st = sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null);
-        const stLabel = { "needs-approval": "needs you", "input-needed": "input needed", working: "working", finished: "done", idle: "idle" }[st] ?? st;
-        const stColor = st === "needs-approval" ? C.warn : st === "input-needed" ? C.ask : st === "working" ? C.info : C.dim;
-        return setImage(context, linesKey(`${cy.idx + 1}/${n}`, [
-          { text: (s.name ?? "session").slice(0, 11), big: false, color: C.text },
-          { text: stLabel, color: stColor },
-          { text: fmtAgo(s.startedAt ?? Date.now()) + " old", color: C.dim },
-        ]));
-      }
-      // "waiting" means blocked on the human — never count that as working.
-      const blocked = blockedSessions(state.sessions, Date.now(), state.activity).length;
-      const busy = state.sessions.filter((s) => sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) === "working").length;
-      const sub = blocked > 0 ? `${blocked} needs you` : busy > 0 ? `${busy} working` : n > 0 ? "all idle" : "none running";
-      const subCol = blocked > 0 ? C.warn : busy > 0 ? C.info : C.dim;
-      return setImage(context, bigCountKey("CLAUDE CODE", n, sub, subCol, busy > 0 ? animPhase : null, blocked > 0 ? C.warn : busy > 0 ? C.info : null, blocked > 0));
-    }
-    case "today": {
-      const t = state.today;
-      return setImage(context, linesKey("TODAY", [
-        { text: `${t?.chats ?? "--"} chats`, color: C.text },
-        { text: `${fmtNum(t?.msgs)} msgs`, color: C.text },
-        { text: `${fmtNum(t?.tokens)} tok`, color: C.text },
-      ]));
-    }
-    case "usage-meter": {
-      const s = views.get(context)?.settings ?? {};
-      const win = s.window ?? "today";
-      const header = { today: "TODAY", month: "THIS MONTH", "7day": "7-DAY" }[win] ?? "TODAY";
-      const view = usageView.get(context) ?? "cost";
-      const agg = state.usageMeter?.[win];
-      const suffix = s.label ? " · " + s.label : "";
-      if (!agg) return setImage(context, usageMeterKey(header, "--", "no data", view === "cost"));
-      if (view === "cost") return setImage(context, usageMeterKey(header, "$" + agg.cost.toFixed(2), "cost" + suffix, true));
-      return setImage(context, usageMeterKey(header, fmtNum(agg.tokens), agg.in != null ? `${fmtNum(agg.in)} in · ${fmtNum(agg.out)} out` : "tokens" + suffix, false));
-    }
-    case "approver-status": {
-      const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoSlotFor(context), Date.now(), state.activity);
-      const cy = cycle.get(context);
-      // Only honour an in-flight cycle while the key opts into cycling, so
-      // unchecking the box takes effect immediately instead of leaving the key
-      // parked on a cycled session.
-      const cycling = !!s.cycle && !!(cy && cy.idx >= 0);
-      const entry = statusEntry(resolved, cycling ? cy.idx : null);
-      const explicit = !!(s.project && s.project.trim());
-      const name = s.label || entry.name || (s.project ?? "");
-      let detail = "";
-      if (cycling && resolved.count > 1) {
-        const parent = entry.cwd ? path.basename(path.dirname(entry.cwd)) : "";
-        detail = `${cy.idx + 1}/${resolved.count}${parent ? " · " + parent : ""}`;
-      } else if (entry.waitingFor) {
-        // why it's blocked, plus how long — "just asked" vs "stuck since coffee"
-        const waited = entry.waitingSince ? fmtShort(Date.now() - entry.waitingSince) : "";
-        detail = shortWait(entry.waitingFor) + (waited ? " · " + waited : "");
-      } else if (entry.state === "finished") {
-        detail = "just now"; // fmtAgo floors to minutes, so it would always read "0m"
-      } else if (entry.state === "idle" && entry.statusAge != null) {
-        detail = fmtAgo(Date.now() - entry.statusAge) + " idle";
-      }
-      const blockedNow = entry.state === "needs-approval" || entry.state === "input-needed";
-      const fresh = blockedNow && (!entry.waitingSince || Date.now() - entry.waitingSince < PULSE_MS);
-      return setImage(context, statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where, fresh ? animPhase : null));
-    }
-    case "approver-waiting": {
-      // Dark and quiet until a session is actually blocked on you.
-      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
-      if (!blocked.length) {
-        const n = state.sessions.length;
-        return setImage(context, statusKey("WAITING", "quiet", 1, n ? `${n} session${n > 1 ? "s" : ""} ok` : "no sessions"));
-      }
-      const cy = cycle.get(context);
-      const i = cy && cy.idx >= 0 ? cy.idx % blocked.length : 0;
-      const b = blocked[i];
-      const st = sessionState(b, Date.now(), state.activity.get(b.sessionId) ?? null);
-      const since = b.status === "waiting" && b.statusUpdatedAt ? b.statusUpdatedAt : null;
-      const waited = since ? fmtShort(Date.now() - since) : "";
-      const why = shortWait(b.waitingFor ?? "") || "needs you";
-      const fresh = !since || Date.now() - since < PULSE_MS;
-      return setImage(context, statusKey(path.basename(b.cwd ?? "") || "claude", st, blocked.length, why + (waited ? " · " + waited : ""), sessionWhere(b), fresh ? animPhase : null));
-    }
-    case "approve-allow":
-    case "approve-always":
-    case "approve-deny": {
-      const s = views.get(context)?.settings ?? {};
-      const req = head(state.approveQueue);
-      // Record what this key is PAINTING. Task 7's press guard compares against it,
-      // so a press can never answer a request the user did not see.
-      shownReq.set(context, req?.id ?? null);
-      shownRule.set(context, kind === "approve-always" && req ? alwaysRule(req, !!s.sessionOnly) : null);
-      const fresh = req && Date.now() - req.receivedAt < PULSE_MS;
-      // A mis-pasted or stale URL 404s inside our own handler, so it IS countable - but
-      // only REPEATED 404s are evidence of that; see authFlagged().
-      const err = state.hookErr
-        ?? (!state.approveQueue.length && authFlagged() ? "auth?" : null);
-      return setImage(context, approveKey(kind, req, {
-        sessionOnly: !!s.sessionOnly,
-        label: s.label,
-        err,
-        depth: state.approveQueue.length,
-        phase: fresh ? animPhase : null,
-        denied: kind === "approve-always" && req ? denyBlock(state.denies, req, Date.now()) : null,
-      }));
-    }
+  const v = views.get(context);
+  const cy = cycle.get(context);
+  const { image, painted } = viewFor(kind, {
+    state,
+    settings: v?.settings ?? {},
+    now: Date.now(),
+    animPhase,
+    usageViewMode: usageView.get(context) ?? "cost",
+    pressedModelIdx: modelIdx.get(context) ?? null,
+    cycleIdx: cy && cy.idx >= 0 ? cy.idx : -1,
+    focus: focusIdx.get(context) ?? null,
+    autoSlot: kind === "approver-status" ? autoSlotFor(context) : 0,
+    authFlagged: authFlagged(),
+    defaultCodeDir: DEFAULT_CODE_DIR,
+  });
+  if (painted) {
+    shownReq.set(context, painted.reqId);
+    shownRule.set(context, painted.rule);
   }
+  if (image != null) setImage(context, image);
 }
 
 function renderAll(kinds) {
@@ -963,10 +811,6 @@ function sessionByPid(pid) {
 
 // ---------- platform adapter ----------
 const OSA_TIMEOUT_MS = 8000;
-// A blocked session can sit unanswered all night, and unlike the other ticker
-// animations this state does not self-terminate. Breathe long enough to catch
-// the eye, then hold static instead of pushing frames until morning.
-const PULSE_MS = 120_000;
 
 // Resolve on successful spawn, reject if the process can't be launched.
 // Resolves once the child is spawned; a spawn failure surfaces as showAlert.
@@ -1072,6 +916,19 @@ if ($found -eq [IntPtr]::Zero) { exit 1 };
       wt.once("error", psFallback);
       wt.once("exit", (code) => { if (code === 0) resolve(); else psFallback(); });
       wt.unref();
+    });
+  },
+
+  // "<pid> <elapsed-seconds>" per line, for the recycled-pid check. Shaped to
+  // match macOS `ps -axo pid=,etimes=` so one parser serves both platforms.
+  // StartTime throws on some protected system processes — skip those rather than
+  // failing the whole listing, since a pid we cannot read is simply left
+  // unverified (and therefore kept).
+  listProcStarts() {
+    const ps = "Get-Process | ForEach-Object { try { \"$($_.Id) $([int]((Get-Date) - $_.StartTime).TotalSeconds)\" } catch {} }";
+    return new Promise((resolve, reject) => {
+      execFile("powershell.exe", ["-NoProfile", "-Command", ps], { timeout: OSA_TIMEOUT_MS, maxBuffer: 4 << 20 },
+        (err, out) => (err ? reject(err) : resolve(String(out))));
     });
   },
 
@@ -1195,6 +1052,17 @@ const macPlatform = {
     });
   },
 
+  // "<pid> <elapsed>" per line, for the recycled-pid check. `etime`, not `etimes`:
+  // the seconds-valued `etimes` keyword is a GNU procps extension and BSD ps exits
+  // with "keyword not found" (measured). parseElapsed handles etime's
+  // "[[dd-]hh:]mm:ss" shape, which is numeric and so locale-independent.
+  listProcStarts() {
+    return new Promise((resolve, reject) => {
+      execFile("ps", ["-axo", "pid=,etime="], { timeout: OSA_TIMEOUT_MS, maxBuffer: 4 << 20 },
+        (err, out) => (err ? reject(err) : resolve(String(out))));
+    });
+  },
+
   // OAuth token from the login Keychain (service "Claude Code-credentials"),
   // falling back to the credentials file if a user exported it.
   readToken() {
@@ -1238,7 +1106,7 @@ function onKeyDown(context, kind) {
   switch (kind) {
     case "usage-session":
     case "usage-weekly":
-      if (gaugeMode(kind) === "local") {
+      if (gaugeMode(state, kind, Date.now()) === "local") {
         // Local mode has no reset to refresh toward, so the press is better spent
         // toggling cost <-> tokens (same gesture as the Usage key).
         usageView.set(context, (usageView.get(context) ?? "cost") === "cost" ? "tokens" : "cost");
@@ -1263,10 +1131,10 @@ function onKeyDown(context, kind) {
     case "usage-model": {
       // Press rotates through the models rather than nudging a refresh — the
       // poller already keeps them current, and one key can then cover them all.
-      const mode = gaugeMode("usage-model");
-      const list = modelList(mode);
+      const mode = gaugeMode(state, "usage-model", Date.now());
+      const list = modelList(state, mode);
       if (list.length > 1) {
-        const cur = modelListIndex(context, list, views.get(context)?.settings?.model, mode);
+        const cur = modelListIndex(modelIdx.get(context) ?? null, list, views.get(context)?.settings?.model);
         modelIdx.set(context, (cur + 1) % list.length);
       } else if (mode === "local") pollUsageMeter();
       else if (Date.now() - lastUsageAttempt > 30_000) pollUsage();
@@ -1431,7 +1299,7 @@ if (process.argv.includes("--selftest")) {
     log("selftest today:", JSON.stringify(state.today));
     await pollUsageMeter(["5h"]);
     await pollBurn();
-    log("selftest burn:", JSON.stringify(state.burn), "eta:", sessionEta());
+    log("selftest burn:", JSON.stringify(state.burn), "eta:", sessionEta(state, Date.now()));
     await pollUsageMeter(["5h", "today", "month", "7day"]);
     log("selftest usage-meter:", JSON.stringify(state.usageMeter));
     log("selftest per-model 7d:", JSON.stringify(state.usageMeterModels));
@@ -1558,7 +1426,7 @@ if (process.argv.includes("--selftest")) {
     // Local/budget rings live outside state.usage, so gate them separately or a
     // ring at 98% would sit perfectly still while README promises a pulse.
     for (const [k, win] of Object.entries(GAUGE_WINDOW)) {
-      if (gaugeMode(k) !== "local") continue;
+      if (gaugeMode(state, k, Date.now()) !== "local") continue;
       const agg = k === "usage-model" ? (state.usageMeterModels ?? [])[0] : state.usageMeter?.[win];
       const bud = [...views.values()].find((v) => v.kind === k)?.settings?.budget;
       if (agg && (budgetPct(agg.cost, bud) ?? 0) >= 90) kinds.push(k);
