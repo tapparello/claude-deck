@@ -1,6 +1,6 @@
 {
   "name": "agent-vitals",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "private": true,
   "type": "module",
   "description": "Stream Deck plugin: Claude usage, active sessions, and shortcuts",

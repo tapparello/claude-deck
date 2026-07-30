@@ -1,7 +1,7 @@
 {
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
   "Name": "Agent Vitals",
-  "Version": "1.8.0.0",
+  "Version": "1.8.1.0",
   "Author": "Cristiano Tapparello",
   "Description": "Usage and cost gauges, live Claude Code session status, and one-press Allow / Always / Deny for permission prompts. Plus quick-launch keys for Claude Desktop and claude.ai.",
   "UUID": "dev.tapparello.agent-vitals",

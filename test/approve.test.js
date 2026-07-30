@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { sanitizeSuggestions, decisionBody, DENY_MESSAGE, hookFragment } from "../src/approve.js";
 import { rememberDeny, denyBlock, pruneDenies, DENY_WINDOW_MS } from "../src/approve.js";
+import { isQuestion, approvable, approvableDepth, pendingBySession } from "../src/approve.js";
 
 const addRules = (over = {}) => ({
   type: "addRules",
@@ -550,4 +551,64 @@ test("the on-device sequence: deny curl.se, retry cannot be ALWAYS'd, kernel.org
   assert.equal(denyBlock(denies, retry, tPress), "just denied");
   assert.equal(alwaysRule(retry), "WebFetch(domain:curl.se)"); // still shown, just not pressable
   assert.equal(denyBlock(denies, webReq("www.kernel.org"), tPress), null);
+});
+
+// ---------- question-kind requests: held for the WAITING key, never approvable ----------
+// Claude Code fires PermissionRequest for AskUserQuestion too (observed on-device
+// 2026-07-30: "approve: AskUserQuestion from fmf_connect_flutter"). Over this hook an
+// `allow` only lets the tool RUN, which for a question means rendering the option list —
+// the human still has to pick — so a triad press answers nothing, and a DENY kills the
+// question outright.
+const q = (over = {}) => ({ id: 1, toolName: "AskUserQuestion", receivedAt: 1000, sessionId: "s1", ...over });
+const perm = (over = {}) => ({ id: 2, toolName: "Edit", receivedAt: 2000, sessionId: "s2", ...over });
+
+test("isQuestion recognizes AskUserQuestion and nothing else", () => {
+  assert.equal(isQuestion(q()), true);
+  for (const t of ["Edit", "Write", "Bash", "Read", "ExitPlanMode", "mcp__x__y", ""]) {
+    assert.equal(isQuestion({ toolName: t }), false, t);
+  }
+  assert.equal(isQuestion(null), false);
+});
+
+test("approvable skips question-kind requests so a real prompt behind one is still reachable", () => {
+  assert.equal(approvable([]), null);
+  assert.equal(approvable([q()]), null);                       // nothing to paint
+  assert.equal(approvable([q(), perm()])?.id, 2);              // the Edit behind it
+  assert.equal(approvable([perm(), q()])?.id, 2);
+  assert.equal(approvable(undefined), null);
+});
+
+test("approvableDepth counts only what the keys can act on", () => {
+  assert.equal(approvableDepth([q(), q({ id: 3 })]), 0);
+  assert.equal(approvableDepth([q(), perm(), perm({ id: 4 })]), 2);
+});
+
+test("pressDecision never resolves a question, even when it heads the queue", () => {
+  const args = { shownId: null, lastHeadChangeAt: 0, now: 100_000 };
+  assert.equal(pressDecision({ ...args, queue: [q()] }).action, "none");
+  // the Edit behind it IS answerable, and only when the key painted that same request
+  assert.equal(pressDecision({ ...args, queue: [q(), perm()], shownId: 2 }).action, "resolve");
+  assert.equal(pressDecision({ ...args, queue: [q(), perm()], shownId: 1 }).action, "alert");
+});
+
+// ---------- pendingBySession: the only "blocked" signal a VS Code session emits ----------
+test("pendingBySession maps each session to its most urgent pending request", () => {
+  const m = pendingBySession([q(), perm()]);
+  assert.deepEqual(m.get("s1"), { kind: "input-needed", reason: "input needed", since: 1000 });
+  assert.deepEqual(m.get("s2"), { kind: "needs-approval", reason: "permission prompt", since: 2000 });
+});
+
+test("pendingBySession: a permission prompt outranks a question in the same session", () => {
+  const m = pendingBySession([q({ sessionId: "s" }), perm({ sessionId: "s", receivedAt: 5000 })]);
+  assert.deepEqual(m.get("s"), { kind: "needs-approval", reason: "permission prompt", since: 5000 });
+});
+
+test("pendingBySession: same kind twice keeps the OLDEST, which has blocked longest", () => {
+  const m = pendingBySession([q({ sessionId: "s", receivedAt: 9000 }), q({ id: 5, sessionId: "s", receivedAt: 4000 })]);
+  assert.equal(m.get("s").since, 4000);
+});
+
+test("pendingBySession ignores requests with no session to attribute them to", () => {
+  assert.equal(pendingBySession([q({ sessionId: null })]).size, 0);
+  assert.equal(pendingBySession(undefined).size, 0);
 });

@@ -2441,7 +2441,7 @@ var require_websocket = __commonJS({
        *     not to skip UTF-8 validation for text and close messages
        * @private
        */
-      setSocket(socket, head2, options) {
+      setSocket(socket, head, options) {
         const receiver = new Receiver2({
           allowSynchronousEvents: options.allowSynchronousEvents,
           binaryType: this.binaryType,
@@ -2468,7 +2468,7 @@ var require_websocket = __commonJS({
         sender.onerror = senderOnError;
         if (socket.setTimeout) socket.setTimeout(0);
         if (socket.setNoDelay) socket.setNoDelay();
-        if (head2.length > 0) socket.unshift(head2);
+        if (head.length > 0) socket.unshift(head);
         socket.on("close", socketOnClose);
         socket.on("data", socketOnData);
         socket.on("end", socketOnEnd);
@@ -2929,7 +2929,7 @@ var require_websocket = __commonJS({
           );
         }
       });
-      req.on("upgrade", (res, socket, head2) => {
+      req.on("upgrade", (res, socket, head) => {
         websocket.emit("upgrade", res);
         if (websocket.readyState !== WebSocket2.CONNECTING) return;
         req = websocket._req = null;
@@ -2989,7 +2989,7 @@ var require_websocket = __commonJS({
           }
           websocket._extensions[PerMessageDeflate2.extensionName] = perMessageDeflate;
         }
-        websocket.setSocket(socket, head2, {
+        websocket.setSocket(socket, head, {
           allowSynchronousEvents: opts.allowSynchronousEvents,
           generateMask: opts.generateMask,
           maxBufferedChunks: opts.maxBufferedChunks,
@@ -3408,8 +3408,8 @@ var require_websocket_server = __commonJS({
           this._removeListeners = addListeners(this._server, {
             listening: this.emit.bind(this, "listening"),
             error: this.emit.bind(this, "error"),
-            upgrade: (req, socket, head2) => {
-              this.handleUpgrade(req, socket, head2, emitConnection);
+            upgrade: (req, socket, head) => {
+              this.handleUpgrade(req, socket, head, emitConnection);
             }
           });
         }
@@ -3504,7 +3504,7 @@ var require_websocket_server = __commonJS({
        * @param {Function} cb Callback
        * @public
        */
-      handleUpgrade(req, socket, head2, cb) {
+      handleUpgrade(req, socket, head, cb) {
         socket.on("error", socketOnError);
         const key = req.headers["sec-websocket-key"];
         const upgrade = req.headers.upgrade;
@@ -3583,7 +3583,7 @@ var require_websocket_server = __commonJS({
                 protocols,
                 req,
                 socket,
-                head2,
+                head,
                 cb
               );
             });
@@ -3591,7 +3591,7 @@ var require_websocket_server = __commonJS({
           }
           if (!this.options.verifyClient(info)) return abortHandshake(socket, 401);
         }
-        this.completeUpgrade(extensions, key, protocols, req, socket, head2, cb);
+        this.completeUpgrade(extensions, key, protocols, req, socket, head, cb);
       }
       /**
        * Upgrade the connection to WebSocket.
@@ -3606,7 +3606,7 @@ var require_websocket_server = __commonJS({
        * @throws {Error} If called more than once with the same socket
        * @private
        */
-      completeUpgrade(extensions, key, protocols, req, socket, head2, cb) {
+      completeUpgrade(extensions, key, protocols, req, socket, head, cb) {
         if (!socket.readable || !socket.writable) return socket.destroy();
         if (socket[kWebSocket]) {
           throw new Error(
@@ -3640,7 +3640,7 @@ var require_websocket_server = __commonJS({
         this.emit("headers", headers, req);
         socket.write(headers.concat("\r\n").join("\r\n"));
         socket.removeListener("error", socketOnError);
-        ws2.setSocket(socket, head2, {
+        ws2.setSocket(socket, head, {
           allowSynchronousEvents: this.options.allowSynchronousEvents,
           maxBufferedChunks: this.options.maxBufferedChunks,
           maxFragments: this.options.maxFragments,
@@ -4067,12 +4067,13 @@ function slugifyCwd(cwd) {
 function joinPath(...parts) {
   return parts.filter(Boolean).join("/");
 }
-function sessionState(s, now = Date.now(), activityAt = null) {
+function sessionState(s, now = Date.now(), activityAt = null, pendingKind = null) {
   const st = s?.status;
   if (st === "waiting") {
     const w = String(s.waitingFor ?? "").toLowerCase();
     return QUESTION_WAITS.has(w) ? "input-needed" : "needs-approval";
   }
+  if (pendingKind) return pendingKind;
   if (st === "busy" || st === "shell") return "working";
   if (!st) {
     if (!activityAt) return "unknown";
@@ -4091,14 +4092,16 @@ function pidLooksRecycled(session, procStartMs, slackMs = PID_START_SLACK_MS) {
   if (!startedAt || procStartMs == null) return false;
   return procStartMs > startedAt + slackMs;
 }
-function sessionSig(sessions, now = Date.now(), activity = null) {
-  return JSON.stringify((sessions ?? []).map((s) => [s.pid, s.status ?? "", s.waitingFor ?? "", sessionState(s, now, actOf(s, activity))]));
+function sessionSig(sessions, now = Date.now(), activity = null, pending = null) {
+  return JSON.stringify((sessions ?? []).map((s) => [s.pid, s.status ?? "", s.waitingFor ?? "", sessionState(s, now, actOf(s, activity), pendKind(s, pending))]));
 }
 var URGENCY = { "needs-approval": 0, "input-needed": 1, working: 2, finished: 3, idle: 4, unknown: 5 };
 var actOf = (s, activity) => activity && s?.sessionId ? activity.get(s.sessionId) ?? null : null;
-var rank = (s, now, activity) => URGENCY[sessionState(s, now, actOf(s, activity))] ?? 5;
-function blockedSessions(sessions, now = Date.now(), activity = null) {
-  return (sessions ?? []).filter((s) => rank(s, now, activity) <= URGENCY["input-needed"]).sort((a, b) => rank(a, now, activity) - rank(b, now, activity) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || (a.pid ?? 0) - (b.pid ?? 0));
+var pendOf = (s, pending) => pending && s?.sessionId ? pending.get(s.sessionId) ?? null : null;
+var pendKind = (s, pending) => pendOf(s, pending)?.kind ?? null;
+var rank = (s, now, activity, pending) => URGENCY[sessionState(s, now, actOf(s, activity), pendKind(s, pending))] ?? 5;
+function blockedSessions(sessions, now = Date.now(), activity = null, pending = null) {
+  return (sessions ?? []).filter((s) => rank(s, now, activity, pending) <= URGENCY["input-needed"]).sort((a, b) => rank(a, now, activity, pending) - rank(b, now, activity, pending) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || (a.pid ?? 0) - (b.pid ?? 0));
 }
 function fmtShort(ms) {
   if (ms == null || !isFinite(ms)) return "";
@@ -4134,30 +4137,33 @@ function autoSlot(keys, context) {
 function sessionProject(s) {
   return path.basename(s.cwd ?? "").toLowerCase();
 }
-function byDisplayOrder(a, b, now, activity) {
-  const ra = rank(a, now, activity), rb = rank(b, now, activity);
+function byDisplayOrder(a, b, now, activity, pending) {
+  const ra = rank(a, now, activity, pending), rb = rank(b, now, activity, pending);
   if (ra !== rb) return ra - rb;
   if ((b.updatedAt ?? 0) !== (a.updatedAt ?? 0)) return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
   return (a.pid ?? 0) - (b.pid ?? 0);
 }
-function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(), activity = null) {
+function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(), activity = null, pending = null) {
   const explicit = !!(project && String(project).trim());
   const want = explicit ? String(project).trim().toLowerCase() : null;
-  const list = (sessions ?? []).filter((s) => explicit ? sessionProject(s) === want : true).sort((a, b) => byDisplayOrder(a, b, now, activity)).map((s) => ({
-    name: path.basename(s.cwd ?? "") || "claude",
-    state: sessionState(s, now, actOf(s, activity)),
-    waitingFor: s.status === "waiting" ? String(s.waitingFor ?? "permission prompt") : "",
-    // null when the session reports no timestamp at all (VS Code) — otherwise
-    // `now - 0` renders as an absurd age like "495817h idle".
-    statusAge: s.statusUpdatedAt ?? s.updatedAt ? Math.max(0, now - (s.statusUpdatedAt ?? s.updatedAt)) : null,
-    // When the wait began. statusUpdatedAt ONLY — never the updatedAt fallback,
-    // so every key measures the same wait from the same anchor.
-    waitingSince: s.status === "waiting" && s.statusUpdatedAt ? s.statusUpdatedAt : null,
-    cwd: s.cwd ?? "",
-    sessionId: s.sessionId ?? null,
-    pid: s.pid ?? null,
-    where: sessionWhere(s)
-  }));
+  const list = (sessions ?? []).filter((s) => explicit ? sessionProject(s) === want : true).sort((a, b) => byDisplayOrder(a, b, now, activity, pending)).map((s) => {
+    const p = pendOf(s, pending);
+    return {
+      name: path.basename(s.cwd ?? "") || "claude",
+      state: sessionState(s, now, actOf(s, activity), p?.kind ?? null),
+      waitingFor: s.status === "waiting" ? String(s.waitingFor ?? "permission prompt") : p?.reason ?? "",
+      // null when the session reports no timestamp at all (VS Code) — otherwise
+      // `now - 0` renders as an absurd age like "495817h idle".
+      statusAge: s.statusUpdatedAt ?? s.updatedAt ? Math.max(0, now - (s.statusUpdatedAt ?? s.updatedAt)) : null,
+      // When the wait began. statusUpdatedAt ONLY — never the updatedAt fallback,
+      // so every key measures the same wait from the same anchor.
+      waitingSince: s.status === "waiting" && s.statusUpdatedAt ? s.statusUpdatedAt : p?.since ?? null,
+      cwd: s.cwd ?? "",
+      sessionId: s.sessionId ?? null,
+      pid: s.pid ?? null,
+      where: sessionWhere(s)
+    };
+  });
   return { list, index: explicit ? 0 : autoIdx, count: list.length };
 }
 function statusEntry(resolved, cycleIdx = null) {
@@ -4254,6 +4260,22 @@ function denyBlock(denies, req, now) {
   if (!rule) return null;
   return (denies ?? []).some((d) => d.rule === rule && now - d.at < DENY_WINDOW_MS) ? "just denied" : null;
 }
+var QUESTION_TOOLS = /* @__PURE__ */ new Set(["AskUserQuestion"]);
+var isQuestion = (req) => QUESTION_TOOLS.has(String(req?.toolName ?? ""));
+var approvable = (queue) => (queue ?? []).find((r) => !isQuestion(r)) ?? null;
+var approvableDepth = (queue) => (queue ?? []).filter((r) => !isQuestion(r)).length;
+var PEND_RANK = { "needs-approval": 0, "input-needed": 1 };
+function pendingBySession(queue) {
+  const out = /* @__PURE__ */ new Map();
+  for (const r of queue ?? []) {
+    if (!r?.sessionId) continue;
+    const rec = isQuestion(r) ? { kind: "input-needed", reason: "input needed", since: r.receivedAt } : { kind: "needs-approval", reason: "permission prompt", since: r.receivedAt };
+    const prev = out.get(r.sessionId);
+    if (prev && !(PEND_RANK[rec.kind] < PEND_RANK[prev.kind] || rec.kind === prev.kind && rec.since < prev.since)) continue;
+    out.set(r.sessionId, rec);
+  }
+  return out;
+}
 var QUEUE_MAX = 8;
 var HOLD_S_DEFAULT = 20;
 var YOUNG_MS = 1e4;
@@ -4279,7 +4301,6 @@ function hookFragment(url, timeoutS) {
     "]"
   ].join("\n");
 }
-var head = (queue) => queue[0] ?? null;
 function resolve(queue, id) {
   const req = queue.find((r) => r.id === id) ?? null;
   return { queue: req ? queue.filter((r) => r.id !== id) : queue, req };
@@ -4318,7 +4339,7 @@ function staleIds(queue, sessions, activity, now) {
 }
 var SETTLE_MS = 500;
 function pressDecision({ queue, shownId, lastHeadChangeAt, now, settleMs = SETTLE_MS }) {
-  const h = head(queue);
+  const h = approvable(queue);
   if (!h) return { action: "none", reason: "empty" };
   if (now - lastHeadChangeAt < settleMs) return { action: "none", reason: "settling" };
   if (h.id !== shownId) return { action: "alert", reason: "stale-paint" };
@@ -4564,11 +4585,11 @@ var band = {
   fill: (col, m = 1) => `<path d="${topCap(35)}" fill="${col}" opacity="${(0.9 * m).toFixed(2)}"/>`
 };
 var actionHead = (glyphName, title, fg = C.dim) => glyph(glyphName, 10, 8, 22, fg) + line(38, 25, 82, 16, 800, fg, String(title).toUpperCase(), "start", ' letter-spacing="0.5"');
-function usageMeterKey(head2, big, sub, isCost) {
+function usageMeterKey(head, big, sub, isCost) {
   const none = String(big) === "--";
   const est = isCost && !none;
   return svgWrap(`
-    ${header(head2, est)}
+    ${header(head, est)}
     ${est ? corner("est") : ""}
     ${line(72, 88, 128, 42, 700, none ? C.dim : C.text, big, "middle", "", 20)}
     ${foot(sub)}`);
@@ -4740,6 +4761,7 @@ function approveKey(kind, req, o = {}) {
 }
 
 // src/view.js
+var pendKindOf = (state2, s) => state2.pending?.get(s?.sessionId)?.kind ?? null;
 var PULSE_MS = 12e4;
 function fmtReset(iso, now = Date.now()) {
   if (!iso) return "";
@@ -4858,7 +4880,7 @@ function viewFor(kind, env) {
       return img(labelKey("PROJECT", label || "configure", settings.path ? "" : "set folder in settings"));
     }
     case "focus-session": {
-      const blocked = blockedSessions(state2.sessions, now, state2.activity);
+      const blocked = blockedSessions(state2.sessions, now, state2.activity, state2.pending);
       const pool = blocked.length ? blocked : state2.sessions;
       const poolSig = pool.map((x) => x.pid).join(",");
       const s = pool.length ? focus && focus.sig === poolSig ? pool[focus.i % pool.length] : pool[0] : null;
@@ -4866,8 +4888,8 @@ function viewFor(kind, env) {
         const b = s ?? blocked[0];
         return img(labelKey("FOCUS", b.name ?? "session", String(b.waitingFor ?? "needs you"), C.warn, true));
       }
-      const anyWorking = state2.sessions.some((x) => sessionState(x, now, state2.activity.get(x.sessionId) ?? null) === "working");
-      return img(labelKey("FOCUS", s ? s.name : `${state2.sessions.length} sessions`, s ? sessionState(s, now, state2.activity.get(s.sessionId) ?? null) : "press to cycle", anyWorking ? C.info : null));
+      const anyWorking = state2.sessions.some((x) => sessionState(x, now, state2.activity.get(x.sessionId) ?? null, pendKindOf(state2, x)) === "working");
+      return img(labelKey("FOCUS", s ? s.name : `${state2.sessions.length} sessions`, s ? sessionState(s, now, state2.activity.get(s.sessionId) ?? null, pendKindOf(state2, s)) : "press to cycle", anyWorking ? C.info : null));
     }
     case "quick-prompt":
       return img(labelKey("PROMPT", settings.label || "configure", settings.prompt ? "" : "set prompt in settings"));
@@ -4889,7 +4911,7 @@ function viewFor(kind, env) {
       const n = state2.sessions.length;
       if (cycleIdx >= 0 && state2.sessions[cycleIdx]) {
         const s = state2.sessions[cycleIdx];
-        const st = sessionState(s, now, state2.activity.get(s.sessionId) ?? null);
+        const st = sessionState(s, now, state2.activity.get(s.sessionId) ?? null, pendKindOf(state2, s));
         const stLabel = { "needs-approval": "needs you", "input-needed": "input needed", working: "working", finished: "done", idle: "idle" }[st] ?? st;
         const stColor = st === "needs-approval" ? C.warn : st === "input-needed" ? C.ask : st === "working" ? C.info : C.dim;
         return img(linesKey(`${cycleIdx + 1}/${n}`, [
@@ -4898,8 +4920,8 @@ function viewFor(kind, env) {
           { text: fmtAgo(now - (s.startedAt ?? now)) + " old", color: C.dim }
         ]));
       }
-      const blocked = blockedSessions(state2.sessions, now, state2.activity).length;
-      const busy = state2.sessions.filter((s) => sessionState(s, now, state2.activity.get(s.sessionId) ?? null) === "working").length;
+      const blocked = blockedSessions(state2.sessions, now, state2.activity, state2.pending).length;
+      const busy = state2.sessions.filter((s) => sessionState(s, now, state2.activity.get(s.sessionId) ?? null, pendKindOf(state2, s)) === "working").length;
       const sub = blocked > 0 ? `${blocked} needs you` : busy > 0 ? `${busy} working` : n > 0 ? "all idle" : "none running";
       const subCol = blocked > 0 ? C.warn : busy > 0 ? C.info : C.dim;
       return img(bigCountKey("CLAUDE CODE", n, sub, subCol, busy > 0 ? animPhase2 : null, blocked > 0 ? C.warn : busy > 0 ? C.info : null, blocked > 0));
@@ -4922,7 +4944,7 @@ function viewFor(kind, env) {
       return img(usageMeterKey(header2, fmtNum(agg.tokens), agg.in != null ? `${fmtNum(agg.in)} in \xB7 ${fmtNum(agg.out)} out` : "tokens" + suffix, false));
     }
     case "approver-status": {
-      const resolved = resolveStatusKey(state2.sessions, settings.project ?? "", autoSlot2, now, state2.activity);
+      const resolved = resolveStatusKey(state2.sessions, settings.project ?? "", autoSlot2, now, state2.activity, state2.pending);
       const cycling = !!settings.cycle && cycleIdx >= 0;
       const entry = statusEntry(resolved, cycling ? cycleIdx : null);
       const explicit = !!(settings.project && settings.project.trim());
@@ -4944,24 +4966,25 @@ function viewFor(kind, env) {
       return img(statusKey(name, entry.state, explicit ? resolved.count : 1, detail, entry.where, fresh ? animPhase2 : null));
     }
     case "approver-waiting": {
-      const blocked = blockedSessions(state2.sessions, now, state2.activity);
+      const blocked = blockedSessions(state2.sessions, now, state2.activity, state2.pending);
       if (!blocked.length) {
         const n = state2.sessions.length;
         return img(statusKey("WAITING", "quiet", 1, n ? `${n} session${n > 1 ? "s" : ""} ok` : "no sessions"));
       }
       const i = cycleIdx >= 0 ? cycleIdx % blocked.length : 0;
       const b = blocked[i];
-      const st = sessionState(b, now, state2.activity.get(b.sessionId) ?? null);
-      const since = b.status === "waiting" && b.statusUpdatedAt ? b.statusUpdatedAt : null;
+      const p = state2.pending?.get(b.sessionId) ?? null;
+      const st = sessionState(b, now, state2.activity.get(b.sessionId) ?? null, p?.kind ?? null);
+      const since = b.status === "waiting" && b.statusUpdatedAt ? b.statusUpdatedAt : p?.since ?? null;
       const waited = since ? fmtShort(now - since) : "";
-      const why = shortWait(b.waitingFor ?? "") || "needs you";
+      const why = shortWait(b.waitingFor ?? p?.reason ?? "") || "needs you";
       const fresh = !since || now - since < PULSE_MS;
       return img(statusKey(path2.basename(b.cwd ?? "") || "claude", st, blocked.length, why + (waited ? " \xB7 " + waited : ""), sessionWhere(b), fresh ? animPhase2 : null));
     }
     case "approve-allow":
     case "approve-always":
     case "approve-deny": {
-      const req = head(state2.approveQueue);
+      const req = approvable(state2.approveQueue);
       const fresh = req && now - req.receivedAt < PULSE_MS;
       const err = state2.hookErr ?? (!state2.approveQueue.length && authFlagged2 ? "auth?" : null);
       return {
@@ -4969,7 +4992,7 @@ function viewFor(kind, env) {
           sessionOnly: !!settings.sessionOnly,
           label: settings.label,
           err,
-          depth: state2.approveQueue.length,
+          depth: approvableDepth(state2.approveQueue),
           phase: fresh ? animPhase2 : null,
           denied: kind === "approve-always" && req ? denyBlock(state2.denies, req, now) : null
         }),
@@ -5054,6 +5077,10 @@ var state = {
   loggedRaw: false,
   rates: {},
   approveQueue: [],
+  // Derived from approveQueue on every mutation (queueChanged): sessionId ->
+  // {kind, reason, since}. The Status/WAITING keys read it, because for a VS Code
+  // session it is the ONLY evidence that the session is blocked on the human.
+  pending: /* @__PURE__ */ new Map(),
   denies: [],
   // {rule, at} for ~30s after a DENY, so the retry cannot be ALWAYS'd
   hookSecret: null,
@@ -5266,7 +5293,7 @@ async function pollSessions() {
         if (!gone.size) renderApproveAll();
       }
     }
-    const nextSig = sessionSig(out, Date.now(), state.activity);
+    const nextSig = sessionSig(out, Date.now(), state.activity, state.pending);
     const changed = nextSig !== lastSessionSig;
     lastSessionSig = nextSig;
     state.sessions = out;
@@ -5282,6 +5309,10 @@ var approveSeq = 0;
 var hookServer = null;
 var renderApproveAll = () => renderAll(APPROVE_KINDS);
 var hasApproveKey = () => [...views.values()].some((v) => APPROVE_KINDS.includes(v.kind));
+function queueChanged() {
+  state.pending = pendingBySession(state.approveQueue);
+  renderAll([...APPROVE_KINDS, "approver-status", "approver-waiting"]);
+}
 function authFlagged() {
   const hits = hookServer?.stats.badPathHits;
   if (!hits || hits.length < BADPATH_MIN_HITS) return false;
@@ -5289,12 +5320,12 @@ function authFlagged() {
   return hits.filter((t) => now - t < BADPATH_WINDOW_MS).length >= BADPATH_MIN_HITS;
 }
 function noteHeadChange(prevId) {
-  const now = head(state.approveQueue)?.id ?? null;
+  const now = approvable(state.approveQueue)?.id ?? null;
   if (now !== prevId) state.lastHeadChangeAt = Date.now();
 }
 function answerAndDrop(ids, why) {
   if (!ids.length) return;
-  const prev = head(state.approveQueue)?.id ?? null;
+  const prev = approvable(state.approveQueue)?.id ?? null;
   for (const id of ids) {
     const { queue, req } = resolve(state.approveQueue, id);
     state.approveQueue = queue;
@@ -5304,7 +5335,7 @@ function answerAndDrop(ids, why) {
     }
   }
   noteHeadChange(prev);
-  renderApproveAll();
+  queueChanged();
 }
 function onHookRequest(payload, ticket) {
   const toolName = String(payload?.tool_name ?? "");
@@ -5328,7 +5359,7 @@ function onHookRequest(payload, ticket) {
     ticket
   };
   ticket.id = req.id;
-  const prev = head(state.approveQueue)?.id ?? null;
+  const prev = approvable(state.approveQueue)?.id ?? null;
   const { queue, evicted } = enqueue(state.approveQueue, req);
   state.approveQueue = queue;
   if (evicted) {
@@ -5336,17 +5367,17 @@ function onHookRequest(payload, ticket) {
     log(`approve: evicted ${evicted.toolName} (queue full at ${QUEUE_MAX})`);
   }
   noteHeadChange(prev);
-  renderApproveAll();
+  queueChanged();
 }
 var onHookDrop = (ticket) => {
   if (ticket.id == null) return;
-  const prev = head(state.approveQueue)?.id ?? null;
+  const prev = approvable(state.approveQueue)?.id ?? null;
   const { queue, req } = resolve(state.approveQueue, ticket.id);
   if (!req) return;
   state.approveQueue = queue;
   log(`approve: socket closed for ${req.toolName}`);
   noteHeadChange(prev);
-  renderApproveAll();
+  queueChanged();
 };
 var ensuring = null;
 var ensureAgain = false;
@@ -5986,7 +6017,7 @@ function onKeyDown(context, kind) {
       return act(context, platform.openTerminal(s.path));
     }
     case "focus-session": {
-      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity, state.pending);
       const pool = blocked.length ? blocked : state.sessions;
       const n = pool.length;
       if (!n) return showAlert(context);
@@ -6024,7 +6055,7 @@ function onKeyDown(context, kind) {
     }
     case "approver-status": {
       const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoSlotFor(context), Date.now(), state.activity);
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoSlotFor(context), Date.now(), state.activity, state.pending);
       if (!resolved.count) return showAlert(context);
       const cycling = !!s.cycle && resolved.count > 1;
       let idx = resolved.index;
@@ -6044,7 +6075,7 @@ function onKeyDown(context, kind) {
       return act(context, platform.focusWindow(sessionByPid(entry.pid)));
     }
     case "approver-waiting": {
-      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity, state.pending);
       if (!blocked.length) return showAlert(context);
       const cy = cycle.get(context) ?? { idx: -1, timer: null };
       cy.idx = (cy.idx + 1) % blocked.length;
@@ -6075,7 +6106,7 @@ function onKeyDown(context, kind) {
           return showAlert(context);
         }
         const which = kind.slice("approve-".length);
-        const target = head(state.approveQueue);
+        const target = approvable(state.approveQueue);
         const body = decisionBody(which, target, { sessionOnly: !!s.sessionOnly });
         const ruleOk = kind !== "approve-always" || shownRule.get(context) != null && alwaysRule(target, !!s.sessionOnly) === shownRule.get(context);
         const denied = which === "always" ? denyBlock(state.denies, target, Date.now()) : null;
@@ -6095,7 +6126,7 @@ function onKeyDown(context, kind) {
         if (which === "deny") state.denies = rememberDeny(state.denies, req, Date.now());
         log(`approve: ${which} ${req.toolName}${which === "always" ? ` as ${shownRule.get(context)}` : ""}`);
         state.lastHeadChangeAt = Date.now();
-        renderApproveAll();
+        queueChanged();
       } catch (e) {
         log("approve press failed:", e?.stack ?? String(e));
         showAlert(context);
@@ -6262,7 +6293,7 @@ if (process.argv.includes("--selftest")) {
   setInterval(() => {
     animPhase = (animPhase + 1) % 3;
     const kinds = [];
-    if (state.sessions.some((s) => sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) === "working")) kinds.push("sessions");
+    if (state.sessions.some((s) => sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null, state.pending.get(s.sessionId)?.kind ?? null) === "working")) kinds.push("sessions");
     if (state.usage?.fiveHour?.pct >= 90) kinds.push("usage-session");
     if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
     if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");
@@ -6272,12 +6303,15 @@ if (process.argv.includes("--selftest")) {
       const bud = [...views.values()].find((v) => v.kind === k)?.settings?.budget;
       if (agg && (budgetPct(agg.cost, bud) ?? 0) >= 90) kinds.push(k);
     }
-    const freshBlocked = blockedSessions(state.sessions, Date.now(), state.activity).some((b) => !b.statusUpdatedAt || Date.now() - b.statusUpdatedAt < PULSE_MS);
+    const freshBlocked = blockedSessions(state.sessions, Date.now(), state.activity, state.pending).some((b) => {
+      const since = b.statusUpdatedAt ?? state.pending.get(b.sessionId)?.since ?? null;
+      return !since || Date.now() - since < PULSE_MS;
+    });
     if (freshBlocked) kinds.push("approver-status", "approver-waiting");
     if (state.approveQueue.length) {
       const dead = expiredIds(state.approveQueue, Date.now(), HOLD_MS());
       if (dead.length) answerAndDrop(dead, "hold expired");
-      if (state.approveQueue.length) kinds.push(...APPROVE_KINDS);
+      if (approvableDepth(state.approveQueue)) kinds.push(...APPROVE_KINDS);
     }
     if (kinds.length && [...views.values()].some((v) => kinds.includes(v.kind))) renderAll(kinds);
     const expired = [state.usage?.fiveHour, state.usage?.weekly].some((b) => b?.resetsAt && Date.now() - new Date(b.resetsAt).getTime() > 5e3);

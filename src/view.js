@@ -18,7 +18,12 @@ import {
   resolveStatusKey, statusEntry, sessionWhere, fmtShort, shortWait, sessionState,
   blockedSessions,
 } from "./status.js";
-import { head, alwaysRule, denyBlock } from "./approve.js";
+import { approvable, approvableDepth, alwaysRule, denyBlock } from "./approve.js";
+
+// The state a request still held in the approver queue implies for one session, or null.
+// Read by every key that asks "is this session blocked", because for a VS Code session
+// (which writes no status of its own) the queue is the only place that answer exists.
+const pendKindOf = (state, s) => state.pending?.get(s?.sessionId)?.kind ?? null;
 
 // A blocked session can sit unanswered all night, and unlike the other ticker
 // animations this state does not self-terminate. Breathe long enough to catch the
@@ -190,7 +195,7 @@ export function viewFor(kind, env) {
     case "focus-session": {
       // Blocked sessions take priority: pressing goes straight to the one that
       // needs you, and the key advertises that with the reason + a warm accent.
-      const blocked = blockedSessions(state.sessions, now, state.activity);
+      const blocked = blockedSessions(state.sessions, now, state.activity, state.pending);
       const pool = blocked.length ? blocked : state.sessions;
       const poolSig = pool.map((x) => x.pid).join(",");
       // Only trust the remembered index while the pool is unchanged; otherwise
@@ -200,8 +205,8 @@ export function viewFor(kind, env) {
         const b = s ?? blocked[0];
         return img(labelKey("FOCUS", b.name ?? "session", String(b.waitingFor ?? "needs you"), C.warn, true));
       }
-      const anyWorking = state.sessions.some((x) => sessionState(x, now, state.activity.get(x.sessionId) ?? null) === "working");
-      return img(labelKey("FOCUS", s ? s.name : `${state.sessions.length} sessions`, s ? sessionState(s, now, state.activity.get(s.sessionId) ?? null) : "press to cycle", anyWorking ? C.info : null));
+      const anyWorking = state.sessions.some((x) => sessionState(x, now, state.activity.get(x.sessionId) ?? null, pendKindOf(state, x)) === "working");
+      return img(labelKey("FOCUS", s ? s.name : `${state.sessions.length} sessions`, s ? sessionState(s, now, state.activity.get(s.sessionId) ?? null, pendKindOf(state, s)) : "press to cycle", anyWorking ? C.info : null));
     }
     case "quick-prompt":
       return img(labelKey("PROMPT", settings.label || "configure", settings.prompt ? "" : "set prompt in settings"));
@@ -225,7 +230,7 @@ export function viewFor(kind, env) {
         const s = state.sessions[cycleIdx];
         // Use the derived state, not the raw status: "waiting" is blocked-on-you,
         // and rendering it in success-green was the very bug phase 2 fixes.
-        const st = sessionState(s, now, state.activity.get(s.sessionId) ?? null);
+        const st = sessionState(s, now, state.activity.get(s.sessionId) ?? null, pendKindOf(state, s));
         const stLabel = { "needs-approval": "needs you", "input-needed": "input needed", working: "working", finished: "done", idle: "idle" }[st] ?? st;
         const stColor = st === "needs-approval" ? C.warn : st === "input-needed" ? C.ask : st === "working" ? C.info : C.dim;
         return img(linesKey(`${cycleIdx + 1}/${n}`, [
@@ -235,8 +240,8 @@ export function viewFor(kind, env) {
         ]));
       }
       // "waiting" means blocked on the human — never count that as working.
-      const blocked = blockedSessions(state.sessions, now, state.activity).length;
-      const busy = state.sessions.filter((s) => sessionState(s, now, state.activity.get(s.sessionId) ?? null) === "working").length;
+      const blocked = blockedSessions(state.sessions, now, state.activity, state.pending).length;
+      const busy = state.sessions.filter((s) => sessionState(s, now, state.activity.get(s.sessionId) ?? null, pendKindOf(state, s)) === "working").length;
       const sub = blocked > 0 ? `${blocked} needs you` : busy > 0 ? `${busy} working` : n > 0 ? "all idle" : "none running";
       const subCol = blocked > 0 ? C.warn : busy > 0 ? C.info : C.dim;
       return img(bigCountKey("CLAUDE CODE", n, sub, subCol, busy > 0 ? animPhase : null, blocked > 0 ? C.warn : busy > 0 ? C.info : null, blocked > 0));
@@ -259,7 +264,7 @@ export function viewFor(kind, env) {
       return img(usageMeterKey(header, fmtNum(agg.tokens), agg.in != null ? `${fmtNum(agg.in)} in · ${fmtNum(agg.out)} out` : "tokens" + suffix, false));
     }
     case "approver-status": {
-      const resolved = resolveStatusKey(state.sessions, settings.project ?? "", autoSlot, now, state.activity);
+      const resolved = resolveStatusKey(state.sessions, settings.project ?? "", autoSlot, now, state.activity, state.pending);
       // Only honour an in-flight cycle while the key opts into cycling, so
       // unchecking the box takes effect immediately instead of leaving the key
       // parked on a cycled session.
@@ -286,27 +291,36 @@ export function viewFor(kind, env) {
     }
     case "approver-waiting": {
       // Dark and quiet until a session is actually blocked on you.
-      const blocked = blockedSessions(state.sessions, now, state.activity);
+      const blocked = blockedSessions(state.sessions, now, state.activity, state.pending);
       if (!blocked.length) {
         const n = state.sessions.length;
         return img(statusKey("WAITING", "quiet", 1, n ? `${n} session${n > 1 ? "s" : ""} ok` : "no sessions"));
       }
       const i = cycleIdx >= 0 ? cycleIdx % blocked.length : 0;
       const b = blocked[i];
-      const st = sessionState(b, now, state.activity.get(b.sessionId) ?? null);
-      const since = b.status === "waiting" && b.statusUpdatedAt ? b.statusUpdatedAt : null;
+      // A VS Code session carries no status of its own, so the held request is the only
+      // source for the state, the reason AND the age. Without it this key read a bare
+      // "needs you" and pulsed forever.
+      const p = state.pending?.get(b.sessionId) ?? null;
+      const st = sessionState(b, now, state.activity.get(b.sessionId) ?? null, p?.kind ?? null);
+      const since = b.status === "waiting" && b.statusUpdatedAt ? b.statusUpdatedAt : (p?.since ?? null);
       const waited = since ? fmtShort(now - since) : "";
-      const why = shortWait(b.waitingFor ?? "") || "needs you";
+      const why = shortWait(b.waitingFor ?? p?.reason ?? "") || "needs you";
       const fresh = !since || now - since < PULSE_MS;
       return img(statusKey(path.basename(b.cwd ?? "") || "claude", st, blocked.length, why + (waited ? " · " + waited : ""), sessionWhere(b), fresh ? animPhase : null));
     }
     case "approve-allow":
     case "approve-always":
     case "approve-deny": {
-      const req = head(state.approveQueue);
+      // `approvable`, not the raw head: a question-kind request is never painted as a
+      // permission triad (it cannot be answered from a key), but a real prompt QUEUED
+      // BEHIND one still must be. The WAITING key reports the question instead.
+      const req = approvable(state.approveQueue);
       const fresh = req && now - req.receivedAt < PULSE_MS;
       // A mis-pasted or stale URL 404s inside our own handler, so it IS countable —
       // but only REPEATED 404s are evidence of that; see authFlagged in plugin.js.
+      // Gated on the RAW queue, not on `req`: a held question is still proof that a
+      // correctly-pathed request arrived, so the URL demonstrably works.
       const err = state.hookErr
         ?? (!state.approveQueue.length && authFlagged ? "auth?" : null);
       return {
@@ -314,7 +328,7 @@ export function viewFor(kind, env) {
           sessionOnly: !!settings.sessionOnly,
           label: settings.label,
           err,
-          depth: state.approveQueue.length,
+          depth: approvableDepth(state.approveQueue),
           phase: fresh ? animPhase : null,
           denied: kind === "approve-always" && req ? denyBlock(state.denies, req, now) : null,
         }),

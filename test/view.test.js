@@ -381,3 +381,72 @@ test("fmtReset counts down against the injected clock, not the wall clock", () =
   assert.equal(fmtReset(new Date(NOW - 1000).toISOString(), NOW), "resetting…");
   assert.equal(fmtReset(null, NOW), "");
 });
+
+// ---------- the VS Code multiple-choice bug (2026-07-30) ----------
+// Observed: a multiple choice in VS Code painted the ALLOW/ALWAYS/DENY triad while the
+// WAITING key read "all clear". Two defects — the triad cannot answer a question, and a
+// `claude-vscode` session file carries no status at all, so blockedSessions() could never
+// see it. The held request now feeds the Status/WAITING keys instead.
+const vsSession = (over = {}) => session({
+  sessionId: "v1", pid: 900, cwd: "/Users/me/fmf_connect_flutter", name: "fmf_connect_flutter",
+  entrypoint: "claude-vscode", status: undefined, statusUpdatedAt: undefined, ...over,
+});
+const question = (over = {}) => req({ id: 11, toolName: "AskUserQuestion", sessionId: "v1", toolInput: {}, ...over });
+const pendingMap = (over = {}) => new Map([["v1", { kind: "input-needed", reason: "input needed", since: NOW - 12_000, ...over }]]);
+
+test("a question never paints the permission triad", () => {
+  const state = { ...emptyState(), approveQueue: [question()] };
+  for (const kind of ["approve-allow", "approve-always", "approve-deny"]) {
+    assert.match(drawn(kind, { state }), /all clear/, kind);
+    assert.doesNotMatch(drawn(kind, { state }), /AskUserQuestio/, kind);
+    assert.equal(viewFor(kind, { state, now: NOW }).painted.reqId, null, kind);
+  }
+});
+
+test("a real prompt queued behind a question is still painted and answerable", () => {
+  const state = { ...emptyState(), approveQueue: [question(), req()] };
+  assert.match(drawn("approve-allow", { state }), /npm test/);
+  assert.equal(viewFor("approve-allow", { state, now: NOW }).painted.reqId, 7);
+  // and the depth badge counts only what a key can reach: two entries, depth 1, no badge
+  // (the badge is a distinctive corner circle — see keyart badge())
+  assert.doesNotMatch(drawn("approve-allow", { state }), /circle cx="121"/);
+  const twoReal = { ...emptyState(), approveQueue: [req(), req({ id: 8 })] };
+  assert.match(drawn("approve-allow", { state: twoReal }), /circle cx="121"/);
+});
+
+test("a question keeps 'auth?' away: the URL demonstrably works", () => {
+  const state = { ...emptyState(), approveQueue: [question()] };
+  assert.doesNotMatch(drawn("approve-allow", { state, authFlagged: true }), /auth\?/);
+});
+
+test("WAITING surfaces a status-less VS Code session that is blocked on a question", () => {
+  const state = { ...emptyState(), sessions: [vsSession()], pending: pendingMap() };
+  const t = drawn("approver-waiting", { state });
+  assert.match(t, /fmf_connect/);
+  assert.match(t, /input/);      // the reason, from the held request
+  assert.match(t, /12s/);        // and how long it has waited
+  assert.doesNotMatch(t, /all clear|sessions ok/);
+});
+
+test("WAITING is still all clear for the same session with nothing held", () => {
+  const state = { ...emptyState(), sessions: [vsSession()], pending: new Map() };
+  assert.match(drawn("approver-waiting", { state }), /1 session ok/);
+});
+
+test("the Status key reports the same wait as WAITING, from the same anchor", () => {
+  const state = { ...emptyState(), sessions: [vsSession()], pending: pendingMap() };
+  const t = drawn("approver-status", { state });
+  assert.match(t, /input · 12s/);
+});
+
+test("a pending permission prompt reads as needs-approval, not 'working'", () => {
+  const state = {
+    ...emptyState(),
+    sessions: [vsSession()],
+    activity: new Map([["v1", NOW]]),   // mid-turn transcript: the old blind spot said "working"
+    pending: pendingMap({ kind: "needs-approval", reason: "permission prompt" }),
+  };
+  assert.match(drawn("approver-waiting", { state }), /permission/);
+  // the Sessions key counts it as blocked rather than busy
+  assert.doesNotMatch(drawn("sessions", { state }), /1 busy/);
+});
