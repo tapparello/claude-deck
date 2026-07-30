@@ -149,6 +149,49 @@ export function denyBlock(denies, req, now) {
     : null;
 }
 
+// Claude Code fires PermissionRequest for AskUserQuestion too — observed on-device
+// 2026-07-30, and it was the single most common tool this hook had ever seen. It must
+// never paint the ALLOW/ALWAYS/DENY triad: over this hook an `allow` only lets the tool
+// RUN, which for a question means rendering the option list, so the human still has to
+// pick and the press answers nothing; DENY kills the question outright; and there is no
+// single safe rule, so ALWAYS could only ever read "ALWAYS n/a". The request is still
+// HELD, because it is the only signal the WAITING key gets (see pendingBySession).
+export const QUESTION_TOOLS = new Set(["AskUserQuestion"]);
+export const isQuestion = (req) => QUESTION_TOOLS.has(String(req?.toolName ?? ""));
+
+// The request the approve keys may paint and answer: the first NON-question in the
+// queue. Deliberately not `head`, so a real permission prompt sitting BEHIND a question
+// stays reachable instead of being hidden for the whole hold window. Paint and press
+// both go through here, so a press can never answer something the keys did not show.
+export const approvable = (queue) => (queue ?? []).find((r) => !isQuestion(r)) ?? null;
+
+// Depth badge: what the keys can act on, not the raw queue length — a badge counting
+// requests no key can reach would just be wrong.
+export const approvableDepth = (queue) => (queue ?? []).filter((r) => !isQuestion(r)).length;
+
+// Which sessions are blocked on the human, keyed by sessionId, derived purely from the
+// queue. This is the ONLY evidence claude-deck gets for a VS Code session: that
+// extension writes a session file with no status/waitingFor at all (verified 2.1.220),
+// so status.js could otherwise only ever call one working, idle or unknown while it sat
+// on a prompt. `reason` uses Claude Code's own waitingFor vocabulary so shortWait()
+// renders it exactly like a CLI session's.
+const PEND_RANK = { "needs-approval": 0, "input-needed": 1 };
+export function pendingBySession(queue) {
+  const out = new Map();
+  for (const r of queue ?? []) {
+    if (!r?.sessionId) continue;
+    const rec = isQuestion(r)
+      ? { kind: "input-needed", reason: "input needed", since: r.receivedAt }
+      : { kind: "needs-approval", reason: "permission prompt", since: r.receivedAt };
+    const prev = out.get(r.sessionId);
+    // A permission prompt outranks a question; between two of the same kind the OLDEST
+    // wins, since that is the one that has been blocking longest.
+    if (prev && !(PEND_RANK[rec.kind] < PEND_RANK[prev.kind] || (rec.kind === prev.kind && rec.since < prev.since))) continue;
+    out.set(r.sessionId, rec);
+  }
+  return out;
+}
+
 export const QUEUE_MAX = 8;
 export const HOLD_S_DEFAULT = 20;
 export const YOUNG_MS = 10_000;
@@ -244,7 +287,9 @@ export const SETTLE_MS = 500;
 // at head when the keyDown arrives - those differ whenever a drop, eviction or new
 // request lands between paint and press.
 export function pressDecision({ queue, shownId, lastHeadChangeAt, now, settleMs = SETTLE_MS }) {
-  const h = head(queue);
+  // `approvable`, not `head`: a question at the front of the queue is not answerable
+  // from a key, and must not make the request behind it unpressable either.
+  const h = approvable(queue);
   if (!h) return { action: "none", reason: "empty" };
   if (now - lastHeadChangeAt < settleMs) return { action: "none", reason: "settling" };
   if (h.id !== shownId) return { action: "alert", reason: "stale-paint" };

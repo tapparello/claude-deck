@@ -14,7 +14,7 @@ import { resolveStatusKey, statusEntry, autoSlot, sessionState, blockedSessions,
 import { randomBytes } from "node:crypto";
 import {
   decisionBody, alwaysRule, pressDecision,
-  enqueue, head, resolve, expiredIds, staleIds, seedBaselines, hookFragment,
+  enqueue, approvable, approvableDepth, pendingBySession, resolve, expiredIds, staleIds, seedBaselines, hookFragment,
   rememberDeny, denyBlock, pruneDenies,
   PORT_DEFAULT, HOLD_S_DEFAULT, QUEUE_MAX,
 } from "./approve.js";
@@ -90,6 +90,10 @@ const state = {
   loggedRaw: false,
   rates: {},
   approveQueue: [],
+  // Derived from approveQueue on every mutation (queueChanged): sessionId ->
+  // {kind, reason, since}. The Status/WAITING keys read it, because for a VS Code
+  // session it is the ONLY evidence that the session is blocked on the human.
+  pending: new Map(),
   denies: [],   // {rule, at} for ~30s after a DENY, so the retry cannot be ALWAYS'd
   hookSecret: null,
   hookPort: PORT_DEFAULT,
@@ -320,7 +324,7 @@ async function pollSessions() {
     // Compare against the signature cached on the PREVIOUS tick. Recomputing
     // both sides with the same `now` would cancel the derived state out, so a
     // time-only transition (finished → idle at 60s) would never repaint.
-    const nextSig = sessionSig(out, Date.now(), state.activity);
+    const nextSig = sessionSig(out, Date.now(), state.activity, state.pending);
     const changed = nextSig !== lastSessionSig;
     lastSessionSig = nextSig;
     state.sessions = out;
@@ -345,6 +349,16 @@ let hookServer = null;
 const renderApproveAll = () => renderAll(APPROVE_KINDS);
 const hasApproveKey = () => [...views.values()].some((v) => APPROVE_KINDS.includes(v.kind));
 
+// Every QUEUE MUTATION goes through here, never bare renderApproveAll(): state.pending is
+// derived from the queue and the Status/WAITING keys read it, so they have to repaint with
+// the approve keys or they would keep reporting "all clear" through a whole hold window.
+// (renderApproveAll alone is still correct for changes that leave the queue alone — a
+// hookErr clearing, a deny block expiring.)
+function queueChanged() {
+  state.pending = pendingBySession(state.approveQueue);
+  renderAll([...APPROVE_KINDS, "approver-status", "approver-waiting"]);
+}
+
 // "auth?" is for a REPEATED wrong-path signal, never a single stray 404 - any web page
 // can trigger one of those with a no-cors POST to the port, and hookserver.js already
 // clears its own record the moment a correctly-pathed request arrives. Re-filter by the
@@ -357,8 +371,11 @@ function authFlagged() {
   return hits.filter((t) => now - t < BADPATH_WINDOW_MS).length >= BADPATH_MIN_HITS;
 }
 
+// Tracks the request the keys PAINT (approvable, not the raw head), so a question
+// arriving or leaving cannot re-arm the settle window on a triad whose face never
+// changed — and so a genuine change to that face always does.
 function noteHeadChange(prevId) {
-  const now = head(state.approveQueue)?.id ?? null;
+  const now = approvable(state.approveQueue)?.id ?? null;
   if (now !== prevId) state.lastHeadChangeAt = Date.now();
 }
 
@@ -366,7 +383,7 @@ function noteHeadChange(prevId) {
 // prompt is live and answerable throughout) but the queue's honesty does.
 function answerAndDrop(ids, why) {
   if (!ids.length) return;
-  const prev = head(state.approveQueue)?.id ?? null;
+  const prev = approvable(state.approveQueue)?.id ?? null;
   for (const id of ids) {
     const { queue, req } = resolve(state.approveQueue, id);
     state.approveQueue = queue;
@@ -376,7 +393,7 @@ function answerAndDrop(ids, why) {
     }
   }
   noteHeadChange(prev);
-  renderApproveAll();
+  queueChanged();
 }
 
 function onHookRequest(payload, ticket) {
@@ -404,17 +421,17 @@ function onHookRequest(payload, ticket) {
     ticket,
   };
   ticket.id = req.id;
-  const prev = head(state.approveQueue)?.id ?? null;
+  const prev = approvable(state.approveQueue)?.id ?? null;
   const { queue, evicted } = enqueue(state.approveQueue, req);
   state.approveQueue = queue;
   if (evicted) { evicted.ticket.respond(null); log(`approve: evicted ${evicted.toolName} (queue full at ${QUEUE_MAX})`); }
   noteHeadChange(prev);
-  renderApproveAll();
+  queueChanged();
 }
 
 const onHookDrop = (ticket) => {
   if (ticket.id == null) return;
-  const prev = head(state.approveQueue)?.id ?? null;
+  const prev = approvable(state.approveQueue)?.id ?? null;
   const { queue, req } = resolve(state.approveQueue, ticket.id);
   if (!req) return;
   state.approveQueue = queue;
@@ -422,7 +439,7 @@ const onHookDrop = (ticket) => {
   // Must arm the settle window like answerAndDrop does, or a drop that promotes a new
   // head lets a double-tap answer a request the user never read.
   noteHeadChange(prev);
-  renderApproveAll();
+  queueChanged();
 };
 
 let ensuring = null;
@@ -1150,7 +1167,7 @@ function onKeyDown(context, kind) {
     }
     case "focus-session": {
       // Cycle within the blocked set when any session needs you, else all sessions.
-      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity, state.pending);
       const pool = blocked.length ? blocked : state.sessions;
       const n = pool.length;
       if (!n) return showAlert(context);
@@ -1193,7 +1210,7 @@ function onKeyDown(context, kind) {
       // default so a row of keys keeps its fixed slots (1st/2nd/3rd busiest),
       // which is the point of having several of them.
       const s = views.get(context)?.settings ?? {};
-      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoSlotFor(context), Date.now(), state.activity);
+      const resolved = resolveStatusKey(state.sessions, s.project ?? "", autoSlotFor(context), Date.now(), state.activity, state.pending);
       if (!resolved.count) return showAlert(context);
       const cycling = !!s.cycle && resolved.count > 1;
       let idx = resolved.index;
@@ -1212,7 +1229,7 @@ function onKeyDown(context, kind) {
     case "approver-waiting": {
       // Dedicated "who needs me" key: press focuses the front blocked session,
       // repeated presses walk the rest.
-      const blocked = blockedSessions(state.sessions, Date.now(), state.activity);
+      const blocked = blockedSessions(state.sessions, Date.now(), state.activity, state.pending);
       if (!blocked.length) return showAlert(context);
       const cy = cycle.get(context) ?? { idx: -1, timer: null };
       cy.idx = (cy.idx + 1) % blocked.length;
@@ -1242,7 +1259,7 @@ function onKeyDown(context, kind) {
         const which = kind.slice("approve-".length); // allow | always | deny
         // Decide BEFORE resolving: a refusal must not consume the request, or
         // fat-fingering the greyed ALWAYS key would wipe it off ALLOW and DENY too.
-        const target = head(state.approveQueue);
+        const target = approvable(state.approveQueue);
         const body = decisionBody(which, target, { sessionOnly: !!s.sessionOnly });
         // Compare the rule against what this key actually PAINTED (shownRule), not
         // against a value re-derived from the same object - that would be `x === x`.
@@ -1268,7 +1285,7 @@ function onKeyDown(context, kind) {
         if (which === "deny") state.denies = rememberDeny(state.denies, req, Date.now());
         log(`approve: ${which} ${req.toolName}${which === "always" ? ` as ${shownRule.get(context)}` : ""}`);
         state.lastHeadChangeAt = Date.now();
-        renderApproveAll();
+        queueChanged();
       } catch (e) {
         log("approve press failed:", e?.stack ?? String(e));
         showAlert(context);
@@ -1419,7 +1436,7 @@ if (process.argv.includes("--selftest")) {
   setInterval(() => {
     animPhase = (animPhase + 1) % 3;
     const kinds = [];
-    if (state.sessions.some((s) => sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null) === "working")) kinds.push("sessions");
+    if (state.sessions.some((s) => sessionState(s, Date.now(), state.activity.get(s.sessionId) ?? null, state.pending.get(s.sessionId)?.kind ?? null) === "working")) kinds.push("sessions");
     if (state.usage?.fiveHour?.pct >= 90) kinds.push("usage-session");
     if (state.usage?.weekly?.pct >= 90) kinds.push("usage-weekly");
     if ((state.usage?.models ?? []).some((m) => m.pct >= 90)) kinds.push("usage-model");
@@ -1433,8 +1450,14 @@ if (process.argv.includes("--selftest")) {
     }
     // A session blocked on you makes its keys breathe — far easier to catch than
     // a static colour. Gated on there actually being one, so a calm deck is idle.
-    const freshBlocked = blockedSessions(state.sessions, Date.now(), state.activity)
-      .some((b) => !b.statusUpdatedAt || Date.now() - b.statusUpdatedAt < PULSE_MS);
+    // A VS Code session has no statusUpdatedAt, so `!b.statusUpdatedAt` alone would hold
+    // this true forever and breathe until morning — the very thing PULSE_MS exists to
+    // stop. The held request's arrival time is the honest start of that wait.
+    const freshBlocked = blockedSessions(state.sessions, Date.now(), state.activity, state.pending)
+      .some((b) => {
+        const since = b.statusUpdatedAt ?? state.pending.get(b.sessionId)?.since ?? null;
+        return !since || Date.now() - since < PULSE_MS;
+      });
     if (freshBlocked) kinds.push("approver-status", "approver-waiting");
     // With a 20s hold, PULSE_MS (120s) never bounds anything, so a non-empty queue
     // is the right gate. Without this the keys would only repaint at 5s/30s and the
@@ -1447,7 +1470,9 @@ if (process.argv.includes("--selftest")) {
       // deadline instead of losing the race against it.
       const dead = expiredIds(state.approveQueue, Date.now(), HOLD_MS());
       if (dead.length) answerAndDrop(dead, "hold expired");
-      if (state.approveQueue.length) kinds.push(...APPROVE_KINDS);
+      // approvableDepth, not length: a queue holding only questions paints "all clear" on
+      // the triad, and there is no breath to keep smooth.
+      if (approvableDepth(state.approveQueue)) kinds.push(...APPROVE_KINDS);
     }
     if (kinds.length && [...views.values()].some((v) => kinds.includes(v.kind))) renderAll(kinds);
     // Safety net: a reset time has passed but we still show pre-reset data (missed timer / resume from sleep)

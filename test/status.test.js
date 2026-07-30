@@ -362,3 +362,62 @@ test("pidLooksRecycled fails open when either side is unknown", () => {
   assert.equal(pidLooksRecycled({ startedAt: 1 }, null), false);             // pid absent from ps output
   assert.equal(pidLooksRecycled({ startedAt: 1 }, undefined), false);
 });
+
+// ---------- pending: the ONLY blocked signal a VS Code session emits ----------
+// Verified on 2.1.220: a `claude-vscode` session file carries no status, waitingFor or
+// statusUpdatedAt at all, so the branches above can only ever call it working/idle/
+// unknown — it was invisible to blockedSessions() no matter how blocked it was. A
+// request held in the approver queue (approve.js pendingBySession) is direct evidence.
+const VS = (over) => ({ sessionId: "v1", cwd: "/Users/me/fmf_connect_flutter", pid: 900, entrypoint: "claude-vscode", updatedAt: 2, ...over });
+const PEND = (over = {}) => new Map([["v1", { kind: "input-needed", reason: "input needed", since: NOW - 12_000, ...over }]]);
+
+test("a status-less VS Code session with a pending request reads as blocked", () => {
+  // no pending -> the old blind spot: activity mtime can only say working or idle
+  assert.equal(sessionState(VS(), NOW, NOW), "working");
+  assert.equal(sessionState(VS(), NOW, NOW, "input-needed"), "input-needed");
+  assert.equal(sessionState(VS(), NOW, null, "needs-approval"), "needs-approval");
+});
+
+test("pending beats busy/idle but never overrides the session's own waitingFor", () => {
+  assert.equal(sessionState({ status: "busy" }, NOW, null, "needs-approval"), "needs-approval");
+  assert.equal(sessionState({ status: "idle" }, NOW, null, "input-needed"), "input-needed");
+  // the file's own reason is more specific, so it wins
+  assert.equal(sessionState({ status: "waiting", waitingFor: "input needed" }, NOW, null, "needs-approval"), "input-needed");
+});
+
+test("blockedSessions surfaces a VS Code session only once a request is pending", () => {
+  const sessions = [VS()];
+  assert.deepEqual(blockedSessions(sessions, NOW, new Map([["v1", NOW]])).map((s) => s.pid), []);
+  assert.deepEqual(blockedSessions(sessions, NOW, null, PEND()).map((s) => s.pid), [900]);
+});
+
+test("blockedSessions still ranks a permission prompt ahead of a question", () => {
+  const sessions = [VS(), VS({ sessionId: "v2", pid: 901 })];
+  const pending = new Map([
+    ["v1", { kind: "input-needed", reason: "input needed", since: NOW }],
+    ["v2", { kind: "needs-approval", reason: "permission prompt", since: NOW }],
+  ]);
+  assert.deepEqual(blockedSessions(sessions, NOW, null, pending).map((s) => s.pid), [901, 900]);
+});
+
+test("resolveStatusKey reports the pending reason and when the wait began", () => {
+  const e = statusEntry(resolveStatusKey([VS()], "", 0, NOW, null, PEND()));
+  assert.equal(e.state, "input-needed");
+  assert.equal(e.waitingFor, "input needed");
+  assert.equal(e.waitingSince, NOW - 12_000);
+  assert.equal(shortWait(e.waitingFor), "input");
+});
+
+test("resolveStatusKey prefers the session file's own reason when it has one", () => {
+  const s = { sessionId: "v1", cwd: "/Users/me/web-app", pid: 900, status: "waiting", waitingFor: "permission prompt", statusUpdatedAt: NOW - 5000 };
+  const e = statusEntry(resolveStatusKey([s], "", 0, NOW, null, PEND()));
+  assert.equal(e.waitingFor, "permission prompt");
+  assert.equal(e.waitingSince, NOW - 5000);
+});
+
+test("sessionSig changes when a request arrives, so the key repaints", () => {
+  const sessions = [VS()];
+  const before = sessionSig(sessions, NOW, new Map([["v1", NOW]]));
+  const after = sessionSig(sessions, NOW, new Map([["v1", NOW]]), PEND());
+  assert.notEqual(before, after);
+});

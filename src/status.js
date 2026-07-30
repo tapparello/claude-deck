@@ -58,12 +58,22 @@ function joinPath(...parts) {
 // a session file with no status/waitingFor/statusUpdatedAt at all, and calling
 // such a session "Idle" while it is mid-turn is simply wrong. A real status
 // always wins over this heuristic.
-export function sessionState(s, now = Date.now(), activityAt = null) {
+// `pendingKind` is the state implied by a request still held in the approver queue (see
+// approve.js pendingBySession). It is the ONLY blocked signal a VS Code session emits:
+// with no status of its own, such a session could otherwise only ever be called working,
+// idle or unknown while it sat on a prompt.
+export function sessionState(s, now = Date.now(), activityAt = null, pendingKind = null) {
   const st = s?.status;
   if (st === "waiting") {
+    // The session's own waitingFor is more specific than anything the queue implies, so
+    // it wins outright; both sources agree the session is blocked either way.
     const w = String(s.waitingFor ?? "").toLowerCase();
     return QUESTION_WAITS.has(w) ? "input-needed" : "needs-approval";
   }
+  // Beats busy/idle/absent: a held request is direct evidence the process is blocked on
+  // the human, while `busy` may simply be a status write that has not landed yet (the
+  // prompt races the hook, and the poll is up to 5s stale).
+  if (pendingKind) return pendingKind;
   if (st === "busy" || st === "shell") return "working";
   if (!st) {
     // No status reported (VS Code extension). Infer from transcript activity if
@@ -111,8 +121,8 @@ export function pidLooksRecycled(session, procStartMs, slackMs = PID_START_SLACK
 // The caller must compare this against the signature it cached on the PREVIOUS
 // tick — recomputing both sides with the same `now` makes time-only transitions
 // (finished → idle at 60s) cancel out and never repaint.
-export function sessionSig(sessions, now = Date.now(), activity = null) {
-  return JSON.stringify((sessions ?? []).map((s) => [s.pid, s.status ?? "", s.waitingFor ?? "", sessionState(s, now, actOf(s, activity))]));
+export function sessionSig(sessions, now = Date.now(), activity = null, pending = null) {
+  return JSON.stringify((sessions ?? []).map((s) => [s.pid, s.status ?? "", s.waitingFor ?? "", sessionState(s, now, actOf(s, activity), pendKind(s, pending))]));
 }
 
 // Lower rank = more urgent = shown first on an auto-bound key.
@@ -120,14 +130,17 @@ const URGENCY = { "needs-approval": 0, "input-needed": 1, working: 2, finished: 
 // `activity` (optional) is a Map<sessionId, transcript mtimeMs>, consulted only
 // for sessions that report no status of their own.
 const actOf = (s, activity) => (activity && s?.sessionId ? activity.get(s.sessionId) ?? null : null);
-const rank = (s, now, activity) => URGENCY[sessionState(s, now, actOf(s, activity))] ?? 5;
+// `pending` (optional) is the Map<sessionId, {kind, reason, since}> from approve.js.
+const pendOf = (s, pending) => (pending && s?.sessionId ? pending.get(s.sessionId) ?? null : null);
+const pendKind = (s, pending) => pendOf(s, pending)?.kind ?? null;
+const rank = (s, now, activity, pending) => URGENCY[sessionState(s, now, actOf(s, activity), pendKind(s, pending))] ?? 5;
 
 // Sessions blocked on the human, most urgent first. Returns the *full* poller
 // records (callers pass them to platform.focusWindow, which needs `pid`).
-export function blockedSessions(sessions, now = Date.now(), activity = null) {
+export function blockedSessions(sessions, now = Date.now(), activity = null, pending = null) {
   return (sessions ?? [])
-    .filter((s) => rank(s, now, activity) <= URGENCY["input-needed"])
-    .sort((a, b) => rank(a, now, activity) - rank(b, now, activity) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || (a.pid ?? 0) - (b.pid ?? 0));
+    .filter((s) => rank(s, now, activity, pending) <= URGENCY["input-needed"])
+    .sort((a, b) => rank(a, now, activity, pending) - rank(b, now, activity, pending) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || (a.pid ?? 0) - (b.pid ?? 0));
 }
 
 // Compact duration for a key's sub-line: "18s" / "3m" / "1h 20m". Null/absent
@@ -186,8 +199,8 @@ export function sessionProject(s) {
 // Display order: most urgent first (a session blocked on you outranks one that's
 // merely working), then most-recently-updated, then lowest pid (stable final
 // tiebreak so the primary never flickers between equal peers).
-function byDisplayOrder(a, b, now, activity) {
-  const ra = rank(a, now, activity), rb = rank(b, now, activity);
+function byDisplayOrder(a, b, now, activity, pending) {
+  const ra = rank(a, now, activity, pending), rb = rank(b, now, activity, pending);
   if (ra !== rb) return ra - rb;
   if ((b.updatedAt ?? 0) !== (a.updatedAt ?? 0)) return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
   return (a.pid ?? 0) - (b.pid ?? 0);
@@ -198,27 +211,33 @@ function byDisplayOrder(a, b, now, activity) {
 //   project     - the key's configured project (basename match); "" => auto
 //   autoIdx     - accepted for call-site compatibility, no longer used (see the
 //                 return below: every key shows the most urgent session).
-export function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(), activity = null) {
+export function resolveStatusKey(sessions, project, autoIdx = 0, now = Date.now(), activity = null, pending = null) {
   const explicit = !!(project && String(project).trim());
   const want = explicit ? String(project).trim().toLowerCase() : null;
   const list = (sessions ?? [])
     .filter((s) => (explicit ? sessionProject(s) === want : true))
-    .sort((a, b) => byDisplayOrder(a, b, now, activity))
-    .map((s) => ({
-      name: path.basename(s.cwd ?? "") || "claude",
-      state: sessionState(s, now, actOf(s, activity)),
-      waitingFor: s.status === "waiting" ? String(s.waitingFor ?? "permission prompt") : "",
-      // null when the session reports no timestamp at all (VS Code) — otherwise
-      // `now - 0` renders as an absurd age like "495817h idle".
-      statusAge: s.statusUpdatedAt ?? s.updatedAt ? Math.max(0, now - (s.statusUpdatedAt ?? s.updatedAt)) : null,
-      // When the wait began. statusUpdatedAt ONLY — never the updatedAt fallback,
-      // so every key measures the same wait from the same anchor.
-      waitingSince: s.status === "waiting" && s.statusUpdatedAt ? s.statusUpdatedAt : null,
-      cwd: s.cwd ?? "",
-      sessionId: s.sessionId ?? null,
-      pid: s.pid ?? null,
-      where: sessionWhere(s),
-    }));
+    .sort((a, b) => byDisplayOrder(a, b, now, activity, pending))
+    .map((s) => {
+      // A VS Code session has no waitingFor or statusUpdatedAt of its own, so the held
+      // request supplies BOTH the reason and the moment the wait began — otherwise the
+      // key would read a bare "needs you" and pulse forever with no age.
+      const p = pendOf(s, pending);
+      return {
+        name: path.basename(s.cwd ?? "") || "claude",
+        state: sessionState(s, now, actOf(s, activity), p?.kind ?? null),
+        waitingFor: s.status === "waiting" ? String(s.waitingFor ?? "permission prompt") : (p?.reason ?? ""),
+        // null when the session reports no timestamp at all (VS Code) — otherwise
+        // `now - 0` renders as an absurd age like "495817h idle".
+        statusAge: s.statusUpdatedAt ?? s.updatedAt ? Math.max(0, now - (s.statusUpdatedAt ?? s.updatedAt)) : null,
+        // When the wait began. statusUpdatedAt ONLY — never the updatedAt fallback,
+        // so every key measures the same wait from the same anchor.
+        waitingSince: s.status === "waiting" && s.statusUpdatedAt ? s.statusUpdatedAt : (p?.since ?? null),
+        cwd: s.cwd ?? "",
+        sessionId: s.sessionId ?? null,
+        pid: s.pid ?? null,
+        where: sessionWhere(s),
+      };
+    });
   // Explicit (project-bound) keys always show their project's most urgent
   // session. Auto keys take their slot: 0 = most urgent, 1 = next, ... so a row
   // of auto keys covers several sessions. An out-of-range slot yields the "none"
