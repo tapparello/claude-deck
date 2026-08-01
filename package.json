@@ -13,7 +13,8 @@
     "check:profile": "node tools/check-profile.mjs",
     "pack": "streamdeck pack dev.tapparello.agent-vitals.sdPlugin --force --no-update-check",
     "icons": "node tools/gen-icons.mjs",
-    "showcase": "node tools/gen-showcase.mjs"
+    "showcase": "node tools/gen-showcase.mjs",
+    "og": "node tools/gen-og.mjs"
   },
   "dependencies": {
     "ws": "^8.18.0"
