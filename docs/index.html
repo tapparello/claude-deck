@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>Agent Vitals — Stream Deck plugin for Claude Code usage, sessions and approvals</title>
+<meta name="description" content="A free Elgato Stream Deck plugin for Claude Code: live usage gauges (the same 5-hour and weekly percentages as /usage), running session status, and keys to allow or deny permission prompts. Windows and macOS.">
+<link rel="canonical" href="https://tapparello.github.io/agent-vitals/">
+<link rel="icon" type="image/png" href="favicon.png">
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tapparello.github.io/agent-vitals/">
+<meta property="og:title" content="Agent Vitals — Stream Deck plugin for Claude Code">
+<meta property="og:description" content="Live Claude usage gauges, running session status, and allow/deny keys for permission prompts — on your Elgato Stream Deck. Windows and macOS.">
+<meta property="og:image" content="https://tapparello.github.io/agent-vitals/keys.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Agent Vitals — Stream Deck plugin for Claude Code">
+<meta name="twitter:description" content="Live Claude usage gauges, running session status, and allow/deny keys for permission prompts — on your Elgato Stream Deck.">
+<meta name="twitter:image" content="https://tapparello.github.io/agent-vitals/keys.png">
+
+<style>
+:root {
+  --bg: #14161a;
+  --panel: #1c1f26;
+  --line: #2b2f38;
+  --text: #e7e9ee;
+  --muted: #9aa2b1;
+  --accent: #d97757;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+main { max-width: 900px; margin: 0 auto; padding: 56px 24px 80px; }
+h1 { font-size: 2.1rem; line-height: 1.2; margin: 0 0 12px; }
+h2 { font-size: 1.35rem; margin: 48px 0 14px; }
+h3 { font-size: 1rem; margin: 24px 0 6px; }
+p { margin: 0 0 16px; }
+.lede { font-size: 1.15rem; color: var(--muted); max-width: 60ch; }
+a { color: var(--accent); }
+img { max-width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--line); }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; margin: 28px 0 40px; }
+.btn {
+  display: inline-block; padding: 11px 20px; border-radius: 8px;
+  text-decoration: none; font-weight: 600; border: 1px solid var(--line);
+}
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #16181c; }
+.btn-secondary { color: var(--text); }
+.grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+.card h3 { margin-top: 0; }
+.card p { margin: 0; color: var(--muted); font-size: 0.94rem; }
+ul { color: var(--muted); padding-left: 22px; }
+code { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; font-size: 0.9em; }
+footer { border-top: 1px solid var(--line); margin-top: 56px; padding-top: 22px; color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Agent Vitals — a Stream Deck plugin for Claude Code</h1>
+
+<p class="lede">Live Claude usage gauges, running Claude Code sessions, per-session status, and
+one-press approvals for permission prompts — on your Elgato Stream Deck. Windows and macOS, free and
+open source.</p>
+
+<div class="cta">
+  <a class="btn btn-primary" href="https://github.com/tapparello/agent-vitals/releases/latest">Download the plugin</a>
+  <a class="btn btn-secondary" href="https://github.com/tapparello/agent-vitals">View on GitHub</a>
+</div>
+
+<img src="keys.png" alt="Every Agent Vitals Stream Deck key: Claude usage gauges, shortcuts, session status, and the permission-prompt Allow, Always Allow and Deny keys">
+
+<h2>What it puts on your deck</h2>
+
+<div class="grid">
+  <div class="card">
+    <h3>Claude usage gauges</h3>
+    <p>The same 5-hour and weekly limit percentages Claude Desktop and Claude Code's
+    <code>/usage</code> show, as a live ring with a reset countdown. Pulled with your existing
+    local Claude sign-in — no extra login.</p>
+  </div>
+  <div class="card">
+    <h3>Session status at a glance</h3>
+    <p>How many Claude Code sessions are running and how many are busy, refreshed every 5
+    seconds. Per-session keys show <em>Needs approval</em>, <em>Input needed</em>,
+    <em>Working</em>, <em>Finished</em> or <em>Idle</em>.</p>
+  </div>
+  <div class="card">
+    <h3>Approve from the deck</h3>
+    <p>Allow, Always Allow and Deny keys mirror the three options Claude Code shows in the
+    terminal. When a session asks for permission the keys light up with what's pending; press
+    one and the prompt is answered.</p>
+  </div>
+  <div class="card">
+    <h3>Jump to the session that needs you</h3>
+    <p>The Waiting key stays dark until a session is blocked on you, then names it and why.
+    Press to bring that terminal window to the front; press again to cycle the rest.</p>
+  </div>
+  <div class="card">
+    <h3>Cost tracking without a subscription</h3>
+    <p>On enterprise setups with no subscription limits (Azure AI Foundry, Bedrock, Vertex) the
+    gauges switch to local spend for the same window, with optional per-model rates and a
+    budget ring.</p>
+  </div>
+  <div class="card">
+    <h3>Quick-launch keys</h3>
+    <p>Open Claude Desktop, fire the global quick-chat hotkey, start Claude Code in a specific
+    project folder, or paste a canned prompt — one key each.</p>
+  </div>
+</div>
+
+<h2>Install</h2>
+
+<p>Download <code>dev.tapparello.agent-vitals.streamDeckPlugin</code> from the
+<a href="https://github.com/tapparello/agent-vitals/releases/latest">latest release</a> and
+double-click it. Stream Deck installs it and the actions appear under the
+<strong>Agent Vitals</strong> category. You can also
+<a href="https://github.com/tapparello/agent-vitals#build-from-source">build from source</a>.</p>
+
+<h3>Requirements</h3>
+<ul>
+  <li>Windows 10+ or macOS 11+, with Stream Deck software 6.5 or newer</li>
+  <li><a href="https://claude.com/claude-code">Claude Code</a> installed and signed in</li>
+  <li>Claude Desktop (optional — only for the launcher and quick-chat keys)</li>
+  <li>Live subscription percentages need a consumer Pro or Max account; other accounts get
+  local spend instead</li>
+</ul>
+
+<h2>Privacy</h2>
+
+<p>Everything runs on your machine. The plugin reads your local Claude Code data and your
+existing sign-in token to call Anthropic's usage endpoint — nothing is sent anywhere else, and
+there is no analytics or telemetry. See the
+<a href="https://github.com/tapparello/agent-vitals/blob/main/PRIVACY.md">privacy notes</a> and
+<a href="https://github.com/tapparello/agent-vitals/blob/main/SECURITY.md">security notes</a>.</p>
+
+<img src="actions.png" alt="The eight Agent Vitals shortcut keys — launch Claude Desktop, quick chat, claude.ai, a Claude Code terminal, focus session, project terminal, quick prompt and a custom key">
+
+<footer>
+<p>Agent Vitals is an independent open-source project, released under the MIT licence. Not
+affiliated with, endorsed by, or sponsored by Anthropic or Elgato. Claude is a trademark of
+Anthropic; Stream Deck is a trademark of Elgato.</p>
+<p><a href="https://github.com/tapparello/agent-vitals">Source and issue tracker on GitHub</a></p>
+</footer>
+
+</main>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Agent Vitals",
+  "alternateName": "Agent Vitals Stream Deck plugin",
+  "description": "An Elgato Stream Deck plugin for Claude Code: live usage gauges, running session status, and keys to allow or deny permission prompts.",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Windows 10, macOS 11",
+  "url": "https://tapparello.github.io/agent-vitals/",
+  "downloadUrl": "https://github.com/tapparello/agent-vitals/releases/latest",
+  "screenshot": "https://tapparello.github.io/agent-vitals/keys.png",
+  "license": "https://github.com/tapparello/agent-vitals/blob/main/LICENSE",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
+</body>
+</html>
