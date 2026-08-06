@@ -1,4 +1,4 @@
-# Agent Vitals — Stream Deck plugin
+# Agent Vitals — a Stream Deck plugin for Claude Code
 
 [![CI](https://github.com/tapparello/agent-vitals/actions/workflows/ci.yml/badge.svg)](https://github.com/tapparello/agent-vitals/actions/workflows/ci.yml)
 

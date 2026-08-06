@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+<rect width="1200" height="630" fill="#0d0d11"/>
+<text x="72" y="197" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="62" font-weight="700" fill="#f5f1ea">Agent Vitals</text>
+<text x="72" y="245" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="32" font-weight="500" fill="#f5f1ea">A Stream Deck plugin</text>
+<text x="72" y="283" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="32" font-weight="500" fill="#f5f1ea">for Claude Code</text>
+<rect x="72" y="318" width="46" height="3" rx="1.5" fill="#4ade80"/>
+<text x="72" y="365" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="21" font-weight="400" fill="#9b96a8">Live usage gauges</text>
+<text x="72" y="397" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="21" font-weight="400" fill="#9b96a8">Session status at a glance</text>
+<text x="72" y="429" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="21" font-weight="400" fill="#9b96a8">Allow or deny from the deck</text>
+<text x="72" y="489" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif" font-size="18" font-weight="500" fill="#807b8d">github.com/tapparello/agent-vitals</text>
+<g transform="translate(645.2,74) scale(1.6)"><rect width="144" height="144" rx="18" fill="#16151c"/>
+    <rect x="4" y="4" width="136" height="136" rx="16" fill="none" stroke="#f87171" stroke-width="6" opacity="0.95"/>
+    <text x="12" y="25" text-anchor="start" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="#9b96a8" letter-spacing="0.6">SESSION 5H</text>
+    <text x="72" y="82" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="44" font-weight="700" fill="#f87171">94%</text>
+    <rect x="12" y="94" width="120" height="10" rx="5" fill="#3a3745"/>
+    <rect x="12" y="94" width="112.8" height="10" rx="5" fill="#f87171"/>
+    <text x="72" y="127" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="400" fill="#9b96a8">1h 5m left</text></g>
+<g transform="translate(897.6,74) scale(1.6)"><rect width="144" height="144" rx="18" fill="#16151c"/>
+    <rect width="144" height="144" rx="18" fill="#60a5fa" opacity="0.100"/>
+    <rect x="2" y="2" width="140" height="140" rx="17" fill="none" stroke="#60a5fa" stroke-width="2" opacity="0.220"/>
+    <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="#60a5fa" stroke-width="3" opacity="0.800"/>
+    <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="#60a5fa" stroke-width="1" opacity="0.180"/>
+    <text x="12" y="25" text-anchor="start" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="#9b96a8" letter-spacing="0.6">CLAUDE CODE</text>
+    <circle cx="128" cy="58" r="3" fill="#3a3745"/><circle cx="128" cy="73" r="3" fill="#3a3745"/><circle cx="128" cy="88" r="4.5" fill="#60a5fa"/>
+    <text x="72" y="97" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="60" font-weight="700" fill="#f5f1ea">7</text>
+    <text x="72" y="127" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="400" fill="#60a5fa">1 working</text></g>
+<g transform="translate(645.2,326.4) scale(1.6)"><rect width="144" height="144" rx="18" fill="#16151c"/>
+    <rect width="144" height="144" rx="18" fill="#fbbf24" opacity="0.220"/>
+    <rect x="2" y="2" width="140" height="140" rx="17" fill="none" stroke="#fbbf24" stroke-width="2" opacity="0.450"/>
+    <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="#fbbf24" stroke-width="5" opacity="1.000"/>
+    <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="#fbbf24" stroke-width="1" opacity="0.180"/>
+    <text x="132" y="25" text-anchor="end" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="12" font-weight="600" fill="#9b96a8">cli</text>
+    <text x="72" y="78" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="25" font-weight="700" fill="#f5f1ea">checkout</text>
+    <text x="72" y="104" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="#fbbf24">Needs approval</text>
+    <text x="72" y="127" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="13" font-weight="400" fill="#9b96a8">WebFetch · 4s</text></g>
+<g transform="translate(897.6,326.4) scale(1.6)"><rect width="144" height="144" rx="18" fill="#16151c"/>
+      <rect width="144" height="144" rx="18" fill="#4ade80" opacity="0.220"/>
+    <rect x="2" y="2" width="140" height="140" rx="17" fill="none" stroke="#4ade80" stroke-width="2" opacity="0.450"/>
+    <rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="#4ade80" stroke-width="5" opacity="1.000"/>
+    <rect x="9.5" y="9.5" width="125" height="125" rx="12" fill="none" stroke="#4ade80" stroke-width="1" opacity="0.180"/>
+      <rect x="0" y="33" width="144" height="2.5" fill="#4ade80" opacity="0.85"/>
+      <g transform="translate(10,8) scale(0.9167)" fill="none" stroke="#4ade80" stroke-width="2.84" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13 L9.5 18.5 L20 6"/></g><text x="38" y="25" text-anchor="start" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="16" font-weight="800" fill="#4ade80" letter-spacing="0.5">ALLOW</text>
+      <circle cx="121" cy="20" r="11.5" fill="#211f2b" stroke="#4ade80" stroke-width="1.5"/><text x="121" y="25" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="700" fill="#f5f1ea">3</text>
+      <text x="72" y="92" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="15" font-weight="700" fill="#f5f1ea">docs.amplify.…</text>
+      <text x="72" y="127" text-anchor="middle" font-family="-apple-system, Segoe UI, system-ui, sans-serif" font-size="14" font-weight="400" fill="#9b96a8">checkout</text></g>
+</svg>
